@@ -21,6 +21,20 @@
 
 namespace {
   /**
+   * @brief Check whether a terminated process has not yet been reaped by init.
+   *
+   * @param process Process identifier to inspect.
+   * @return True when Linux reports the process as a zombie.
+   */
+  bool process_is_zombie(const pid_t process) {
+    std::ifstream input {std::filesystem::path {"/proc"} / std::to_string(process) / "stat"};
+    std::string status;
+    std::getline(input, status);
+    const auto command_end {status.rfind(')')};
+    return command_end != std::string::npos && command_end + 2 < status.size() && status.at(command_end + 2) == 'Z';
+  }
+
+  /**
    * @brief Create a fake Gamescope executable that advertises required options and creates readiness.
    *
    * @param directory Directory used to store the fake executable.
@@ -246,11 +260,18 @@ TEST_F(SteamOSVirtualSessionTest, ForcedCleanupKillsOwnedChildAfterGamescopeExit
   input >> child;
   ASSERT_GT(child, 0);
   steamos_virtual_session::stop();
-  for (int attempt = 0; attempt < 20 && ::kill(child, 0) == 0; ++attempt) {
+  for (int attempt = 0; attempt < 20 && ::kill(child, 0) == 0 && !process_is_zombie(child); ++attempt) {
     std::this_thread::sleep_for(std::chrono::milliseconds {50});
   }
-  EXPECT_EQ(::kill(child, 0), -1);
-  EXPECT_EQ(errno, ESRCH);
+  const int kill_result {::kill(child, 0)};
+  const int kill_error {errno};
+  // The test shell can exit before reaping its ignored child. A zombie has
+  // already been killed and cannot execute or retain the virtual session;
+  // runner PID 1 owns the eventual reap timing.
+  EXPECT_TRUE(kill_result == -1 || process_is_zombie(child));
+  if (kill_result == -1) {
+    EXPECT_EQ(kill_error, ESRCH);
+  }
 }
 
 TEST_F(SteamOSVirtualSessionTest, ForcedCleanupStopsGamescopeThatIgnoresTerm) {
