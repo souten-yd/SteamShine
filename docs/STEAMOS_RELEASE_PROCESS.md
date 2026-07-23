@@ -13,4 +13,6 @@ The archive contains only user-space application files, scripts, a systemd user-
 
 The build verifies the staged executable with `ldd`, dynamic-section inspection, and a symbol-version ceiling for the SteamOS 3.8 glibc, libstdc++, and Qt baselines. A build that references a newer ABI is rejected before it can be uploaded.
 
+The starting `archlinux:base-devel` image is used only to bootstrap the CI job. Before compilation, the workflow replaces its split GCC runtime and toolchain packages with their SteamOS 3.8 counterparts. This occurs only in the disposable CI container; it never runs on a SteamOS host.
+
 SteamOS installation verifies the detached SHA-256 file and archive paths before atomically switching `~/.local/share/steamshine/current`. A failed install keeps the prior `current` version; rollback is `ln -sfn ~/.local/share/steamshine/versions/<previous> ~/.local/share/steamshine/current` followed by `systemctl --user restart steamshine`.

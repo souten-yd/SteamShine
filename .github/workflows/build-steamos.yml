@@ -81,12 +81,15 @@ jobs:
           test "${actual_key}" = "${expected_key}"
           pacman-key --lsign-key AF1D2199EF0A3CCF
           pacman -Syy --noconfirm --noprogressbar
-          # archlinux:base-devel carries a version-locked compatibility shim.
-          # This ephemeral build container does not run systemd, so remove the
-          # shim before installing the SteamOS 3.8 systemd runtime dependency.
-          if pacman -Q systemd-sysvcompat >/dev/null; then
-            pacman -Rdd --noconfirm --noprogressbar systemd-sysvcompat
-          fi
+          # The Arch base image splits GCC runtime libraries that SteamOS owns
+          # through gcc-libs. Remove only those conflicting CI-image packages
+          # before installing the SteamOS 3.8 toolchain below.
+          for package in systemd-sysvcompat gcc libasan libatomic libgcc libgfortran \
+            libgomp liblsan libobjc libquadmath libstdc++ libtsan libubsan; do
+            if pacman -Q "${package}" >/dev/null; then
+              pacman -Rdd --noconfirm --noprogressbar "${package}"
+            fi
+          done
           pacman -S --noconfirm --needed --noprogressbar --disable-download-timeout \
             $(grep -Ev '^(#|$)' ci/steamos/packages.txt)
           pacman -Q glibc gcc-libs qt6-base

@@ -4,6 +4,7 @@
 glibc
 gcc-libs
 base-devel
+gcc
 git
 cmake
 ninja
