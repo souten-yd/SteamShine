@@ -9,14 +9,14 @@ on:
   workflow_dispatch:
 
 jobs:
-  build:
+  steamos-runtime:
     runs-on: ubuntu-latest
     container: archlinux:base-devel
     steps:
-      - name: Install build and verification tools
+      - name: Install SteamOS runtime build tools
         run: |
-          pacman -Syu --noconfirm --needed
-          pacman -S --noconfirm --needed \
+          pacman -Syy --noconfirm --needed archlinux-keyring
+          pacman -S --noconfirm --needed --disable-download-timeout \
             git cmake ninja base-devel pkgconf python python-jinja nodejs npm clang shellcheck zstd binutils \
             libcap libdrm libevdev libnotify libpulse libva libx11 libxcb libxfixes libxrandr libxtst \
             miniupnpc openssl opus qt6-base qt6-svg shaderc udev vulkan-icd-loader wayland pipewire
@@ -33,10 +33,15 @@ jobs:
         run: cmake -S . -B cmake-build-steamos -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=ON -DBUILD_DOCS=OFF
       - name: Build
         run: cmake --build cmake-build-steamos --parallel 2
-      - name: Test
+      - name: Test SteamOS virtual-session lifecycle
         run: |
-          ctest --test-dir cmake-build-steamos --output-on-failure
+          cmake --build cmake-build-steamos --target test_sunshine --parallel 2
+          cmake-build-steamos/tests/test_sunshine --gtest_filter='*SteamOSVirtualSession*'
           tests/integration/test_steamshine_script.sh
+      - name: Verify runtime linkage
+        run: |
+          ldd cmake-build-steamos/sunshine
+          readelf -d cmake-build-steamos/sunshine
       - name: Stage and package
         run: scripts/package-steamos-artifact.sh cmake-build-steamos dist
       - uses: actions/upload-artifact@v4
