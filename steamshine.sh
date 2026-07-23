@@ -125,11 +125,11 @@ install_artifact() {
   [[ "$(uname -m)" == x86_64 ]] || die 'This artifact supports x86_64 only.' "$EXIT_UNSUPPORTED"
   local checksum="${ARTIFACT_PATH}.sha256" target="${PREFIX}/share/steamshine" versions="${PREFIX}/share/steamshine/versions" extract
   [[ -f "${checksum}" ]] || die "Missing checksum: ${checksum}" "$EXIT_DEPENDENCY"
-  sha256sum -c "${checksum}" || die 'Artifact checksum mismatch.' "$EXIT_DEPENDENCY"
+  (cd -- "$(dirname -- "${checksum}")" && sha256sum -c "$(basename -- "${checksum}")") || die 'Artifact checksum mismatch.' "$EXIT_DEPENDENCY"
   tar --zstd -tf "${ARTIFACT_PATH}" | grep -Eq '(^/|(^|/)\.\.(/|$))' && die 'Unsafe archive path rejected.' "$EXIT_DEPENDENCY"
-  mkdir -p "${HOME}/.cache/steamshine"; extract="$(mktemp -d "${HOME}/.cache/steamshine/extract.XXXXXX")"; trap 'rm -rf -- "${extract}"' RETURN
-  tar --zstd -C "${extract}" -xf "${ARTIFACT_PATH}"
-  [[ -x "${extract}/bin/steamshine" && -f "${extract}/BUILD_INFO.json" ]] || die 'Artifact layout is invalid.' "$EXIT_DEPENDENCY"
+  mkdir -p "${HOME}/.cache/steamshine"; extract="$(mktemp -d "${HOME}/.cache/steamshine/extract.XXXXXX")"
+  if ! tar --zstd -C "${extract}" -xf "${ARTIFACT_PATH}"; then rm -rf -- "${extract}"; die 'Artifact extraction failed.' "$EXIT_DEPENDENCY"; fi
+  if [[ ! -x "${extract}/bin/steamshine" || ! -f "${extract}/BUILD_INFO.json" ]]; then rm -rf -- "${extract}"; die 'Artifact layout is invalid.' "$EXIT_DEPENDENCY"; fi
   run mkdir -p "${versions}" "${PREFIX}/bin"; local version; version="$(sha256sum "${ARTIFACT_PATH}" | awk '{print $1}')"
   run mv "${extract}" "${versions}/${version}"; run ln -sfn "${versions}/${version}" "${target}/current"; run ln -sfn "${target}/current/bin/steamshine" "${PREFIX}/bin/steamshine"
 }

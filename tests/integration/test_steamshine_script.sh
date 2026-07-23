@@ -14,3 +14,16 @@ if "${root_dir}/steamshine.sh" uninstall --purge --non-interactive --dry-run >/d
   echo 'Expected non-interactive purge without --yes to fail.' >&2
   exit 1
 fi
+
+# A normal tar archive contains a leading ./ entry.  It is safe and must not be
+# mistaken for a parent-directory traversal by the immutable artifact installer.
+test_root="$(mktemp -d)"
+trap 'rm -rf -- "${test_root}"' EXIT
+mkdir -p "${test_root}/stage/bin" "${test_root}/home/run"
+install -m 755 /bin/true "${test_root}/stage/bin/steamshine"
+printf '{}\n' >"${test_root}/stage/BUILD_INFO.json"
+tar --zstd -C "${test_root}/stage" -cf "${test_root}/steamshine-steamos-x86_64-test.tar.zst" .
+(cd "${test_root}" && sha256sum steamshine-steamos-x86_64-test.tar.zst >steamshine-steamos-x86_64-test.tar.zst.sha256)
+HOME="${test_root}/home" XDG_RUNTIME_DIR="${test_root}/home/run" \
+  "${root_dir}/steamshine.sh" install --artifact "${test_root}/steamshine-steamos-x86_64-test.tar.zst" --no-service --non-interactive --yes
+test -x "${test_root}/home/.local/bin/steamshine"
