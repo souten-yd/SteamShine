@@ -1,6 +1,13 @@
 ---
 name: build steamos artifact
 
+permissions:
+  contents: read
+
+concurrency:
+  group: steamos-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 on:
   pull_request:
     paths: &steamos_paths
