@@ -121,7 +121,7 @@ jobs:
         run: |
           artifact="$(find dist -name 'steamshine-steamos-*.tar.zst' -print -quit)"
           test -n "${artifact}"
-          sha256sum -c "${artifact}.sha256"
+          (cd "$(dirname "${artifact}")" && sha256sum -c "$(basename "${artifact}").sha256")
           if tar --zstd -tf "${artifact}" | grep -Eq '(^/|(^|/)\.\.(/|$))'; then
             echo "Unsafe archive path" >&2
             exit 1
