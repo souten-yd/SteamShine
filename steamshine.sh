@@ -126,7 +126,7 @@ install_artifact() {
   local checksum="${ARTIFACT_PATH}.sha256" target="${PREFIX}/share/steamshine" versions="${PREFIX}/share/steamshine/versions" extract
   [[ -f "${checksum}" ]] || die "Missing checksum: ${checksum}" "$EXIT_DEPENDENCY"
   sha256sum -c "${checksum}" || die 'Artifact checksum mismatch.' "$EXIT_DEPENDENCY"
-  tar --zstd -tf "${ARTIFACT_PATH}" | grep -Eq '(^/|(^|/)\.\.?(/|$))' && die 'Unsafe archive path rejected.' "$EXIT_DEPENDENCY"
+  tar --zstd -tf "${ARTIFACT_PATH}" | grep -Eq '(^/|(^|/)\.\.(/|$))' && die 'Unsafe archive path rejected.' "$EXIT_DEPENDENCY"
   mkdir -p "${HOME}/.cache/steamshine"; extract="$(mktemp -d "${HOME}/.cache/steamshine/extract.XXXXXX")"; trap 'rm -rf -- "${extract}"' RETURN
   tar --zstd -C "${extract}" -xf "${ARTIFACT_PATH}"
   [[ -x "${extract}/bin/steamshine" && -f "${extract}/BUILD_INFO.json" ]] || die 'Artifact layout is invalid.' "$EXIT_DEPENDENCY"
