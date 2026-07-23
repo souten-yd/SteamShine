@@ -193,6 +193,16 @@ namespace steamos_virtual_session {
     }
   }
 
+  bool application_environment(std::string &runtime_directory, std::string &wayland_display) {
+    std::scoped_lock lock {manager.mutex};
+    if (manager.runtime_directory.empty() || (manager.current != state_e::Ready && manager.current != state_e::Streaming)) {
+      return false;
+    }
+    runtime_directory = manager.runtime_directory.string();
+    wayland_display = "wayland-0";
+    return true;
+  }
+
   void stop() {
     std::scoped_lock lock {manager.mutex};
 #if defined(__linux__)

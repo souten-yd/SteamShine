@@ -83,6 +83,12 @@ TEST_F(SteamOSVirtualSessionTest, FakeGamescopeReadinessAndCleanup) {
   ASSERT_TRUE(steamos_virtual_session::prepare(launch, error)) << error;
   EXPECT_EQ(steamos_virtual_session::state(), steamos_virtual_session::state_e::Ready);
   EXPECT_TRUE(std::filesystem::exists(config::steamos_virtual_display.runtime_directory));
+  std::string runtime_directory;
+  std::string wayland_display;
+  EXPECT_TRUE(steamos_virtual_session::application_environment(runtime_directory, wayland_display));
+  const auto expected_runtime_directory {std::filesystem::path {config::steamos_virtual_display.runtime_directory} / ("session-" + std::to_string(::getpid()) + "-42")};
+  EXPECT_EQ(runtime_directory, expected_runtime_directory.string());
+  EXPECT_EQ(wayland_display, "wayland-0");
   steamos_virtual_session::stop();
   EXPECT_EQ(steamos_virtual_session::state(), steamos_virtual_session::state_e::Idle);
   EXPECT_TRUE(std::filesystem::exists(config::steamos_virtual_display.runtime_directory));

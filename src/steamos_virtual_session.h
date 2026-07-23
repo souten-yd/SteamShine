@@ -41,6 +41,18 @@ namespace steamos_virtual_session {
   void mark_streaming();
 
   /**
+   * @brief Return the owned Wayland environment for the application launcher.
+   *
+   * The values are available only after Gamescope has passed readiness. Callers
+   * must not retain them after the associated launch session ends.
+   *
+   * @param runtime_directory Receives the session-owned XDG runtime directory.
+   * @param wayland_display Receives the session-owned Wayland display name.
+   * @return True when an application may safely connect to the virtual display.
+   */
+  bool application_environment(std::string &runtime_directory, std::string &wayland_display);
+
+  /**
    * @brief Stop only the process group and runtime directory owned by SteamShine.
    */
   void stop();
