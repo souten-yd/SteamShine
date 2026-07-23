@@ -3,9 +3,24 @@ name: build steamos artifact
 
 on:
   pull_request:
+    paths: &steamos_paths
+      - ".github/workflows/build-steamos.yml"
+      - "src/steamos_virtual_session.*"
+      - "src/platform/linux/**"
+      - "src/nvhttp.*"
+      - "src/stream.*"
+      - "src/process.*"
+      - "src/config.*"
+      - "tests/unit/test_steamos_virtual_session.cpp"
+      - "tests/integration/test_steamshine_script.sh"
+      - "scripts/**"
+      - "steamshine.sh"
+      - "CMakeLists.txt"
+      - "cmake/**"
+      - "packaging/linux/**"
   push:
     branches: [master]
-    tags: ["v*"]
+    paths: *steamos_paths
   workflow_dispatch:
 
 jobs:
@@ -27,7 +42,14 @@ jobs:
         run: |
           clang-format --dry-run --Werror src/steamos_virtual_session.cpp \
             src/steamos_virtual_session.h tests/unit/test_steamos_virtual_session.cpp
-          shellcheck steamshine.sh scripts/*.sh tests/integration/test_steamshine_script.sh
+          shellcheck steamshine.sh \
+            scripts/diagnose-steamos-virtual-display.sh \
+            scripts/package-steamos-artifact.sh \
+            scripts/test-steamos-latency.sh \
+            scripts/test-steamos-reconnect.sh \
+            scripts/test-steamos-ssd-writes.sh \
+            scripts/test-steamos-virtual-display.sh \
+            tests/integration/test_steamshine_script.sh
           git -C "${GITHUB_WORKSPACE}" diff --check
       - name: Configure
         run: cmake -S . -B cmake-build-steamos -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=ON -DBUILD_DOCS=OFF
@@ -44,6 +66,26 @@ jobs:
           readelf -d cmake-build-steamos/sunshine
       - name: Stage and package
         run: scripts/package-steamos-artifact.sh cmake-build-steamos dist
+      - name: Smoke test immutable user-space installer
+        run: |
+          artifact="$(find dist -name 'steamshine-steamos-*.tar.zst' -print -quit)"
+          test -n "${artifact}"
+          sha256sum -c "${artifact}.sha256"
+          if tar --zstd -tf "${artifact}" | grep -Eq '(^/|(^|/)\.\.?(/|$))'; then
+            echo "Unsafe archive path" >&2
+            exit 1
+          fi
+          smoke_home="$(mktemp -d)"
+          mkdir -p "${smoke_home}/run"
+          HOME="${smoke_home}" XDG_RUNTIME_DIR="${smoke_home}/run" \
+            ./steamshine.sh install --artifact "${artifact}" --no-service --non-interactive --yes
+          test -x "${smoke_home}/.local/bin/steamshine"
+          test -f "${smoke_home}/.local/share/steamshine/current/BUILD_INFO.json"
+          test -f "${smoke_home}/.local/share/steamshine/current/RUNTIME_DEPENDENCIES.txt"
+          test -f "${smoke_home}/.local/share/steamshine/current/systemd-user/steamshine.service.in"
+          test -x "${smoke_home}/.local/share/steamshine/current/scripts/diagnose-steamos-virtual-display.sh"
+          HOME="${smoke_home}" XDG_RUNTIME_DIR="${smoke_home}/run" \
+            ./steamshine.sh uninstall --non-interactive --yes --no-service
       - uses: actions/upload-artifact@v4
         with:
           name: steamshine-steamos-x86_64-${{ github.sha }}
