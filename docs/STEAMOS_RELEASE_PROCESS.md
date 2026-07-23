@@ -1,6 +1,8 @@
 # SteamOS artifact release process
 
-The `build steamos artifact` GitHub Actions workflow builds in an Arch Linux container, runs formatting, ShellCheck, CTest, integration smoke tests, runtime dependency inspection, and creates:
+The `SteamOS Runtime Build` GitHub Actions workflow builds an x86_64 artifact in an Arch Linux container. It is intentionally limited to the SteamOS delivery path: focused formatting, ShellCheck, workflow validation, the SteamOS virtual-session GTest filter, installer smoke tests, runtime dependency inspection, and packaging.
+
+It does not run Windows, macOS, FreeBSD, Flatpak, AppImage, Docker, or broad upstream Sunshine test matrices for a normal SteamOS pull request. CUDA and NVIDIA dependencies are disabled for this AMD-focused artifact. ROCm is not bundled; when available on the host, it is reported only by the explicit diagnostic command.
 
 ```text
 steamshine-steamos-x86_64-<commit>.tar.zst
