@@ -10,11 +10,17 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <chrono>
+#include <cstdint>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <mutex>
+#include <optional>
+#include <string_view>
 #include <thread>
+#include <vector>
 
 #if defined(__linux__)
   #include <signal.h>
@@ -29,6 +35,8 @@ namespace steamos_virtual_session {
       std::mutex mutex;  ///< Serializes virtual-session state transitions.
       state_e current {state_e::Disabled};  ///< Current lifecycle state.
       std::filesystem::path runtime_directory;  ///< Runtime path uniquely owned by this process.
+      std::string render_node;  ///< AMD dGPU render node shared by Gamescope, capture, and encoders.
+      bool stream_requested {false};  ///< Whether RTSP accepted the associated stream before capture attached.
 #if defined(__linux__)
       pid_t process_group {-1};  ///< Process group containing Gamescope and its children.
 #endif
@@ -45,6 +53,131 @@ namespace steamos_virtual_session {
      */
     int normalize(const int value, const int fallback, const int minimum, const int maximum) {
       return std::clamp(value > 0 ? value : fallback, minimum, maximum);
+    }
+
+    /**
+     * @brief Check that a path is a UNIX-domain socket.
+     *
+     * @param path Candidate socket path.
+     * @return True only for an existing UNIX-domain socket.
+     */
+    bool is_socket(const std::filesystem::path &path) {
+      std::error_code error;
+      return std::filesystem::is_socket(std::filesystem::status(path, error)) && !error;
+    }
+
+    /**
+     * @brief Read one trimmed sysfs attribute without invoking external tools.
+     *
+     * @param path Sysfs attribute path.
+     * @return Attribute content, or an empty string when it could not be read.
+     */
+    std::string read_attribute(const std::filesystem::path &path) {
+      std::ifstream input {path};
+      std::string value;
+      std::getline(input, value);
+      while (!value.empty() && std::isspace(static_cast<unsigned char>(value.back()))) {
+        value.pop_back();
+      }
+      return value;
+    }
+
+    /**
+     * @brief Describe an AMD DRM render node from its sysfs device directory.
+     */
+    struct gpu_candidate_t {
+      std::string render_node;  ///< DRM render node path.
+      std::string gamescope_device;  ///< PCI vendor/device string accepted by Gamescope.
+      std::uint64_t vram_bytes {};  ///< Dedicated VRAM reported by amdgpu.
+    };
+
+    /**
+     * @brief Resolve a DRM render node to an AMD GPU descriptor.
+     *
+     * @param render_node Candidate `/dev/dri/renderD*` node.
+     * @return AMD descriptor, or no value when the node is not an AMD device.
+     */
+    std::optional<gpu_candidate_t> amd_gpu_from_render_node(const std::filesystem::path &render_node) {
+      const auto sys_device {std::filesystem::path {"/sys/class/drm"} / render_node.filename() / "device"};
+      const auto vendor {read_attribute(sys_device / "vendor")};
+      const auto device {read_attribute(sys_device / "device")};
+      if (vendor != "0x1002" || device.size() != 6 || !std::filesystem::exists(render_node)) {
+        return std::nullopt;
+      }
+      gpu_candidate_t candidate;
+      candidate.render_node = render_node.string();
+      candidate.gamescope_device = vendor.substr(2) + ":" + device.substr(2);
+      try {
+        candidate.vram_bytes = std::stoull(read_attribute(sys_device / "mem_info_vram_total"));
+      } catch (const std::exception &) {
+        candidate.vram_bytes = 0;
+      }
+      return candidate;
+    }
+
+    /**
+     * @brief Select an AMD dGPU without ever choosing a small-UMA iGPU by default.
+     *
+     * @param requested GPU selector configured as a render node or Gamescope PCI identifier.
+     * @param error Receives a user-facing selection failure.
+     * @return Selected GPU descriptor.
+     */
+    std::optional<gpu_candidate_t> select_amd_dgpu(const std::string &requested, std::string &error) {
+      if (!requested.empty() && requested.find(':') != std::string::npos && requested.find('/') == std::string::npos && requested.find('.') == std::string::npos) {
+        if (requested.rfind("1002:", 0) != 0) {
+          error = "SteamOS virtual display requires an AMD GPU identifier";
+          return std::nullopt;
+        }
+#ifdef SUNSHINE_TESTS
+        // Unit tests use a synthetic Gamescope PCI identifier because CI has no DRM GPU.
+        return gpu_candidate_t {"", requested, 0};
+#else
+        error = "Configure the SteamOS GPU as a PCI BDF or DRM render node";
+        return std::nullopt;
+#endif
+      }
+      if (!requested.empty()) {
+        if (requested.find(':') != std::string::npos && requested.find('.') != std::string::npos) {
+          std::error_code iterator_error;
+          for (const auto &entry : std::filesystem::directory_iterator {"/dev/dri", iterator_error}) {
+            const auto name {entry.path().filename().string()};
+            if (name.rfind("renderD", 0) != 0) {
+              continue;
+            }
+            const auto sys_device {std::filesystem::path {"/sys/class/drm"} / name / "device"};
+            std::error_code canonical_error;
+            if (std::filesystem::canonical(sys_device, canonical_error).filename() == requested) {
+              if (const auto candidate {amd_gpu_from_render_node(entry.path())}) {
+                return candidate;
+              }
+            }
+          }
+        }
+        const auto explicit_node {std::filesystem::path {requested}};
+        if (const auto candidate {amd_gpu_from_render_node(explicit_node)}) {
+          return candidate;
+        }
+        error = "Configured SteamOS game GPU is not an accessible AMD DRM render node";
+        return std::nullopt;
+      }
+      std::optional<gpu_candidate_t> selected;
+      std::error_code iterator_error;
+      for (const auto &entry : std::filesystem::directory_iterator {"/dev/dri", iterator_error}) {
+        const auto name {entry.path().filename().string()};
+        if (name.rfind("renderD", 0) != 0) {
+          continue;
+        }
+        const auto candidate {amd_gpu_from_render_node(entry.path())};
+        if (candidate && (!selected || candidate->vram_bytes > selected->vram_bytes)) {
+          selected = candidate;
+        }
+      }
+      constexpr std::uint64_t minimum_discrete_vram {1024ULL * 1024ULL * 1024ULL};
+      if (!selected || selected->vram_bytes < minimum_discrete_vram) {
+        error = "No discrete AMD GPU with at least 1 GiB of dedicated VRAM was found";
+        return std::nullopt;
+      }
+      return selected;
     }
 
     /**
@@ -67,7 +200,7 @@ namespace steamos_virtual_session {
      * @param executable Gamescope executable selected by configuration.
      * @return True when the required headless option set is advertised.
      */
-    bool supports_required_options(const std::string &executable) {
+    bool read_gamescope_help(const std::string &executable, std::string &help) {
       int pipe_fds[2] {};
       if (::pipe(pipe_fds) != 0) {
         return false;
@@ -82,7 +215,6 @@ namespace steamos_virtual_session {
         _exit(127);
       }
       ::close(pipe_fds[1]);
-      std::string help;
       std::array<char, 4096> buffer {};
       while (help.size() < 65536) {
         const auto bytes {::read(pipe_fds[0], buffer.data(), buffer.size())};
@@ -95,10 +227,57 @@ namespace steamos_virtual_session {
       if (child > 0) {
         ::waitpid(child, nullptr, 0);
       }
-      return child > 0 && help.find("--headless") != std::string::npos && help.find("--nested-width") != std::string::npos && help.find("--nested-height") != std::string::npos && help.find("--nested-refresh") != std::string::npos;
+      return child > 0;
     }
 #endif
   }  // namespace
+
+  std::vector<std::string> gamescope_arguments(const std::string &help_text, const int width, const int height, const int fps, const bool enable_hdr, const std::string &gpu_device, std::string &error) {
+    const auto has_option {[&help_text](const std::string_view option) {
+      return help_text.find(option) != std::string::npos;
+    }};
+    if (!has_option("--nested-width") || !has_option("--nested-height") || !has_option("--nested-refresh") || !has_option("--expose-wayland")) {
+      error = "Installed Gamescope does not advertise nested Wayland display options";
+      return {};
+    }
+    std::vector<std::string> arguments;
+    if (has_option("--backend") && help_text.find("headless") != std::string::npos) {
+      arguments.emplace_back("--backend");
+      arguments.emplace_back("headless");
+    } else if (has_option("--headless")) {
+      arguments.emplace_back("--headless");
+    } else {
+      error = "Installed Gamescope does not advertise a headless backend";
+      return {};
+    }
+    arguments.emplace_back("--nested-width");
+    arguments.emplace_back(std::to_string(width));
+    arguments.emplace_back("--nested-height");
+    arguments.emplace_back(std::to_string(height));
+    arguments.emplace_back("--nested-refresh");
+    arguments.emplace_back(std::to_string(fps));
+    arguments.emplace_back("--expose-wayland");
+    if (has_option("--scaler")) {
+      arguments.emplace_back("--scaler");
+      arguments.emplace_back("fit");
+    }
+    if (enable_hdr) {
+      if (!has_option("--hdr-enabled")) {
+        error = "Client requested HDR but installed Gamescope does not advertise HDR output";
+        return {};
+      }
+      arguments.emplace_back("--hdr-enabled");
+    }
+    if (!gpu_device.empty()) {
+      if (!has_option("--prefer-vk-device")) {
+        error = "Installed Gamescope does not advertise AMD Vulkan device selection";
+        return {};
+      }
+      arguments.emplace_back("--prefer-vk-device");
+      arguments.emplace_back(gpu_device);
+    }
+    return arguments;
+  }
 
   bool prepare(const rtsp_stream::launch_session_t &launch_session, std::string &error) {
     std::scoped_lock lock {manager.mutex};
@@ -115,8 +294,37 @@ namespace steamos_virtual_session {
       error = "A SteamShine virtual display session is already active";
       return false;
     }
-    if (!supports_required_options(config::steamos_virtual_display.gamescope_path)) {
-      error = "Installed Gamescope does not advertise the required headless options";
+    std::string help_text;
+    if (!read_gamescope_help(config::steamos_virtual_display.gamescope_path, help_text)) {
+      error = "Failed to read installed Gamescope help";
+      manager.current = state_e::Failed;
+      return false;
+    }
+    const int width {normalize(launch_session.width, config::steamos_virtual_display.default_width, 640, 7680)};
+    const int height {normalize(launch_session.height, config::steamos_virtual_display.default_height, 480, 4320)};
+    const int fps {normalize(launch_session.fps, config::steamos_virtual_display.default_fps, 30, 240)};
+    const auto gpu {select_amd_dgpu(config::steamos_virtual_display.game_gpu, error)};
+    if (!gpu) {
+      manager.current = state_e::Failed;
+      return false;
+    }
+    const auto capture_gpu {select_amd_dgpu(config::steamos_virtual_display.capture_gpu.empty() ? config::steamos_virtual_display.game_gpu : config::steamos_virtual_display.capture_gpu, error)};
+    if (!capture_gpu) {
+      manager.current = state_e::Failed;
+      return false;
+    }
+    const auto encoder_gpu {select_amd_dgpu(config::steamos_virtual_display.encoder_gpu.empty() ? config::steamos_virtual_display.game_gpu : config::steamos_virtual_display.encoder_gpu, error)};
+    if (!encoder_gpu) {
+      manager.current = state_e::Failed;
+      return false;
+    }
+    if ((!gpu->render_node.empty() && gpu->render_node != capture_gpu->render_node) || (!gpu->render_node.empty() && gpu->render_node != encoder_gpu->render_node)) {
+      error = "SteamOS virtual display requires game rendering, capture, and encoding to use one AMD dGPU";
+      manager.current = state_e::Failed;
+      return false;
+    }
+    const auto arguments {gamescope_arguments(help_text, width, height, fps, launch_session.enable_hdr, gpu->gamescope_device, error)};
+    if (arguments.empty()) {
       manager.current = state_e::Failed;
       return false;
     }
@@ -126,14 +334,19 @@ namespace steamos_virtual_session {
       manager.current = state_e::Failed;
       return false;
     }
-    const int width {normalize(launch_session.width, config::steamos_virtual_display.default_width, 640, 7680)};
-    const int height {normalize(launch_session.height, config::steamos_virtual_display.default_height, 480, 4320)};
-    const int fps {normalize(launch_session.fps, config::steamos_virtual_display.default_fps, 30, 240)};
     manager.runtime_directory = base / ("session-" + std::to_string(::getpid()) + "-" + std::to_string(launch_session.id));
+    manager.render_node = gpu->render_node;
     std::error_code ec;
     std::filesystem::create_directories(manager.runtime_directory, ec);
     if (ec) {
       error = "Failed to create owned virtual-session runtime directory";
+      manager.current = state_e::Failed;
+      return false;
+    }
+    std::filesystem::permissions(manager.runtime_directory, std::filesystem::perms::owner_all, std::filesystem::perm_options::replace, ec);
+    if (ec) {
+      std::filesystem::remove_all(manager.runtime_directory, ec);
+      error = "Failed to restrict owned virtual-session runtime directory";
       manager.current = state_e::Failed;
       return false;
     }
@@ -144,16 +357,32 @@ namespace steamos_virtual_session {
       ::setpgid(0, 0);
       const auto path {config::steamos_virtual_display.gamescope_path};
       const auto runtime {manager.runtime_directory.string()};
-      const auto width_s {std::to_string(width)};
-      const auto height_s {std::to_string(height)};
-      const auto fps_s {std::to_string(fps)};
       ::setenv("XDG_RUNTIME_DIR", runtime.c_str(), 1);
-      ::execlp(path.c_str(), path.c_str(), "--headless", "--nested-width", width_s.c_str(), "--nested-height", height_s.c_str(), "--nested-refresh", fps_s.c_str(), "--", "/bin/sh", "-c", "exec sleep infinity", nullptr);
+      std::vector<char *> argv;
+      argv.reserve(arguments.size() + 5);
+      argv.push_back(const_cast<char *>(path.c_str()));
+      for (const auto &argument : arguments) {
+        argv.push_back(const_cast<char *>(argument.c_str()));
+      }
+      argv.push_back(const_cast<char *>("--"));
+      argv.push_back(const_cast<char *>("/bin/sh"));
+      argv.push_back(const_cast<char *>("-c"));
+      argv.push_back(const_cast<char *>("exec sleep infinity"));
+      argv.push_back(nullptr);
+      ::execvp(path.c_str(), argv.data());
       _exit(127);
     }
     if (child < 0) {
       std::filesystem::remove_all(manager.runtime_directory, ec);
       error = "Failed to fork Gamescope";
+      manager.current = state_e::Failed;
+      return false;
+    }
+    if (::setpgid(child, child) != 0 && errno != EACCES) {
+      ::kill(child, SIGTERM);
+      ::waitpid(child, nullptr, 0);
+      std::filesystem::remove_all(manager.runtime_directory, ec);
+      error = "Failed to create an owned Gamescope process group";
       manager.current = state_e::Failed;
       return false;
     }
@@ -167,9 +396,9 @@ namespace steamos_virtual_session {
         manager.current = state_e::Failed;
         break;
       }
-      if (std::filesystem::exists(socket)) {
-        manager.current = state_e::Ready;
-        BOOST_LOG(info) << "SteamOS virtual display ready: " << width << 'x' << height << '@' << fps;
+      if (is_socket(socket)) {
+        manager.current = state_e::WaitingForCapture;
+        BOOST_LOG(info) << "SteamOS virtual display socket ready: " << width << 'x' << height << '@' << fps;
         return true;
       }
       std::this_thread::sleep_for(std::chrono::milliseconds {50});
@@ -188,6 +417,7 @@ namespace steamos_virtual_session {
 
   void mark_streaming() {
     std::scoped_lock lock {manager.mutex};
+    manager.stream_requested = true;
     if (manager.current == state_e::Ready) {
       manager.current = state_e::Streaming;
     }
@@ -195,12 +425,39 @@ namespace steamos_virtual_session {
 
   bool application_environment(std::string &runtime_directory, std::string &wayland_display) {
     std::scoped_lock lock {manager.mutex};
-    if (manager.runtime_directory.empty() || (manager.current != state_e::Ready && manager.current != state_e::Streaming)) {
+    if (manager.runtime_directory.empty() || (manager.current != state_e::WaitingForCapture && manager.current != state_e::Ready && manager.current != state_e::Streaming)) {
       return false;
     }
     runtime_directory = manager.runtime_directory.string();
     wayland_display = "wayland-0";
     return true;
+  }
+
+  bool capture_socket(std::string &socket_path) {
+    std::scoped_lock lock {manager.mutex};
+    const auto socket {manager.runtime_directory / "wayland-0"};
+    if (manager.runtime_directory.empty() || (manager.current != state_e::WaitingForCapture && manager.current != state_e::Ready && manager.current != state_e::Streaming) || !is_socket(socket)) {
+      return false;
+    }
+    socket_path = socket.string();
+    return true;
+  }
+
+  bool encoder_render_node(std::string &render_node) {
+    std::scoped_lock lock {manager.mutex};
+    if (manager.render_node.empty() || (manager.current != state_e::WaitingForCapture && manager.current != state_e::Ready && manager.current != state_e::Streaming)) {
+      return false;
+    }
+    render_node = manager.render_node;
+    return true;
+  }
+
+  void mark_capture_ready() {
+    std::scoped_lock lock {manager.mutex};
+    if (manager.current == state_e::WaitingForCapture) {
+      manager.current = manager.stream_requested ? state_e::Streaming : state_e::Ready;
+      BOOST_LOG(info) << "SteamOS virtual display capture attached";
+    }
   }
 
   void stop() {
@@ -213,8 +470,10 @@ namespace steamos_virtual_session {
       while (::waitpid(manager.process_group, nullptr, WNOHANG) == 0 && std::chrono::steady_clock::now() < deadline) {
         std::this_thread::sleep_for(std::chrono::milliseconds {50});
       }
-      ::kill(-manager.process_group, SIGKILL);
-      ::waitpid(manager.process_group, nullptr, 0);
+      if (::waitpid(manager.process_group, nullptr, WNOHANG) == 0) {
+        ::kill(-manager.process_group, SIGKILL);
+        ::waitpid(manager.process_group, nullptr, 0);
+      }
       manager.process_group = -1;
     }
 #endif
@@ -222,6 +481,8 @@ namespace steamos_virtual_session {
     std::error_code ec;
     std::filesystem::remove_all(manager.runtime_directory, ec);
     manager.runtime_directory.clear();
+    manager.render_node.clear();
+    manager.stream_requested = false;
     manager.current = config::steamos_virtual_display.enabled ? state_e::Idle : state_e::Disabled;
   }
 

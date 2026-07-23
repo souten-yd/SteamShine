@@ -3,10 +3,13 @@
  * @brief Definitions for Wayland capture.
  */
 // platform includes
+#include <cstring>
 #include <drm_fourcc.h>
 #include <fcntl.h>
 #include <gbm.h>
 #include <poll.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 #include <unistd.h>
 #include <wayland-client.h>
 #include <wayland-util.h>
@@ -20,6 +23,7 @@
 #include "src/logging.h"
 #include "src/platform/common.h"
 #include "src/round_robin.h"
+#include "src/steamos_virtual_session.h"
 #include "src/utility.h"
 #include "wayland.h"
 
@@ -33,6 +37,31 @@ using namespace std::literals;
 #pragma GCC diagnostic ignored "-Wpmf-conversions"
 
 namespace wl {
+
+  /**
+   * @brief Connect to a session-owned Wayland UNIX socket without global environment changes.
+   *
+   * @param socket_path Absolute path to the trusted session-owned Wayland socket.
+   * @return Connected file descriptor, or -1 when the connection could not be made.
+   */
+  int connect_owned_wayland_socket(const std::string &socket_path) {
+    sockaddr_un address {};
+    if (socket_path.size() >= sizeof(address.sun_path)) {
+      BOOST_LOG(error) << "[wayland] SteamOS virtual socket path is too long"sv;
+      return -1;
+    }
+    const int fd {::socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0)};
+    if (fd < 0) {
+      return -1;
+    }
+    address.sun_family = AF_UNIX;
+    std::strncpy(address.sun_path, socket_path.c_str(), sizeof(address.sun_path) - 1);
+    if (::connect(fd, reinterpret_cast<const sockaddr *>(&address), sizeof(address)) != 0) {
+      ::close(fd);
+      return -1;
+    }
+    return fd;
+  }
 
   // Helper to call C++ method from wayland C callback
   template<class T, class Method, Method m, class... Params>
@@ -53,6 +82,22 @@ namespace wl {
   };
 
   int display_t::init(const char *display_name) {
+    std::string virtual_socket;
+    if (steamos_virtual_session::capture_socket(virtual_socket)) {
+      const int socket_fd {connect_owned_wayland_socket(virtual_socket)};
+      if (socket_fd < 0) {
+        BOOST_LOG(error) << "[wayland] Couldn't connect to owned SteamOS virtual display"sv;
+        return -1;
+      }
+      display_internal.reset(wl_display_connect_to_fd(socket_fd));
+      if (!display_internal) {
+        ::close(socket_fd);
+        BOOST_LOG(error) << "[wayland] Couldn't initialize owned SteamOS virtual display connection"sv;
+        return -1;
+      }
+      BOOST_LOG(info) << "[wayland] Connected to owned SteamOS virtual display"sv;
+      return 0;
+    }
     std::string env_display_name;
     if (!display_name) {
       if (lizardbyte::common::get_env("WAYLAND_DISPLAY", env_display_name)) {

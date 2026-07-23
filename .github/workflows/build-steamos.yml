@@ -74,7 +74,9 @@ jobs:
       - name: Format and shell checks
         run: |
           clang-format --dry-run --Werror src/steamos_virtual_session.cpp \
-            src/steamos_virtual_session.h tests/unit/test_steamos_virtual_session.cpp
+            src/steamos_virtual_session.h src/process.cpp \
+            src/platform/linux/misc.cpp src/platform/linux/wayland.cpp \
+            src/platform/linux/wlgrab.cpp tests/unit/test_steamos_virtual_session.cpp
           shellcheck steamshine.sh \
             scripts/diagnose-steamos-virtual-display.sh \
             scripts/package-steamos-artifact.sh \
@@ -87,6 +89,10 @@ jobs:
           ! grep -nE '[[:blank:]]+$|^(<<<<<<<|=======|>>>>>>>)' \
             src/steamos_virtual_session.cpp \
             src/steamos_virtual_session.h \
+            src/process.cpp \
+            src/platform/linux/misc.cpp \
+            src/platform/linux/wayland.cpp \
+            src/platform/linux/wlgrab.cpp \
             tests/unit/test_steamos_virtual_session.cpp \
             steamshine.sh \
             scripts/diagnose-steamos-virtual-display.sh \

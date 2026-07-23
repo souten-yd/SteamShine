@@ -62,6 +62,7 @@
 #include "src/entry_handler.h"
 #include "src/logging.h"
 #include "src/platform/common.h"
+#include "src/steamos_virtual_session.h"
 #include "vaapi.h"
 
 #ifdef __GNUC__
@@ -1457,6 +1458,10 @@ namespace platf {
   }
 
   std::string resolve_render_device() {
+    std::string virtual_render_node;
+    if (steamos_virtual_session::encoder_render_node(virtual_render_node)) {
+      return virtual_render_node;
+    }
     if (!config::video.adapter_name.empty()) {
       return config::video.adapter_name;
     }

@@ -9,6 +9,7 @@
 #include "cuda.h"
 #include "src/logging.h"
 #include "src/platform/common.h"
+#include "src/steamos_virtual_session.h"
 #include "src/video.h"
 #include "vaapi.h"
 #include "wayland.h"
@@ -134,6 +135,8 @@ namespace wl {
       BOOST_LOG(debug) << "[wlgrab] Logical Resolution: "sv << logical_width << 'x' << logical_height;
       BOOST_LOG(debug) << "[wlgrab] Desktop Resolution: "sv << env_width << 'x' << env_height;
       BOOST_LOG(debug) << "[wlgrab] Logical Desktop Resolution: "sv << env_logical_width << 'x' << env_logical_height;
+
+      steamos_virtual_session::mark_capture_ready();
 
       return 0;
     }

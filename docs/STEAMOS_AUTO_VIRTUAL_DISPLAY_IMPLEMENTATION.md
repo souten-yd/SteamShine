@@ -1,7 +1,7 @@
 # SteamOS automatic virtual display implementation
 
 - Status: Implementing — hardware validation required
-- Last updated: 2026-07-23
+- Last updated: 2026-07-24
 
 ## Current integration map
 
@@ -15,12 +15,14 @@ Capture implementations are `src/platform/linux/pipewire.cpp` (PipeWire/DMA-BUF 
 
 ## Implemented boundary
 
-`steamos_virtual_display_enabled=false` preserves normal Sunshine behavior. When enabled, `steamos_virtual_session` normalizes client dimensions to 640x480–7680x4320 and FPS to 30–240, creates an owned directory under `XDG_RUNTIME_DIR/steamshine`, starts a process group, and requires a Wayland socket before continuing. Failure is returned as GameStream 503 before application launch. Cleanup kills only that group and deletes only its owned directory.
+`steamos_virtual_display_enabled=false` preserves normal Sunshine behavior. When enabled, `steamos_virtual_session` normalizes client dimensions to 640x480–7680x4320 and FPS to 30–240, creates an owned directory under `XDG_RUNTIME_DIR/steamshine`, starts a process group, and requires a real UNIX Wayland socket before continuing. It derives a Gamescope command from the installed binary's `--help` output; Gamescope 3.16 uses `--backend headless`, while older binaries are accepted only when they advertise a legacy `--headless` option. The command includes `--expose-wayland`, nested size/refresh, the `fit` policy when available, optional HDR, and an AMD Vulkan device preference.
+
+The existing Wayland DMA-BUF backend now opens the owned socket by file descriptor instead of changing Sunshine's process-wide `XDG_RUNTIME_DIR`. After the backend has verified its Wayland capture interfaces, it marks the virtual session capture-ready. Existing application execution receives only the owned `XDG_RUNTIME_DIR` and `WAYLAND_DISPLAY`, so prep/undo semantics remain under the existing process manager. Failure is returned as GameStream 503 before application launch. Cleanup kills only the owned process group and deletes only its owned directory.
 
 ## Remaining hardware-gated work
 
-Gamescope option sets, PipeWire node discovery, display-source selection, and same-dGPU DMA-BUF capture must be validated on the target SteamOS build before enabling the flag. The current environment has no CMake or SteamOS GPU stack, so no executable build or hardware test was possible. Use `scripts/diagnose-steamos-virtual-display.sh` and `scripts/test-steamos-virtual-display.sh` on the target system.
+The dedicated PipeWire-node provider has not been implemented; the current virtual path uses the existing Wayland DMA-BUF capture backend, which is the low-copy display source exposed by Gamescope. PipeWire node ownership/disappearance tests, real AMD encoder verification, and all monitorless Moonlight checks remain hardware-gated. GitHub Actions has exercised configure, build, targeted GTest, installer smoke, runtime linkage, packaging, and Artifact upload; it cannot start Gamescope or access an AMD GPU. Use `./steamshine.sh hardware-test --interactive` on the target system.
 
 ## Configuration
 
-The added keys are `steamos_virtual_display_enabled`, `steamos_virtual_display_mode`, `steamos_gamescope_path`, `steamos_runtime_directory`, GPU preference keys, startup/shutdown timeout keys, default display values, and `steamos_cleanup_orphan_sessions`. GPU preference keys are recorded but not yet connected to the existing PipeWire/VA-API/Vulkan adapter selectors; therefore the feature must remain disabled until that adapter integration is complete.
+The added keys are `steamos_virtual_display_enabled`, `steamos_virtual_display_mode`, `steamos_gamescope_path`, `steamos_runtime_directory`, GPU preference keys, startup/shutdown timeout keys, default display values, and `steamos_cleanup_orphan_sessions`. A blank GPU preference selects the AMD render node with the largest dedicated VRAM (requiring at least 1 GiB) and refuses the usual UMA iGPU path. PCI BDF and render-node selectors are resolved through sysfs. The active virtual session feeds that render node into existing VA-API and Vulkan Video device resolution; capture and encoder overrides must resolve to the same node.

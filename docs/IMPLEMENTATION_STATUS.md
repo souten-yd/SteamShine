@@ -2,11 +2,11 @@
 
 | Item | Status | Notes |
 | --- | --- | --- |
-| SteamOS virtual display lifecycle | Implementing | Feature flag, normalization, owned runtime/process cleanup, and GameStream launch hook added. |
-| Gamescope/PipeWire same-GPU capture | Blocked: requires hardware test and adapter integration | Target Gamescope options and PipeWire node integration require SteamOS AMD hardware. |
+| SteamOS virtual display lifecycle | Implementing | Feature flag, normalized request, dynamically validated Gamescope command, owned runtime/process cleanup, app Wayland environment, and GameStream launch hook added. |
+| Gamescope/Wayland same-GPU capture | Implementing | The owned socket is attached through existing Wayland DMA-BUF capture and its AMD render node reaches VA-API/Vulkan device resolution. Hardware validation remains required. |
 | Setup lifecycle script | Implemented | User-local install/service lifecycle and dry-run support added. |
-| Fake Gamescope lifecycle GTest | Implementing | Source added; not executed because this environment lacks CMake. |
+| Fake Gamescope lifecycle GTest | Implementing | Readiness, actual UNIX socket, argument generation, early crash, timeout, cleanup, and duplicate-session coverage are present; current commit awaits CI. |
 | Fake PipeWire readiness | Not started | The provider has no PipeWire-node adapter yet, so a truthful fake readiness test cannot be added. |
 | Dependency bootstrap | Implemented | Script verifies repository package availability for pacman, apt, or dnf before installation. |
-| Automated configure/build/format/lint | Blocked: sudo authorization unavailable | The installation command was attempted but this non-interactive environment cannot authenticate sudo. |
+| Automated configure/build/format/lint | CI Tested | SteamOS-only Arch workflow has completed the focused checks, configure, build, targeted GTest, installer smoke, linkage, package, and Artifact upload. |
 | Hardware latency/SSD comparison | Blocked: requires hardware test | Collection scripts added; acceptance values must be measured on a monitorless SteamOS host. |
