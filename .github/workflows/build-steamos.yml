@@ -1,5 +1,5 @@
 ---
-name: build steamos artifact
+name: SteamOS Runtime Build
 
 permissions:
   contents: read
@@ -10,14 +10,19 @@ concurrency:
 
 on:
   pull_request:
-    paths: &steamos_paths
+    paths:
       - ".github/workflows/build-steamos.yml"
-      - "src/steamos_virtual_session.*"
+      - "src/steamos_virtual_session.cpp"
+      - "src/steamos_virtual_session.h"
       - "src/platform/linux/**"
-      - "src/nvhttp.*"
-      - "src/stream.*"
-      - "src/process.*"
-      - "src/config.*"
+      - "src/nvhttp.cpp"
+      - "src/nvhttp.h"
+      - "src/stream.cpp"
+      - "src/stream.h"
+      - "src/process.cpp"
+      - "src/process.h"
+      - "src/config.cpp"
+      - "src/config.h"
       - "tests/unit/test_steamos_virtual_session.cpp"
       - "tests/integration/test_steamshine_script.sh"
       - "scripts/**"
@@ -27,7 +32,26 @@ on:
       - "packaging/linux/**"
   push:
     branches: [master]
-    paths: *steamos_paths
+    paths:
+      - ".github/workflows/build-steamos.yml"
+      - "src/steamos_virtual_session.cpp"
+      - "src/steamos_virtual_session.h"
+      - "src/platform/linux/**"
+      - "src/nvhttp.cpp"
+      - "src/nvhttp.h"
+      - "src/stream.cpp"
+      - "src/stream.h"
+      - "src/process.cpp"
+      - "src/process.h"
+      - "src/config.cpp"
+      - "src/config.h"
+      - "tests/unit/test_steamos_virtual_session.cpp"
+      - "tests/integration/test_steamshine_script.sh"
+      - "scripts/**"
+      - "steamshine.sh"
+      - "CMakeLists.txt"
+      - "cmake/**"
+      - "packaging/linux/**"
   workflow_dispatch:
 
 jobs:
@@ -39,12 +63,14 @@ jobs:
         run: |
           pacman -Syy --noconfirm --needed archlinux-keyring
           pacman -S --noconfirm --needed --disable-download-timeout \
-            git cmake ninja base-devel pkgconf python python-jinja nodejs npm clang shellcheck zstd binutils \
+            git cmake ninja base-devel pkgconf python python-jinja nodejs npm clang shellcheck actionlint zstd binutils \
             libcap libdrm libevdev libnotify libpulse libva libx11 libxcb libxfixes libxrandr libxtst \
             miniupnpc openssl opus qt6-base qt6-svg shaderc udev vulkan-icd-loader wayland pipewire
       - uses: actions/checkout@v4
         with:
           submodules: recursive
+      - name: Mark workspace as safe for CMake version discovery
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - name: Format and shell checks
         run: |
           clang-format --dry-run --Werror src/steamos_virtual_session.cpp \
@@ -57,6 +83,7 @@ jobs:
             scripts/test-steamos-ssd-writes.sh \
             scripts/test-steamos-virtual-display.sh \
             tests/integration/test_steamshine_script.sh
+          actionlint .github/workflows/build-steamos.yml
           ! grep -nE '[[:blank:]]+$|^(<<<<<<<|=======|>>>>>>>)' \
             src/steamos_virtual_session.cpp \
             src/steamos_virtual_session.h \
@@ -71,7 +98,12 @@ jobs:
             tests/integration/test_steamshine_script.sh \
             .github/workflows/build-steamos.yml
       - name: Configure
-        run: cmake -S . -B cmake-build-steamos -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=ON -DBUILD_DOCS=OFF
+        run: >-
+          cmake -S . -B cmake-build-steamos -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DBUILD_TESTS=ON
+          -DBUILD_DOCS=OFF
+          -DSUNSHINE_ENABLE_CUDA=OFF
       - name: Build
         run: cmake --build cmake-build-steamos --parallel 2
       - name: Test SteamOS virtual-session lifecycle
