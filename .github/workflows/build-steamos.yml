@@ -105,7 +105,7 @@ jobs:
           -DBUILD_DOCS=OFF
           -DSUNSHINE_ENABLE_CUDA=OFF
       - name: Build
-        run: cmake --build cmake-build-steamos --parallel 2
+        run: cmake --build cmake-build-steamos --target sunshine --parallel 2
       - name: Test SteamOS virtual-session lifecycle
         run: |
           cmake --build cmake-build-steamos --target test_sunshine --parallel 2
