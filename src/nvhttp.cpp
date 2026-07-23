@@ -1238,6 +1238,11 @@ namespace nvhttp {
       proc::proc.terminate();
     }
 
+    // `cancel` can arrive before stream teardown observes the final RTSP
+    // session. Release only a SteamShine-owned virtual Gamescope session now;
+    // stop() is idempotent when normal teardown follows.
+    steamos_virtual_session::stop();
+
     // The config needs to be reverted regardless of whether "proc::proc.terminate()" was called or not.
     display_device::revert_configuration();
   }

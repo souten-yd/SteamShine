@@ -123,6 +123,7 @@ TEST_F(SteamOSVirtualSessionTest, FeatureFlagDisabledPreservesNormalLaunch) {
   EXPECT_TRUE(steamos_virtual_session::prepare(launch, error));
   EXPECT_TRUE(error.empty());
   EXPECT_EQ(steamos_virtual_session::state(), steamos_virtual_session::state_e::Disabled);
+  EXPECT_FALSE(steamos_virtual_session::active());
 }
 
 TEST_F(SteamOSVirtualSessionTest, GamescopeArgumentsUseAdvertisedHeadlessBackendAndFitPolicy) {
@@ -148,6 +149,7 @@ TEST_F(SteamOSVirtualSessionTest, FakeGamescopeReadinessAndCleanup) {
   std::string error;
   ASSERT_TRUE(steamos_virtual_session::prepare(launch, error)) << error;
   EXPECT_EQ(steamos_virtual_session::state(), steamos_virtual_session::state_e::WaitingForCapture);
+  EXPECT_TRUE(steamos_virtual_session::active());
   EXPECT_TRUE(std::filesystem::exists(config::steamos_virtual_display.runtime_directory));
   std::string runtime_directory;
   std::string wayland_display;
@@ -169,6 +171,7 @@ TEST_F(SteamOSVirtualSessionTest, FakeGamescopeReadinessAndCleanup) {
   EXPECT_EQ(steamos_virtual_session::state(), steamos_virtual_session::state_e::Ready);
   steamos_virtual_session::stop();
   EXPECT_EQ(steamos_virtual_session::state(), steamos_virtual_session::state_e::Idle);
+  EXPECT_FALSE(steamos_virtual_session::active());
   EXPECT_TRUE(std::filesystem::exists(config::steamos_virtual_display.runtime_directory));
 }
 

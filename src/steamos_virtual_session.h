@@ -92,6 +92,13 @@ namespace steamos_virtual_session {
   bool encoder_render_node(std::string &render_node);
 
   /**
+   * @brief Check whether SteamShine currently owns a virtual Gamescope session.
+   *
+   * @return True only while an owned process group and session runtime are active.
+   */
+  bool active();
+
+  /**
    * @brief Record that a capture backend successfully attached to the session.
    *
    * This transition is deliberately called by the capture backend, rather than

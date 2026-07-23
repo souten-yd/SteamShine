@@ -513,6 +513,16 @@ namespace steamos_virtual_session {
     return true;
   }
 
+  bool active() {
+    std::scoped_lock lock {manager.mutex};
+#if defined(__linux__)
+    return manager.process_group > 0 && !manager.runtime_directory.empty() &&
+           (manager.current == state_e::WaitingForCapture || manager.current == state_e::Ready || manager.current == state_e::Streaming);
+#else
+    return false;
+#endif
+  }
+
   void mark_capture_ready() {
     std::scoped_lock lock {manager.mutex};
     if (manager.current == state_e::WaitingForCapture) {

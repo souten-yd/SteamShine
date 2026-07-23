@@ -28,8 +28,8 @@ extern "C" {
 #include "network.h"
 #include "platform/common.h"
 #include "process.h"
-#include "stream.h"
 #include "steamos_virtual_session.h"
+#include "stream.h"
 #include "sync.h"
 #include "system_tray.h"
 #include "thread_safe.h"
@@ -1712,13 +1712,11 @@ namespace stream {
               session->video.cipher->encrypt(std::string_view {(char *) inspect, (size_t) blocksize}, prefix->tag, (uint8_t *) inspect, &iv);
             }
 
-            if (x - next_shard_to_send + 1 >= send_batch_size ||
-                x + 1 == shards.size()) {
+            if (x - next_shard_to_send + 1 >= send_batch_size || x + 1 == shards.size()) {
               // Do pacing within the frame.
               // Also trigger pacing before the first send_batch() of the frame
               // to account for the last send_batch() of the previous frame.
-              if (ratecontrol_group_packets_sent >= ratecontrol_packets_in_1ms ||
-                  ratecontrol_frame_packets_sent == 0) {
+              if (ratecontrol_group_packets_sent >= ratecontrol_packets_in_1ms || ratecontrol_frame_packets_sent == 0) {
                 auto due = ratecontrol_frame_start +
                            std::chrono::duration_cast<std::chrono::nanoseconds>(1ms) *
                              ratecontrol_frame_packets_sent / ratecontrol_packets_in_1ms;
@@ -2186,6 +2184,13 @@ namespace stream {
 
       // If this is the last session, invoke the platform callbacks
       if (--running_sessions == 0) {
+        // SteamOS virtual sessions are explicitly connection-scoped. The
+        // normal Sunshine desktop policy may leave an application running,
+        // but an app connected to our owned headless Gamescope must be
+        // terminated before its process group and runtime directory vanish.
+        if (steamos_virtual_session::active() && proc::proc.running()) {
+          proc::proc.terminate();
+        }
         bool revert_display_config {config::video.dd.config_revert_on_disconnect};
         if (proc::proc.running()) {
 #if defined SUNSHINE_TRAY && SUNSHINE_TRAY >= 1
