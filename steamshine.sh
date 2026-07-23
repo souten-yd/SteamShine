@@ -8,16 +8,17 @@ PREFIX="${HOME}/.local"
 BUILD_DIR="${ROOT_DIR}/cmake-build-steamos"
 CONFIG_FILE="${HOME}/.config/steamshine/sunshine.conf"
 STATE_DIR="${HOME}/.local/state/steamshine"
-DRY_RUN=false NON_INTERACTIVE=false ASSUME_YES=false VERBOSE=false QUIET=false FORCE=false NO_START=false NO_BUILD=false NO_PACKAGES=false NO_SERVICE=false PURGE=false REMOVE_DEPENDENCIES=false CLEAN=false BUILD_TYPE=Release
+DRY_RUN=false NON_INTERACTIVE=false ASSUME_YES=false VERBOSE=false QUIET=false FORCE=false NO_START=false NO_BUILD=false NO_PACKAGES=false NO_SERVICE=false PURGE=false REMOVE_DEPENDENCIES=false CLEAN=false HARDWARE_INTERACTIVE=false BUILD_TYPE=Release
 GAME_GPU="" CAPTURE_GPU="" ENCODER_GPU="" GAMESCOPE_PATH="gamescope" DEFAULT_WIDTH=1920 DEFAULT_HEIGHT=1080 DEFAULT_FPS=60
+CHANNEL="stable" PR_NUMBER="" RELEASE_TAG="" ARTIFACT_PATH=""
 
 say() { "${QUIET}" || printf '%s\n' "$*"; }
 die() { printf 'steamshine: %s\n' "$*" >&2; exit "${2:-1}"; }
 run() { if "${DRY_RUN}"; then printf '[dry-run]'; printf ' %q' "$@"; printf '\n'; else "$@"; fi; }
 usage() { cat <<'EOF'
 Usage: ./steamshine.sh <command> [options]
-Commands: menu check install build configure start stop restart status logs diagnose update repair uninstall bootstrap rollback
-Options: --non-interactive --yes --dry-run --verbose --quiet --force --no-start --no-build --no-packages --no-service --config PATH --prefix PATH --build-dir PATH --game-gpu ID --capture-gpu ID --encoder-gpu ID --gamescope-path PATH --default-width PX --default-height PX --default-fps FPS --log-file PATH --purge --remove-dependencies --clean --debug --release
+Commands: menu check install build configure start stop restart status logs diagnose update repair uninstall bootstrap rollback hardware-test
+Options: --non-interactive --yes --dry-run --verbose --quiet --force --no-start --no-build --no-packages --no-service --config PATH --prefix PATH --build-dir PATH --channel stable|nightly|pr --pr NUMBER --release TAG --artifact PATH --game-gpu ID --capture-gpu ID --encoder-gpu ID --gamescope-path PATH --default-width PX --default-height PX --default-fps FPS --log-file PATH --purge --remove-dependencies --clean --debug --release
 EOF
 }
 require_bash() { [[ -n "${BASH_VERSION:-}" ]] || die 'Run this script with bash.' "$EXIT_USAGE"; }
@@ -25,8 +26,8 @@ parse() {
   COMMAND="${1:-}"; [[ $# -gt 0 ]] && shift || true
   if [[ "${COMMAND}" == "-h" || "${COMMAND}" == "--help" ]]; then usage; exit 0; fi
   while [[ $# -gt 0 ]]; do case "$1" in
-    --non-interactive) NON_INTERACTIVE=true;; --yes) ASSUME_YES=true;; --dry-run) DRY_RUN=true;; --verbose) VERBOSE=true;; --quiet) QUIET=true;; --force) FORCE=true;; --no-start) NO_START=true;; --no-build) NO_BUILD=true;; --no-packages) NO_PACKAGES=true;; --no-service) NO_SERVICE=true;; --purge) PURGE=true;; --remove-dependencies) REMOVE_DEPENDENCIES=true;; --clean) CLEAN=true;; --debug) BUILD_TYPE=Debug;; --release) BUILD_TYPE=Release;;
-    --config|--prefix|--build-dir|--log-file|--game-gpu|--capture-gpu|--encoder-gpu|--gamescope-path|--default-width|--default-height|--default-fps) [[ $# -ge 2 ]] || die "Missing value for $1" "$EXIT_USAGE"; case "$1" in --config) CONFIG_FILE="$2";; --prefix) PREFIX="$2";; --build-dir) BUILD_DIR="$2";; --game-gpu) GAME_GPU="$2";; --capture-gpu) CAPTURE_GPU="$2";; --encoder-gpu) ENCODER_GPU="$2";; --gamescope-path) GAMESCOPE_PATH="$2";; --default-width) DEFAULT_WIDTH="$2";; --default-height) DEFAULT_HEIGHT="$2";; --default-fps) DEFAULT_FPS="$2";; esac; shift;;
+    --non-interactive) NON_INTERACTIVE=true;; --interactive) HARDWARE_INTERACTIVE=true;; --yes) ASSUME_YES=true;; --dry-run) DRY_RUN=true;; --verbose) VERBOSE=true;; --quiet) QUIET=true;; --force) FORCE=true;; --no-start) NO_START=true;; --no-build) NO_BUILD=true;; --no-packages) NO_PACKAGES=true;; --no-service) NO_SERVICE=true;; --purge) PURGE=true;; --remove-dependencies) REMOVE_DEPENDENCIES=true;; --clean) CLEAN=true;; --debug) BUILD_TYPE=Debug;; --release) BUILD_TYPE=Release;;
+    --config|--prefix|--build-dir|--log-file|--channel|--pr|--artifact|--game-gpu|--capture-gpu|--encoder-gpu|--gamescope-path|--default-width|--default-height|--default-fps) [[ $# -ge 2 ]] || die "Missing value for $1" "$EXIT_USAGE"; case "$1" in --config) CONFIG_FILE="$2";; --prefix) PREFIX="$2";; --build-dir) BUILD_DIR="$2";; --channel) CHANNEL="$2";; --pr) PR_NUMBER="$2";; --artifact) ARTIFACT_PATH="$2";; --game-gpu) GAME_GPU="$2";; --capture-gpu) CAPTURE_GPU="$2";; --encoder-gpu) ENCODER_GPU="$2";; --gamescope-path) GAMESCOPE_PATH="$2";; --default-width) DEFAULT_WIDTH="$2";; --default-height) DEFAULT_HEIGHT="$2";; --default-fps) DEFAULT_FPS="$2";; esac; shift;;
     -h|--help) usage; exit 0;; *) die "Unknown option: $1" "$EXIT_USAGE";; esac; shift; done
 }
 load_os_release() { [[ -r /etc/os-release ]] || die '/etc/os-release is required.' "$EXIT_UNSUPPORTED"; . /etc/os-release; }
@@ -106,13 +107,38 @@ WantedBy=default.target
 EOF
   systemctl --user daemon-reload
 }
-install() { "${NO_PACKAGES}" || install_packages; "${NO_BUILD}" || build; run mkdir -p "${PREFIX}/bin" "${PREFIX}/share/steamshine"; run install -m 755 "${BUILD_DIR}/sunshine" "${PREFIX}/bin/steamshine"; configure; "${NO_SERVICE}" || install_service; }
+fetch_artifact() {
+  [[ -n "${ARTIFACT_PATH}" ]] && return
+  command -v gh >/dev/null || die 'Install gh or download the PR artifact from Actions and pass --artifact <path>.' "$EXIT_DEPENDENCY"
+  local cache="${HOME}/.cache/steamshine/artifacts" run_id
+  run mkdir -p "${cache}"
+  if [[ "${CHANNEL}" == pr ]]; then [[ -n "${PR_NUMBER}" ]] || die '--channel pr requires --pr NUMBER.' "$EXIT_USAGE"; run_id="$(gh run list --repo souten-yd/SteamShine --branch "$(gh pr view "${PR_NUMBER}" --json headRefName -q .headRefName)" --workflow build-steamos.yml --limit 1 --json databaseId -q '.[0].databaseId')"; else die 'Use --artifact for local artifacts; release/channel download is not published yet.' "$EXIT_USAGE"; fi
+  [[ -n "${run_id}" && "${run_id}" != null ]] || die 'No completed build-steamos artifact was found for this PR.' "$EXIT_DEPENDENCY"
+  run gh run download "${run_id}" --repo souten-yd/SteamShine --dir "${cache}"
+  ARTIFACT_PATH="$(find "${cache}" -type f -name 'steamshine-steamos-*.tar.zst' -print -quit)"
+}
+install_artifact() {
+  if "${DRY_RUN}"; then say "[dry-run] verify and install artifact ${ARTIFACT_PATH:-for channel ${CHANNEL}} below ${PREFIX}"; return; fi
+  fetch_artifact
+  [[ -f "${ARTIFACT_PATH}" ]] || die 'A local .tar.zst artifact is required.' "$EXIT_DEPENDENCY"
+  [[ "$(uname -m)" == x86_64 ]] || die 'This artifact supports x86_64 only.' "$EXIT_UNSUPPORTED"
+  local checksum="${ARTIFACT_PATH}.sha256" target="${PREFIX}/share/steamshine" versions="${PREFIX}/share/steamshine/versions" extract
+  [[ -f "${checksum}" ]] || die "Missing checksum: ${checksum}" "$EXIT_DEPENDENCY"
+  sha256sum -c "${checksum}" || die 'Artifact checksum mismatch.' "$EXIT_DEPENDENCY"
+  tar --zstd -tf "${ARTIFACT_PATH}" | grep -Eq '(^/|(^|/)\.\.?(/|$))' && die 'Unsafe archive path rejected.' "$EXIT_DEPENDENCY"
+  mkdir -p "${HOME}/.cache/steamshine"; extract="$(mktemp -d "${HOME}/.cache/steamshine/extract.XXXXXX")"; trap 'rm -rf -- "${extract}"' RETURN
+  tar --zstd -C "${extract}" -xf "${ARTIFACT_PATH}"
+  [[ -x "${extract}/bin/steamshine" && -f "${extract}/BUILD_INFO.json" ]] || die 'Artifact layout is invalid.' "$EXIT_DEPENDENCY"
+  run mkdir -p "${versions}" "${PREFIX}/bin"; local version; version="$(sha256sum "${ARTIFACT_PATH}" | awk '{print $1}')"
+  run mv "${extract}" "${versions}/${version}"; run ln -sfn "${versions}/${version}" "${target}/current"; run ln -sfn "${target}/current/bin/steamshine" "${PREFIX}/bin/steamshine"
+}
+install() { install_artifact; configure; "${NO_SERVICE}" || install_service; }
 start() { "${NO_SERVICE}" && die 'start requires the user service.' "$EXIT_SERVICE"; systemctl --user is-active --quiet steamshine && { say 'Already running'; return; }; run systemctl --user enable --now steamshine || die 'Service failed to start.' "$EXIT_SERVICE"; }
 stop() { run systemctl --user disable --now steamshine; }
 status() { systemctl --user status steamshine --no-pager; }
 logs() { journalctl --user -u steamshine --no-pager -n 200; }
 diagnose() { check; command -v gamescope >/dev/null && gamescope --version || true; pw-cli info 0 >/dev/null 2>&1 && say 'PipeWire reachable' || say 'PipeWire is not reachable'; }
-bootstrap() { package_manager >/dev/null; install; "${NO_START}" || "${NO_SERVICE}" || start; "${DRY_RUN}" || diagnose; say 'SteamShine is ready'; }
+bootstrap() { install; "${NO_START}" || "${NO_SERVICE}" || start; "${DRY_RUN}" || diagnose; say 'SteamShine is ready'; }
 update() { git -C "${ROOT_DIR}" diff --quiet || die 'Uncommitted changes detected; update refused.'; run git -C "${ROOT_DIR}" fetch --all --prune; run git -C "${ROOT_DIR}" pull --ff-only; install; "${NO_START}" || start; }
 repair() { configure; "${NO_SERVICE}" || install_service; [[ -x "${PREFIX}/bin/steamshine" ]] || install; }
 uninstall() {
@@ -122,10 +148,11 @@ uninstall() {
   if "${REMOVE_DEPENDENCIES}"; then say 'Dependencies are intentionally not removed automatically; inspect installed-packages.txt and remove only packages not used elsewhere.'; fi
 }
 rollback() { die 'No rollback snapshot is available yet; restore the timestamped backup in ~/.config/steamshine/backups manually.'; }
+hardware_test() { "${HARDWARE_INTERACTIVE}" || die 'hardware-test requires --interactive because video, audio, and input require operator confirmation.' "$EXIT_USAGE"; diagnose; start; "${ROOT_DIR}/scripts/test-steamos-virtual-display.sh"; "${ROOT_DIR}/scripts/test-steamos-latency.sh"; "${ROOT_DIR}/scripts/test-steamos-ssd-writes.sh" 60; }
 menu() { while true; do cat <<'EOF'
 1) Check environment  2) Install packages  3) Build  4) Configure  5) Bootstrap
 6) Start  7) Stop  8) Status  9) Logs  10) Repair  11) Update  12) Uninstall  13) Purge  0) Exit
 EOF
 read -r -p '> ' choice; case "$choice" in 1) check;; 2) install_packages;; 3) build;; 4) configure;; 5) bootstrap;; 6) start;; 7) stop;; 8) status;; 9) logs;; 10) repair;; 11) update;; 12) uninstall;; 13) PURGE=true; uninstall;; 0) return;; *) say 'Invalid selection';; esac; done; }
-main() { require_bash; parse "$@"; if [[ -z "${COMMAND}" ]]; then [[ -t 0 && -t 1 ]] || { usage; exit "$EXIT_USAGE"; }; menu; return; fi; case "${COMMAND}" in menu) menu;; check) check;; install) install;; build) build;; configure) configure;; start) start;; stop) stop;; restart) stop; start;; status) status;; logs) logs;; diagnose) diagnose;; update) update;; repair) repair;; uninstall) uninstall;; bootstrap) bootstrap;; rollback) rollback;; *) usage; exit "$EXIT_USAGE";; esac; }
+main() { require_bash; parse "$@"; if [[ -z "${COMMAND}" ]]; then [[ -t 0 && -t 1 ]] || { usage; exit "$EXIT_USAGE"; }; menu; return; fi; case "${COMMAND}" in menu) menu;; check) check;; install) install;; build) build;; configure) configure;; start) start;; stop) stop;; restart) stop; start;; status) status;; logs) logs;; diagnose) diagnose;; update) update;; repair) repair;; uninstall) uninstall;; bootstrap) bootstrap;; rollback) rollback;; hardware-test) hardware_test;; *) usage; exit "$EXIT_USAGE";; esac; }
 main "$@"
