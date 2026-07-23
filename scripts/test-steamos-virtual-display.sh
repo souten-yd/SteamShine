@@ -31,9 +31,9 @@ collect() {
     gamescope --help 2>&1 | grep -E -- '--backend|headless|--nested-(width|height|refresh)|--expose-wayland|--prefer-vk-device|--hdr-enabled' || true
     find /sys/class/drm -name uevent -exec sh -c 'echo ---$1; grep -E "PCI_SLOT_NAME|DRIVER" "$1"' _ {} \; 2>/dev/null || true
     vainfo 2>&1 || true; vulkaninfo --summary 2>&1 || true
-    command -v rocminfo >/dev/null 2>&1 && rocminfo 2>&1 || true
-    command -v rocm-smi >/dev/null 2>&1 && rocm-smi 2>&1 || true
-    command -v amd-smi >/dev/null 2>&1 && amd-smi metric -g 2>&1 || true
+    if command -v rocminfo >/dev/null 2>&1; then rocminfo 2>&1 || true; fi
+    if command -v rocm-smi >/dev/null 2>&1; then rocm-smi 2>&1 || true; fi
+    if command -v amd-smi >/dev/null 2>&1; then amd-smi metric -g 2>&1 || true; fi
     pw-cli list-objects Node 2>&1 || true; find "${XDG_RUNTIME_DIR}" -maxdepth 1 -type s -name 'wayland-*' -print 2>/dev/null || true
     pgrep -a steamshine || true; pgrep -a gamescope || true; ps -eo pid,pgid,ppid,cmd | grep -E '[s]teamshine|[g]amescope' || true
     printf 'owned_gamescope_pids='; owned_gamescope_processes | paste -sd, - || true
