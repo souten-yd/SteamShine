@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Collect comparable Sunshine/SteamShine latency evidence; it does not fabricate metrics unavailable from the host.
+# shellcheck disable=SC2015
 set -euo pipefail
 out_dir="${HOME}/.local/state/steamshine/hardware-tests"
 mkdir -p "${out_dir}"

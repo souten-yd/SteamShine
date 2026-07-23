@@ -1,3 +1,4 @@
+---
 name: build steamos artifact
 
 on:
@@ -15,13 +16,17 @@ jobs:
       - name: Install build and verification tools
         run: |
           pacman -Syu --noconfirm --needed
-          pacman -S --noconfirm --needed git cmake ninja base-devel pkgconf python python-jinja nodejs npm clang shellcheck zstd binutils libcap libdrm libevdev libnotify libpulse libva libx11 libxcb libxfixes libxrandr libxtst miniupnpc openssl opus qt6-base qt6-svg shaderc udev vulkan-icd-loader wayland pipewire
+          pacman -S --noconfirm --needed \
+            git cmake ninja base-devel pkgconf python python-jinja nodejs npm clang shellcheck zstd binutils \
+            libcap libdrm libevdev libnotify libpulse libva libx11 libxcb libxfixes libxrandr libxtst \
+            miniupnpc openssl opus qt6-base qt6-svg shaderc udev vulkan-icd-loader wayland pipewire
       - uses: actions/checkout@v4
         with:
           submodules: recursive
       - name: Format and shell checks
         run: |
-          clang-format --dry-run --Werror src/steamos_virtual_session.cpp src/steamos_virtual_session.h tests/unit/test_steamos_virtual_session.cpp
+          clang-format --dry-run --Werror src/steamos_virtual_session.cpp \
+            src/steamos_virtual_session.h tests/unit/test_steamos_virtual_session.cpp
           shellcheck steamshine.sh scripts/*.sh tests/integration/test_steamshine_script.sh
           git diff --check
       - name: Configure

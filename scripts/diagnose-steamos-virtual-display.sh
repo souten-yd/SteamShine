@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Read-only SteamOS virtual-display diagnosis; safe to run during an outage.
+# shellcheck disable=SC1091,SC2009
 set -euo pipefail
 echo "timestamp=$(date --iso-8601=seconds)"; uname -a
 . /etc/os-release 2>/dev/null && printf 'os=%s\n' "${PRETTY_NAME:-unknown}"

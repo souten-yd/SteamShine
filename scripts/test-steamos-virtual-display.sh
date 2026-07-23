@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Headless SteamOS acceptance harness. Start it before connecting Moonlight.
+# shellcheck disable=SC1091,SC2009
 set -euo pipefail
 runtime_dir="${XDG_RUNTIME_DIR:?XDG_RUNTIME_DIR is required}/steamshine"
 state_dir="${HOME}/.local/state/steamshine"

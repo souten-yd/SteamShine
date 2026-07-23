@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # SteamShine SteamOS lifecycle entry point. Run from the repository root.
+# shellcheck disable=SC1091,SC2015,SC2034,SC2155
 set -Eeuo pipefail
 
 readonly EXIT_USAGE=2 EXIT_UNSUPPORTED=3 EXIT_DEPENDENCY=4 EXIT_BUILD=6 EXIT_TEST=7 EXIT_SERVICE=8 EXIT_CONFIG=9 EXIT_UNINSTALL=10
