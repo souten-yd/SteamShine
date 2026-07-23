@@ -4,8 +4,13 @@
 # pacman.
 FROM archlinux/archlinux:base-devel-20250630.0.373922
 
-COPY ci/steamos/mirrorlist /etc/pacman.d/steamshine-mirrorlist
 COPY ci/steamos/packages.txt /tmp/packages.txt
+COPY ci/steamos/mirrorlist /etc/pacman.d/steamshine-mirrorlist
+
+RUN pacman -Syy --noconfirm --noprogressbar \
+    && pacman -S --noconfirm --needed --noprogressbar archlinux-keyring \
+    && pacman-key --init \
+    && pacman-key --populate archlinux
 
 RUN cp /etc/pacman.d/steamshine-mirrorlist /etc/pacman.d/mirrorlist \
     && pacman -Syy --noconfirm --noprogressbar
