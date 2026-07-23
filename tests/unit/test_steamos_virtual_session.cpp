@@ -8,7 +8,6 @@
   #include <cstdlib>
   #include <filesystem>
   #include <fstream>
-
   #include <src/config.h>
   #include <src/rtsp.h>
   #include <src/steamos_virtual_session.h>

@@ -4,6 +4,10 @@
  */
 #include "steamos_virtual_session.h"
 
+#include "config.h"
+#include "logging.h"
+#include "rtsp.h"
+
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -11,10 +15,6 @@
 #include <filesystem>
 #include <mutex>
 #include <thread>
-
-#include "config.h"
-#include "logging.h"
-#include "rtsp.h"
 
 #if defined(__linux__)
   #include <signal.h>
