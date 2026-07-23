@@ -5,7 +5,11 @@ set -euo pipefail
 echo "timestamp=$(date --iso-8601=seconds)"; uname -a
 . /etc/os-release 2>/dev/null && printf 'os=%s\n' "${PRETTY_NAME:-unknown}"
 printf 'runtime=%s\n' "${XDG_RUNTIME_DIR:-unset}"
-gamescope --version 2>&1 || true; gamescope --help 2>&1 | grep -E -- '--headless|--nested-(width|height|refresh)' || true
+gamescope --version 2>&1 || true
+# Gamescope 3.x exposes headless mode through `--backend headless`; older
+# builds may advertise `--headless`. Record the actual supported interface
+# instead of assuming either spelling during an on-device diagnosis.
+gamescope --help 2>&1 | grep -E -- '--backend|headless|--nested-(width|height|refresh)|--expose-wayland|--prefer-vk-device|--hdr-enabled' || true
 find /sys/class/drm -name uevent -exec sh -c 'echo ---$1; grep -E "PCI_SLOT_NAME|DRIVER" "$1"' _ {} \; 2>/dev/null || true
 ls -l /dev/dri /dev/uinput 2>/dev/null || true
 vainfo 2>&1 || true; vulkaninfo --summary 2>&1 || true

@@ -4,29 +4,58 @@
 set -euo pipefail
 runtime_dir="${XDG_RUNTIME_DIR:?XDG_RUNTIME_DIR is required}/steamshine"
 state_dir="${HOME}/.local/state/steamshine"
-mkdir -p "${state_dir}/hardware-tests"
-report="${state_dir}/hardware-tests/virtual-display-$(date +%Y%m%d-%H%M%S).log"
+report_dir="${STEAMSHINE_HARDWARE_REPORT_DIR:-${state_dir}/hardware-tests/$(date +%Y%m%d-%H%M%S)}"
+mkdir -p "${report_dir}"
+report="${report_dir}/virtual-display.log"
+
+owned_gamescope_processes() {
+  local environment pid value
+  while IFS= read -r pid; do
+    [[ -r "/proc/${pid}/environ" ]] || continue
+    while IFS= read -r -d '' environment; do
+      value="${environment#XDG_RUNTIME_DIR=}"
+      if [[ "${environment}" == XDG_RUNTIME_DIR=* && "${value}" == "${runtime_dir}"/session-* ]]; then
+        printf '%s\n' "${pid}"
+        break
+      fi
+    done <"/proc/${pid}/environ"
+  done < <(pgrep -x gamescope || true)
+}
+
 collect() {
   {
     echo "== $1 $(date --iso-8601=seconds) =="
     . /etc/os-release 2>/dev/null && printf 'OS=%s\n' "${PRETTY_NAME:-unknown}"
     uname -a; gamescope --version 2>&1 || true
+    gamescope --help 2>&1 | grep -E -- '--backend|headless|--nested-(width|height|refresh)|--expose-wayland|--prefer-vk-device|--hdr-enabled' || true
     find /sys/class/drm -name uevent -exec sh -c 'echo ---$1; grep -E "PCI_SLOT_NAME|DRIVER" "$1"' _ {} \; 2>/dev/null || true
     vainfo 2>&1 || true; vulkaninfo --summary 2>&1 || true
+    command -v rocminfo >/dev/null 2>&1 && rocminfo 2>&1 || true
+    command -v rocm-smi >/dev/null 2>&1 && rocm-smi 2>&1 || true
+    command -v amd-smi >/dev/null 2>&1 && amd-smi metric -g 2>&1 || true
     pw-cli list-objects Node 2>&1 || true; find "${XDG_RUNTIME_DIR}" -maxdepth 1 -type s -name 'wayland-*' -print 2>/dev/null || true
     pgrep -a steamshine || true; pgrep -a gamescope || true; ps -eo pid,pgid,ppid,cmd | grep -E '[s]teamshine|[g]amescope' || true
+    printf 'owned_gamescope_pids='; owned_gamescope_processes | paste -sd, - || true
     find "${runtime_dir}" -maxdepth 3 -print 2>/dev/null || true
   } | tee -a "${report}"
 }
 echo "Disconnect physical displays, start SteamShine, then connect Moonlight ten times. Report: ${report}"
 collect before
 for attempt in $(seq 1 10); do
-  echo "Attempt ${attempt}: connect Moonlight now; press Enter after video/audio/input work, then disconnect and press Enter after cleanup."
+  echo "Attempt ${attempt}: connect Moonlight now, then press Enter once the stream is established."
   read -r
   collect "connected-${attempt}"
+  echo "Attempt ${attempt}: disconnect Moonlight now, then press Enter after cleanup."
   read -r
   collect "disconnected-${attempt}"
-  if pgrep -f "gamescope.*${runtime_dir}" >/dev/null; then echo "FAIL: owned Gamescope remains" | tee -a "${report}"; exit 1; fi
+  if owned_gamescope_processes | grep -q .; then echo "FAIL: owned Gamescope remains" | tee -a "${report}"; exit 1; fi
   if find "${runtime_dir}" -mindepth 1 -name 'session-*' -print -quit | grep -q .; then echo "FAIL: owned runtime session remains" | tee -a "${report}"; exit 1; fi
+done
+for capability in video audio keyboard mouse gamepad; do
+  read -r -p "Did ${capability} work during the acceptance cycles? [y/N] " answer
+  if [[ ! "${answer}" =~ ^[Yy]$ ]]; then
+    echo "FAIL: operator did not confirm ${capability}" | tee -a "${report}"
+    exit 1
+  fi
 done
 echo "PASS: ten operator-verified connect/disconnect cycles completed" | tee -a "${report}"

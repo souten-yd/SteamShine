@@ -38,10 +38,15 @@ check() {
   say '[1/5] Checking supported environment'; package_manager >/dev/null
   say '[2/5] Checking user runtime directory'; [[ -n "${XDG_RUNTIME_DIR:-}" && -d "${XDG_RUNTIME_DIR}" ]] || die 'XDG_RUNTIME_DIR is required.' "$EXIT_DEPENDENCY"
   say '[3/5] Checking GPU access'; [[ -r /dev/dri/renderD128 || -r /dev/dri/card0 ]] || die 'No accessible DRM device.' "$EXIT_DEPENDENCY"
-  say '[4/5] Checking required commands'; command -v cmake >/dev/null && command -v ninja >/dev/null && command -v pkg-config >/dev/null && command -v clang-format >/dev/null && command -v shellcheck >/dev/null || die 'cmake, ninja, pkg-config, clang-format, and shellcheck are required.' "$EXIT_DEPENDENCY"
-  cmake_version="$(cmake --version | awk 'NR == 1 {print $3}')"; [[ "$(printf '%s\n%s\n' 3.25.1 "${cmake_version}" | sort -V | head -n1)" == 3.25.1 ]] || die "cmake >= 3.25.1 is required (found ${cmake_version})." "$EXIT_DEPENDENCY"
-  say '[5/5] Checking virtual-display prerequisites'; command -v gamescope >/dev/null || say 'Gamescope is optional until steamos_virtual_display_enabled=true.'
+  say '[4/5] Checking runtime commands'; command -v systemctl >/dev/null || die 'systemctl --user is required.' "$EXIT_DEPENDENCY"
+  say '[5/5] Checking virtual-display prerequisites'; command -v gamescope >/dev/null || say 'Gamescope is required when steamos_virtual_display_enabled=true.'
   say 'Environment check passed'
+}
+build_check() {
+  command -v cmake >/dev/null && command -v ninja >/dev/null && command -v pkg-config >/dev/null && command -v clang-format >/dev/null && command -v shellcheck >/dev/null || die 'cmake, ninja, pkg-config, clang-format, and shellcheck are required for local builds.' "$EXIT_DEPENDENCY"
+  local cmake_version
+  cmake_version="$(cmake --version | awk 'NR == 1 {print $3}')"
+  [[ "$(printf '%s\n%s\n' 3.25.1 "${cmake_version}" | sort -V | head -n1)" == 3.25.1 ]] || die "cmake >= 3.25.1 is required (found ${cmake_version})." "$EXIT_DEPENDENCY"
 }
 install_packages() {
   local manager; manager="$(package_manager)"; command -v "${manager}" >/dev/null || die "${manager} is unavailable." "$EXIT_DEPENDENCY"
@@ -63,6 +68,7 @@ install_packages() {
   if ! "${DRY_RUN}"; then mkdir -p "${STATE_DIR}"; printf '%s\n' "${available[@]}" >"${STATE_DIR}/installed-packages.txt"; fi
 }
 build() {
+  build_check
   "${CLEAN}" && run cmake -E rm -rf "${BUILD_DIR}"
   run cmake -S "${ROOT_DIR}" -B "${BUILD_DIR}" -G Ninja -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" -DBUILD_TESTS=ON
   run cmake --build "${BUILD_DIR}" --parallel "$(nproc)" || die 'Build failed.' "$EXIT_BUILD"
@@ -149,7 +155,17 @@ uninstall() {
   if "${REMOVE_DEPENDENCIES}"; then say 'Dependencies are intentionally not removed automatically; inspect installed-packages.txt and remove only packages not used elsewhere.'; fi
 }
 rollback() { die 'No rollback snapshot is available yet; restore the timestamped backup in ~/.config/steamshine/backups manually.'; }
-hardware_test() { "${HARDWARE_INTERACTIVE}" || die 'hardware-test requires --interactive because video, audio, and input require operator confirmation.' "$EXIT_USAGE"; diagnose; start; "${ROOT_DIR}/scripts/test-steamos-virtual-display.sh"; "${ROOT_DIR}/scripts/test-steamos-latency.sh"; "${ROOT_DIR}/scripts/test-steamos-ssd-writes.sh" 60; }
+hardware_test() {
+  "${HARDWARE_INTERACTIVE}" || die 'hardware-test requires --interactive because video, audio, and input require operator confirmation.' "$EXIT_USAGE"
+  local report_dir="${STATE_DIR}/hardware-tests/$(date +%Y%m%d-%H%M%S)"
+  mkdir -p "${report_dir}"
+  "${ROOT_DIR}/scripts/diagnose-steamos-virtual-display.sh" >"${report_dir}/diagnose.log" 2>&1 || true
+  start
+  STEAMSHINE_HARDWARE_REPORT_DIR="${report_dir}" "${ROOT_DIR}/scripts/test-steamos-virtual-display.sh"
+  STEAMSHINE_HARDWARE_REPORT_DIR="${report_dir}" "${ROOT_DIR}/scripts/test-steamos-latency.sh"
+  STEAMSHINE_HARDWARE_REPORT_DIR="${report_dir}" "${ROOT_DIR}/scripts/test-steamos-ssd-writes.sh" 60
+  say "Hardware-test report: ${report_dir}"
+}
 menu() { while true; do cat <<'EOF'
 1) Check environment  2) Install packages  3) Build  4) Configure  5) Bootstrap
 6) Start  7) Stop  8) Status  9) Logs  10) Repair  11) Update  12) Uninstall  13) Purge  0) Exit

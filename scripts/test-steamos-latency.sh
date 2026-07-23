@@ -2,9 +2,9 @@
 # Collect comparable Sunshine/SteamShine latency evidence; it does not fabricate metrics unavailable from the host.
 # shellcheck disable=SC2015
 set -euo pipefail
-out_dir="${HOME}/.local/state/steamshine/hardware-tests"
+out_dir="${STEAMSHINE_HARDWARE_REPORT_DIR:-${HOME}/.local/state/steamshine/hardware-tests}"
 mkdir -p "${out_dir}"
-report="${out_dir}/latency-$(date +%Y%m%d-%H%M%S).log"
+report="${out_dir}/latency.log"
 {
   echo 'Use identical game, scene, resolution, FPS, codec, bitrate, client, and network for both runs.'
   echo 'Record Moonlight statistics (RTT/decoder/render/dropped frames) during each 60-second run.'
