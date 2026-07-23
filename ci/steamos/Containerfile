@@ -1,0 +1,18 @@
+# Reproducible SteamOS 3.8 ABI build environment for the GitHub Actions job.
+# The normal SteamOS installer never builds this image or invokes pacman.
+FROM archlinux:base-devel
+
+COPY ci/steamos/pacman.conf /etc/pacman.conf
+COPY ci/steamos/mirrorlist /etc/pacman.d/steamshine-mirrorlist
+COPY ci/steamos/steam-os-ci-builder.asc /tmp/steam-os-ci-builder.asc
+COPY ci/steamos/packages.txt /tmp/packages.txt
+
+RUN pacman-key --init \
+    && pacman-key --add /tmp/steam-os-ci-builder.asc \
+    && test "$(gpg --homedir /etc/pacman.d/gnupg --with-colons --list-keys AF1D2199EF0A3CCF | awk -F: '$1 == "fpr" { print $10; exit }')" = "889B5EBDDD505A683621900DAF1D2199EF0A3CCF" \
+    && pacman-key --lsign-key AF1D2199EF0A3CCF \
+    && pacman -Syy --noconfirm --noprogressbar \
+    && if pacman -Q systemd-sysvcompat >/dev/null; then pacman -Rdd --noconfirm --noprogressbar systemd-sysvcompat; fi
+
+RUN pacman -S --noconfirm --needed --noprogressbar $(grep -Ev '^(#|$)' /tmp/packages.txt) \
+    && pacman -Q glibc gcc-libs qt6-base

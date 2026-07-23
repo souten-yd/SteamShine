@@ -1,0 +1,41 @@
+# Runtime build dependencies for the SteamOS x86_64 artifact only.
+# GPU drivers, Steam, Gamescope execution, PipeWire daemons, CUDA, and ROCm
+# are intentionally absent: the target host provides runtime GPU components.
+glibc
+gcc-libs
+base-devel
+git
+cmake
+ninja
+pkgconf
+python
+python-jinja
+nodejs
+npm
+clang
+shellcheck
+actionlint
+zstd
+binutils
+boost
+nlohmann-json
+libcap
+libdrm
+libevdev
+libnotify
+libpulse
+libva
+libx11
+libxcb
+libxfixes
+libxrandr
+libxtst
+miniupnpc
+openssl
+opus
+qt6-base
+qt6-svg
+shaderc
+udev
+vulkan-icd-loader
+wayland

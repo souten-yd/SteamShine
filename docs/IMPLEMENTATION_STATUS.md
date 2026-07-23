@@ -8,5 +8,5 @@
 | Fake Gamescope lifecycle GTest | Implementing | Readiness, actual UNIX socket, delayed and invalid socket handling, argument generation, early crash, timeout, cleanup, owned child reaping, and duplicate-session coverage are present; current commit awaits CI. |
 | Fake PipeWire readiness | Not started | The provider has no PipeWire-node adapter yet, so a truthful fake readiness test cannot be added. |
 | Dependency bootstrap | Implemented | Script verifies repository package availability for pacman, apt, or dnf before installation. |
-| Automated configure/build/format/lint | CI Tested | SteamOS-only Arch workflow has previously completed focused checks, configure, build, targeted GTest, installer smoke, linkage, package, and Artifact upload; subsequent lifecycle changes remain pending CI verification. |
+| Automated configure/build/format/lint | Implementing | The focused workflow now pins its ephemeral container to the public SteamOS 3.8 ABI baseline and rejects newer glibc/libstdc++/Qt symbol requirements before upload; the revised Artifact awaits CI verification. |
 | Hardware latency/SSD comparison | Blocked: requires hardware test | Collection scripts added; acceptance values must be measured on a monitorless SteamOS host. |
