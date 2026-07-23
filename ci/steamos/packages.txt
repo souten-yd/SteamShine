@@ -1,4 +1,4 @@
-# Runtime build dependencies for the SteamOS x86_64 artifact only.
+# SteamOS ABI-compatible build dependencies for the x86_64 artifact only.
 # GPU drivers, Steam, Gamescope execution, PipeWire daemons, CUDA, and ROCm
 # are intentionally absent: the target host provides runtime GPU components.
 glibc

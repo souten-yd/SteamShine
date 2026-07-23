@@ -1,2 +1,3 @@
-# Valve's SteamOS package mirror for the 3.8 ABI baseline.
-Server = https://steamdeck-packages.steamos.cloud/archlinux-mirror/$repo/os/$arch
+## Official Arch Linux Archive snapshot matching the SteamOS 3.8 ABI baseline.
+## This is consumed only in an ephemeral CI container.
+Server = https://archive.archlinux.org/repos/2025/06/30/$repo/os/$arch

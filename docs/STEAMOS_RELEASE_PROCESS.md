@@ -1,6 +1,6 @@
 # SteamOS artifact release process
 
-The `SteamOS Runtime Build` GitHub Actions workflow builds an x86_64 artifact in an Arch Linux base container whose packages are pinned to Valve's public SteamOS 3.8 repositories. This avoids publishing an artifact that needs a newer glibc, libstdc++, or Qt ABI than SteamOS provides. The pinned Valve CI builder key is stored as ASCII armor in `ci/steamos/steam-os-ci-builder.asc`; the workflow verifies its full primary fingerprint before locally trusting it. `ci/steamos/Containerfile` mirrors this ephemeral build environment for reproduction. It is intentionally limited to the SteamOS delivery path: focused formatting, ShellCheck, workflow validation, the SteamOS virtual-session GTest filter, installer smoke tests, runtime dependency inspection, and packaging.
+The `SteamOS Runtime Build` GitHub Actions workflow builds an x86_64 artifact from the official Arch Linux `base-devel-20250630.0.373922` image and package archive snapshot. That snapshot supplies glibc 2.41, GCC 15.1.1, and Qt 6.9.1: the SteamOS 3.8 ABI baseline. This avoids publishing an artifact that needs a newer glibc, libstdc++, or Qt ABI than SteamOS provides. `ci/steamos/Containerfile` mirrors this ephemeral build environment for reproduction. It is intentionally limited to the SteamOS delivery path: focused formatting, ShellCheck, workflow validation, the SteamOS virtual-session GTest filter, installer smoke tests, runtime dependency inspection, and packaging.
 
 It does not run Windows, macOS, FreeBSD, Flatpak, AppImage, Docker, or broad upstream Sunshine test matrices for a normal SteamOS pull request. CUDA and NVIDIA dependencies are disabled for this AMD-focused artifact. ROCm is not bundled; when available on the host, it is reported only by the explicit diagnostic command.
 
@@ -13,6 +13,6 @@ The archive contains only user-space application files, scripts, a systemd user-
 
 The build verifies the staged executable with `ldd`, dynamic-section inspection, and a symbol-version ceiling for the SteamOS 3.8 glibc, libstdc++, and Qt baselines. A build that references a newer ABI is rejected before it can be uploaded.
 
-The starting `archlinux:base-devel` image is used only to bootstrap the CI job. Before compilation, one package transaction replaces its split GCC runtime and toolchain packages with their SteamOS 3.8 counterparts; no partially removed runtime is ever executed. This occurs only in the disposable CI container; it never runs on a SteamOS host.
+The starting image is already ABI-compatible, so CI does not downgrade or replace its C library at runtime. Package installation and compilation occur only in the disposable container; they never run on a SteamOS host.
 
 SteamOS installation verifies the detached SHA-256 file and archive paths before atomically switching `~/.local/share/steamshine/current`. A failed install keeps the prior `current` version; rollback is `ln -sfn ~/.local/share/steamshine/versions/<previous> ~/.local/share/steamshine/current` followed by `systemctl --user restart steamshine`.

@@ -1,29 +1,15 @@
 # Reproducible SteamOS 3.8 ABI build environment for the GitHub Actions job.
-# The normal SteamOS installer never builds this image or invokes pacman.
-FROM archlinux:base-devel
+# This official Arch image snapshot contains glibc 2.41 and GCC 15.1.1, the
+# SteamOS 3.8 runtime baseline. The normal installer never builds it or uses
+# pacman.
+FROM archlinux/archlinux:base-devel-20250630.0.373922
 
-COPY ci/steamos/pacman.conf /etc/pacman.conf
 COPY ci/steamos/mirrorlist /etc/pacman.d/steamshine-mirrorlist
-COPY ci/steamos/steam-os-ci-builder.asc /tmp/steam-os-ci-builder.asc
 COPY ci/steamos/packages.txt /tmp/packages.txt
 
-RUN pacman-key --init \
-    && pacman-key --add /tmp/steam-os-ci-builder.asc \
-    && test "$(gpg --homedir /etc/pacman.d/gnupg --with-colons --list-keys AF1D2199EF0A3CCF | awk -F: '$1 == "fpr" { print $10; exit }')" = "889B5EBDDD505A683621900DAF1D2199EF0A3CCF" \
-    && pacman-key --lsign-key AF1D2199EF0A3CCF \
+RUN cp /etc/pacman.d/steamshine-mirrorlist /etc/pacman.d/mirrorlist \
     && pacman -Syy --noconfirm --noprogressbar
 
 RUN pacman -S --noconfirm --needed --noprogressbar \
-    --overwrite '/usr/lib/libasan.so*' \
-    --overwrite '/usr/lib/libatomic.so*' \
-    --overwrite '/usr/lib/libgcc_s.so*' \
-    --overwrite '/usr/lib/libgfortran.so*' \
-    --overwrite '/usr/lib/libgomp.so*' \
-    --overwrite '/usr/lib/liblsan.so*' \
-    --overwrite '/usr/lib/libobjc.so*' \
-    --overwrite '/usr/lib/libquadmath.so*' \
-    --overwrite '/usr/lib/libstdc++.so*' \
-    --overwrite '/usr/lib/libtsan.so*' \
-    --overwrite '/usr/lib/libubsan.so*' \
     $(grep -Ev '^(#|$)' /tmp/packages.txt) \
     && pacman -Q glibc gcc-libs qt6-base

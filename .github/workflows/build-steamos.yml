@@ -59,43 +59,23 @@ on:
 jobs:
   steamos-runtime:
     runs-on: ubuntu-latest
-    container: archlinux:base-devel
+    container: archlinux/archlinux:base-devel-20250630.0.373922
     steps:
-      # actions/checkout needs Git before the repository-provided SteamOS
-      # package configuration can be read. This is not the build toolchain;
-      # it is replaced by the SteamOS-baseline Git package in the next step.
+      # This official base-devel image omits Git. Use the same fixed archive
+      # snapshot before checkout so recursive submodule checkout is available.
       - name: Install checkout tool
-        run: pacman -Sy --noconfirm --needed --noprogressbar git
+        run: |
+          sed -i 's|^Server = .*|Server = https://archive.archlinux.org/repos/2025/06/30/$repo/os/$arch|' /etc/pacman.d/mirrorlist
+          pacman -Syy --noconfirm --noprogressbar
+          pacman -S --noconfirm --needed --noprogressbar git
       - uses: actions/checkout@v4
         with:
           submodules: recursive
       - name: Install SteamOS 3.8 ABI build tools
         run: |
-          cp ci/steamos/pacman.conf /etc/pacman.conf
-          cp ci/steamos/mirrorlist /etc/pacman.d/steamshine-mirrorlist
-          pacman-key --init
-          pacman-key --add ci/steamos/steam-os-ci-builder.asc
-          expected_key='889B5EBDDD505A683621900DAF1D2199EF0A3CCF'
-          actual_key="$(gpg --homedir /etc/pacman.d/gnupg --with-colons \
-            --list-keys AF1D2199EF0A3CCF | awk -F: '$1 == "fpr" { print $10; exit }')"
-          test "${actual_key}" = "${expected_key}"
-          pacman-key --lsign-key AF1D2199EF0A3CCF
+          cp ci/steamos/mirrorlist /etc/pacman.d/mirrorlist
           pacman -Syy --noconfirm --noprogressbar
-          # The Arch base image splits GCC runtime libraries that SteamOS owns
-          # through gcc-libs. Replace them in one pacman transaction so pacman
-          # itself never runs after libgcc_s has been removed.
           pacman -S --noconfirm --needed --noprogressbar --disable-download-timeout \
-            --overwrite '/usr/lib/libasan.so*' \
-            --overwrite '/usr/lib/libatomic.so*' \
-            --overwrite '/usr/lib/libgcc_s.so*' \
-            --overwrite '/usr/lib/libgfortran.so*' \
-            --overwrite '/usr/lib/libgomp.so*' \
-            --overwrite '/usr/lib/liblsan.so*' \
-            --overwrite '/usr/lib/libobjc.so*' \
-            --overwrite '/usr/lib/libquadmath.so*' \
-            --overwrite '/usr/lib/libstdc++.so*' \
-            --overwrite '/usr/lib/libtsan.so*' \
-            --overwrite '/usr/lib/libubsan.so*' \
             $(grep -Ev '^(#|$)' ci/steamos/packages.txt)
           pacman -Q glibc gcc-libs qt6-base
       - name: Mark workspace as safe for CMake version discovery
