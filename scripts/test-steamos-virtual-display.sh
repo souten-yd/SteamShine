@@ -7,6 +7,7 @@ state_dir="${HOME}/.local/state/steamshine"
 report_dir="${STEAMSHINE_HARDWARE_REPORT_DIR:-${state_dir}/hardware-tests/$(date +%Y%m%d-%H%M%S)}"
 mkdir -p "${report_dir}"
 report="${report_dir}/virtual-display.log"
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 
 owned_gamescope_processes() {
   local environment pid value
@@ -45,6 +46,15 @@ for attempt in $(seq 1 10); do
   echo "Attempt ${attempt}: connect Moonlight now, then press Enter once the stream is established."
   read -r
   collect "connected-${attempt}"
+  if [[ "${attempt}" -eq 1 ]]; then
+    echo 'Keep Moonlight connected for 60 seconds while latency and SteamShine write counters are collected.'
+    STEAMSHINE_HARDWARE_REPORT_DIR="${report_dir}" "${script_dir}/test-steamos-latency.sh" &
+    latency_process=$!
+    STEAMSHINE_HARDWARE_REPORT_DIR="${report_dir}" "${script_dir}/test-steamos-ssd-writes.sh" 60 &
+    writes_process=$!
+    wait "${latency_process}"
+    wait "${writes_process}"
+  fi
   echo "Attempt ${attempt}: disconnect Moonlight now, then press Enter after cleanup."
   read -r
   collect "disconnected-${attempt}"

@@ -162,8 +162,6 @@ hardware_test() {
   "${ROOT_DIR}/scripts/diagnose-steamos-virtual-display.sh" >"${report_dir}/diagnose.log" 2>&1 || true
   start
   STEAMSHINE_HARDWARE_REPORT_DIR="${report_dir}" "${ROOT_DIR}/scripts/test-steamos-virtual-display.sh"
-  STEAMSHINE_HARDWARE_REPORT_DIR="${report_dir}" "${ROOT_DIR}/scripts/test-steamos-latency.sh"
-  STEAMSHINE_HARDWARE_REPORT_DIR="${report_dir}" "${ROOT_DIR}/scripts/test-steamos-ssd-writes.sh" 60
   say "Hardware-test report: ${report_dir}"
 }
 menu() { while true; do cat <<'EOF'
