@@ -45,6 +45,17 @@ namespace {
       std::filesystem::permissions(executable, std::filesystem::perms::owner_exec, std::filesystem::perm_options::add);
       return executable;
     }
+    if (mode == "invalid-socket") {
+      output << "touch \"$XDG_RUNTIME_DIR/wayland-0\"\n";
+      output << "trap 'exit 0' TERM INT\n";
+      output << "while :; do sleep 1; done\n";
+      output.close();
+      std::filesystem::permissions(executable, std::filesystem::perms::owner_exec, std::filesystem::perm_options::add);
+      return executable;
+    }
+    if (mode == "delayed-ready") {
+      output << "sleep 1\n";
+    }
     output << "python3 -c 'import os, socket, signal, sys; p=os.path.join(os.environ[\"XDG_RUNTIME_DIR\"], \"wayland-0\"); s=socket.socket(socket.AF_UNIX); s.bind(p); s.listen(); signal.signal(signal.SIGTERM, lambda *_: sys.exit(0)); signal.signal(signal.SIGINT, lambda *_: sys.exit(0)); [signal.pause() for _ in iter(int, 1)]' &\n";
     output << "socket_child=$!\n";
     if (mode == "leave-child") {
@@ -52,6 +63,13 @@ namespace {
       output << "ignored_child=$!\n";
       output << "printf '%s\\n' \"$ignored_child\" > \"$XDG_RUNTIME_DIR/ignored-child.pid\"\n";
       output << "trap 'exit 0' TERM INT\n";
+      output << "while :; do sleep 1; done\n";
+      output.close();
+      std::filesystem::permissions(executable, std::filesystem::perms::owner_exec, std::filesystem::perm_options::add);
+      return executable;
+    }
+    if (mode == "ignore-term") {
+      output << "trap '' TERM INT\n";
       output << "while :; do sleep 1; done\n";
       output.close();
       std::filesystem::permissions(executable, std::filesystem::perms::owner_exec, std::filesystem::perm_options::add);
@@ -166,6 +184,26 @@ TEST_F(SteamOSVirtualSessionTest, CleansUpAfterGamescopeStartupTimeout) {
   EXPECT_FALSE(std::filesystem::exists(session_directory));
 }
 
+TEST_F(SteamOSVirtualSessionTest, RejectsRegularFileInsteadOfWaylandSocket) {
+  config::steamos_virtual_display.gamescope_path = make_fake_gamescope(root, "invalid-socket").string();
+  config::steamos_virtual_display.startup_timeout_seconds = 1;
+  rtsp_stream::launch_session_t launch {};
+  launch.id = 10;
+  std::string error;
+  EXPECT_FALSE(steamos_virtual_session::prepare(launch, error));
+  EXPECT_NE(error.find("Timed out"), std::string::npos);
+}
+
+TEST_F(SteamOSVirtualSessionTest, WaitsForDelayedWaylandSocket) {
+  config::steamos_virtual_display.gamescope_path = make_fake_gamescope(root, "delayed-ready").string();
+  config::steamos_virtual_display.startup_timeout_seconds = 2;
+  rtsp_stream::launch_session_t launch {};
+  launch.id = 11;
+  std::string error;
+  EXPECT_TRUE(steamos_virtual_session::prepare(launch, error)) << error;
+  EXPECT_EQ(steamos_virtual_session::state(), steamos_virtual_session::state_e::WaitingForCapture);
+}
+
 TEST_F(SteamOSVirtualSessionTest, CleansUpAfterGamescopeEarlyCrash) {
   config::steamos_virtual_display.gamescope_path = make_fake_gamescope(root, "crash-before-ready").string();
   rtsp_stream::launch_session_t launch {};
@@ -195,6 +233,18 @@ TEST_F(SteamOSVirtualSessionTest, ForcedCleanupKillsOwnedChildAfterGamescopeExit
   }
   EXPECT_EQ(::kill(child, 0), -1);
   EXPECT_EQ(errno, ESRCH);
+}
+
+TEST_F(SteamOSVirtualSessionTest, ForcedCleanupStopsGamescopeThatIgnoresTerm) {
+  config::steamos_virtual_display.gamescope_path = make_fake_gamescope(root, "ignore-term").string();
+  config::steamos_virtual_display.shutdown_timeout_seconds = 1;
+  rtsp_stream::launch_session_t launch {};
+  launch.id = 12;
+  std::string error;
+  ASSERT_TRUE(steamos_virtual_session::prepare(launch, error)) << error;
+  steamos_virtual_session::stop();
+  EXPECT_EQ(steamos_virtual_session::state(), steamos_virtual_session::state_e::Idle);
+  EXPECT_FALSE(std::filesystem::exists(std::filesystem::path {config::steamos_virtual_display.runtime_directory} / ("session-" + std::to_string(::getpid()) + "-12")));
 }
 
 TEST_F(SteamOSVirtualSessionTest, RejectsDuplicateOwnedSession) {
