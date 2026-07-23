@@ -9,6 +9,7 @@ BUILD_DIR="${ROOT_DIR}/cmake-build-steamos"
 CONFIG_FILE="${HOME}/.config/steamshine/sunshine.conf"
 STATE_DIR="${HOME}/.local/state/steamshine"
 DRY_RUN=false NON_INTERACTIVE=false ASSUME_YES=false VERBOSE=false QUIET=false FORCE=false NO_START=false NO_BUILD=false NO_PACKAGES=false NO_SERVICE=false PURGE=false REMOVE_DEPENDENCIES=false CLEAN=false BUILD_TYPE=Release
+GAME_GPU="" CAPTURE_GPU="" ENCODER_GPU="" GAMESCOPE_PATH="gamescope" DEFAULT_WIDTH=1920 DEFAULT_HEIGHT=1080 DEFAULT_FPS=60
 
 say() { "${QUIET}" || printf '%s\n' "$*"; }
 die() { printf 'steamshine: %s\n' "$*" >&2; exit "${2:-1}"; }
@@ -16,7 +17,7 @@ run() { if "${DRY_RUN}"; then printf '[dry-run]'; printf ' %q' "$@"; printf '\n'
 usage() { cat <<'EOF'
 Usage: ./steamshine.sh <command> [options]
 Commands: menu check install build configure start stop restart status logs diagnose update repair uninstall bootstrap rollback
-Options: --non-interactive --yes --dry-run --verbose --quiet --force --no-start --no-build --no-packages --no-service --config PATH --prefix PATH --build-dir PATH --log-file PATH --purge --remove-dependencies --clean --debug --release
+Options: --non-interactive --yes --dry-run --verbose --quiet --force --no-start --no-build --no-packages --no-service --config PATH --prefix PATH --build-dir PATH --game-gpu ID --capture-gpu ID --encoder-gpu ID --gamescope-path PATH --default-width PX --default-height PX --default-fps FPS --log-file PATH --purge --remove-dependencies --clean --debug --release
 EOF
 }
 require_bash() { [[ -n "${BASH_VERSION:-}" ]] || die 'Run this script with bash.' "$EXIT_USAGE"; }
@@ -25,30 +26,45 @@ parse() {
   if [[ "${COMMAND}" == "-h" || "${COMMAND}" == "--help" ]]; then usage; exit 0; fi
   while [[ $# -gt 0 ]]; do case "$1" in
     --non-interactive) NON_INTERACTIVE=true;; --yes) ASSUME_YES=true;; --dry-run) DRY_RUN=true;; --verbose) VERBOSE=true;; --quiet) QUIET=true;; --force) FORCE=true;; --no-start) NO_START=true;; --no-build) NO_BUILD=true;; --no-packages) NO_PACKAGES=true;; --no-service) NO_SERVICE=true;; --purge) PURGE=true;; --remove-dependencies) REMOVE_DEPENDENCIES=true;; --clean) CLEAN=true;; --debug) BUILD_TYPE=Debug;; --release) BUILD_TYPE=Release;;
-    --config|--prefix|--build-dir|--log-file) [[ $# -ge 2 ]] || die "Missing value for $1" "$EXIT_USAGE"; case "$1" in --config) CONFIG_FILE="$2";; --prefix) PREFIX="$2";; --build-dir) BUILD_DIR="$2";; esac; shift;;
+    --config|--prefix|--build-dir|--log-file|--game-gpu|--capture-gpu|--encoder-gpu|--gamescope-path|--default-width|--default-height|--default-fps) [[ $# -ge 2 ]] || die "Missing value for $1" "$EXIT_USAGE"; case "$1" in --config) CONFIG_FILE="$2";; --prefix) PREFIX="$2";; --build-dir) BUILD_DIR="$2";; --game-gpu) GAME_GPU="$2";; --capture-gpu) CAPTURE_GPU="$2";; --encoder-gpu) ENCODER_GPU="$2";; --gamescope-path) GAMESCOPE_PATH="$2";; --default-width) DEFAULT_WIDTH="$2";; --default-height) DEFAULT_HEIGHT="$2";; --default-fps) DEFAULT_FPS="$2";; esac; shift;;
     -h|--help) usage; exit 0;; *) die "Unknown option: $1" "$EXIT_USAGE";; esac; shift; done
 }
-is_steamos_or_arch() { [[ -r /etc/os-release ]] && grep -Eqi 'steamos|arch' /etc/os-release; }
+load_os_release() { [[ -r /etc/os-release ]] || die '/etc/os-release is required.' "$EXIT_UNSUPPORTED"; . /etc/os-release; }
+package_manager() { load_os_release; case "${ID}:${ID_LIKE:-}" in steamos:*|arch:*) printf 'pacman\n';; ubuntu:*|debian:*|*:*debian*) printf 'apt\n';; fedora:*|*:*fedora*) printf 'dnf\n';; *) die "Unsupported Linux distribution: ${ID}" "$EXIT_UNSUPPORTED";; esac; }
+is_steamos_or_arch() { load_os_release; [[ "${ID}" == steamos || "${ID}" == arch ]]; }
 check() {
-  say '[1/5] Checking supported environment'; is_steamos_or_arch || die 'SteamOS or Arch Linux is required.' "$EXIT_UNSUPPORTED"
+  say '[1/5] Checking supported environment'; package_manager >/dev/null
   say '[2/5] Checking user runtime directory'; [[ -n "${XDG_RUNTIME_DIR:-}" && -d "${XDG_RUNTIME_DIR}" ]] || die 'XDG_RUNTIME_DIR is required.' "$EXIT_DEPENDENCY"
   say '[3/5] Checking GPU access'; [[ -r /dev/dri/renderD128 || -r /dev/dri/card0 ]] || die 'No accessible DRM device.' "$EXIT_DEPENDENCY"
-  say '[4/5] Checking required commands'; command -v cmake >/dev/null && command -v ninja >/dev/null && command -v pkg-config >/dev/null || die 'cmake, ninja, and pkg-config are required.' "$EXIT_DEPENDENCY"
+  say '[4/5] Checking required commands'; command -v cmake >/dev/null && command -v ninja >/dev/null && command -v pkg-config >/dev/null && command -v clang-format >/dev/null && command -v shellcheck >/dev/null || die 'cmake, ninja, pkg-config, clang-format, and shellcheck are required.' "$EXIT_DEPENDENCY"
+  cmake_version="$(cmake --version | awk 'NR == 1 {print $3}')"; [[ "$(printf '%s\n%s\n' 3.25.1 "${cmake_version}" | sort -V | head -n1)" == 3.25.1 ]] || die "cmake >= 3.25.1 is required (found ${cmake_version})." "$EXIT_DEPENDENCY"
   say '[5/5] Checking virtual-display prerequisites'; command -v gamescope >/dev/null || say 'Gamescope is optional until steamos_virtual_display_enabled=true.'
   say 'Environment check passed'
 }
 install_packages() {
-  command -v pacman >/dev/null || die 'No supported package manager was found; install build dependencies manually.' "$EXIT_DEPENDENCY"
-  local packages=(base-devel cmake ninja pkgconf pipewire gamescope libdrm wayland)
+  local manager; manager="$(package_manager)"; command -v "${manager}" >/dev/null || die "${manager} is unavailable." "$EXIT_DEPENDENCY"
+  if ! "${DRY_RUN}" && ! sudo -n true 2>/dev/null; then
+    die 'Package installation needs sudo authorization. Run the command from an interactive terminal after authenticating with sudo, or configure an approved askpass helper.' "$EXIT_DEPENDENCY"
+  fi
+  local packages=() available=() package
+  case "${manager}" in
+    pacman) packages=(base-devel cmake ninja pkgconf git python python-jinja nodejs npm clang shellcheck libcap libdrm libevdev libnotify libpulse libva libx11 libxcb libxfixes libxrandr libxtst miniupnpc openssl opus qt6-base qt6-svg shaderc udev vulkan-icd-loader vulkan-tools wayland pipewire gamescope libva-utils);;
+    apt) packages=(build-essential cmake ninja-build pkg-config git python3 python3-jinja2 npm clang-format shellcheck libcap-dev libdrm-dev libevdev-dev libgbm-dev libminiupnpc-dev libnotify-dev libnuma-dev libopus-dev libpipewire-0.3-dev libpulse-dev libssl-dev libsystemd-dev libudev-dev libwayland-dev libx11-dev libx11-xcb-dev libxcb-dri3-dev libxcb-shm0-dev libxcb-xfixes0-dev libxfixes-dev libxrandr-dev libxtst-dev libvulkan-dev vulkan-tools vainfo gamescope pipewire);;
+    dnf) packages=(gcc gcc-c++ cmake ninja-build pkgconf-pkg-config git python3 python3-jinja2 nodejs npm clang-tools-extra ShellCheck libcap-devel libdrm-devel libevdev-devel libnotify-devel libva-devel libX11-devel libxcb-devel libXfixes-devel libXrandr-devel libXtst-devel miniupnpc-devel openssl-devel opus-devel pipewire-devel pulseaudio-libs-devel systemd-devel libudev-devel wayland-devel vulkan-loader-devel vulkan-tools gamescope libva-utils);;
+  esac
+  for package in "${packages[@]}"; do
+    case "${manager}" in pacman) pacman -Si "${package}" >/dev/null 2>&1 && available+=("${package}");; apt) apt-cache show "${package}" >/dev/null 2>&1 && available+=("${package}");; dnf) dnf -q info "${package}" >/dev/null 2>&1 && available+=("${package}");; esac
+  done
+  ((${#available[@]})) || die 'No verified dependency packages are available from the configured package manager.' "$EXIT_DEPENDENCY"
   if ! "${ASSUME_YES}" && ! "${NON_INTERACTIVE}"; then read -r -p "Install missing official packages with pacman? [y/N] " answer; [[ "${answer}" =~ ^[Yy]$ ]] || return 0; fi
-  run sudo pacman -S --needed "${packages[@]}"
-  if ! "${DRY_RUN}"; then mkdir -p "${STATE_DIR}"; printf '%s\n' "${packages[@]}" >"${STATE_DIR}/installed-packages.txt"; fi
+  case "${manager}" in pacman) run sudo pacman -S --needed --noconfirm "${available[@]}";; apt) run sudo apt-get update; run sudo apt-get install -y "${available[@]}";; dnf) run sudo dnf install -y "${available[@]}";; esac
+  if ! "${DRY_RUN}"; then mkdir -p "${STATE_DIR}"; printf '%s\n' "${available[@]}" >"${STATE_DIR}/installed-packages.txt"; fi
 }
 build() {
   "${CLEAN}" && run cmake -E rm -rf "${BUILD_DIR}"
   run cmake -S "${ROOT_DIR}" -B "${BUILD_DIR}" -G Ninja -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" -DBUILD_TESTS=ON
   run cmake --build "${BUILD_DIR}" --parallel "$(nproc)" || die 'Build failed.' "$EXIT_BUILD"
-  [[ -x "${BUILD_DIR}/tests/test_sunshine" ]] && run "${BUILD_DIR}/tests/test_sunshine" || die 'Unit tests failed.' "$EXIT_TEST"
+  run ctest --test-dir "${BUILD_DIR}" --output-on-failure || die 'CTest failed.' "$EXIT_TEST"
 }
 configure() {
   local directory="$(dirname -- "${CONFIG_FILE}")"; run mkdir -p "${directory}" "${directory}/backups"
@@ -58,13 +74,16 @@ configure() {
 # SteamShine SteamOS settings. Virtual display is opt-in.
 steamos_virtual_display_enabled = false
 steamos_virtual_display_mode = auto
-steamos_gamescope_path = gamescope
+steamos_gamescope_path = ${GAMESCOPE_PATH}
 steamos_runtime_directory = ${XDG_RUNTIME_DIR}/steamshine
+steamos_game_gpu = ${GAME_GPU}
+steamos_capture_gpu = ${CAPTURE_GPU}
+steamos_encoder_gpu = ${ENCODER_GPU}
 steamos_startup_timeout_seconds = 15
 steamos_shutdown_timeout_seconds = 5
-steamos_default_width = 1920
-steamos_default_height = 1080
-steamos_default_fps = 60
+steamos_default_width = ${DEFAULT_WIDTH}
+steamos_default_height = ${DEFAULT_HEIGHT}
+steamos_default_fps = ${DEFAULT_FPS}
 steamos_cleanup_orphan_sessions = true
 EOF
 }
@@ -93,7 +112,7 @@ stop() { run systemctl --user disable --now steamshine; }
 status() { systemctl --user status steamshine --no-pager; }
 logs() { journalctl --user -u steamshine --no-pager -n 200; }
 diagnose() { check; command -v gamescope >/dev/null && gamescope --version || true; pw-cli info 0 >/dev/null 2>&1 && say 'PipeWire reachable' || say 'PipeWire is not reachable'; }
-bootstrap() { check; "${NO_PACKAGES}" || install_packages; "${NO_BUILD}" || build; install; "${NO_START}" || "${NO_SERVICE}" || start; diagnose; say 'SteamShine is ready'; }
+bootstrap() { package_manager >/dev/null; install; "${NO_START}" || "${NO_SERVICE}" || start; "${DRY_RUN}" || diagnose; say 'SteamShine is ready'; }
 update() { git -C "${ROOT_DIR}" diff --quiet || die 'Uncommitted changes detected; update refused.'; run git -C "${ROOT_DIR}" fetch --all --prune; run git -C "${ROOT_DIR}" pull --ff-only; install; "${NO_START}" || start; }
 repair() { configure; "${NO_SERVICE}" || install_service; [[ -x "${PREFIX}/bin/steamshine" ]] || install; }
 uninstall() {
