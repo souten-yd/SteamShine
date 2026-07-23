@@ -61,6 +61,11 @@ jobs:
     runs-on: ubuntu-latest
     container: archlinux:base-devel
     steps:
+      # actions/checkout needs Git before the repository-provided SteamOS
+      # package configuration can be read. This is not the build toolchain;
+      # it is replaced by the SteamOS-baseline Git package in the next step.
+      - name: Install checkout tool
+        run: pacman -Sy --noconfirm --needed --noprogressbar git
       - uses: actions/checkout@v4
         with:
           submodules: recursive
