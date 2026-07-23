@@ -61,7 +61,7 @@ namespace steamos_virtual_session {
      * @param path Candidate socket path.
      * @return True only for an existing UNIX-domain socket.
      */
-    bool is_socket(const std::filesystem::path &path) {
+    bool owned_wayland_socket_exists(const std::filesystem::path &path) {
       std::error_code error;
       return std::filesystem::is_socket(std::filesystem::status(path, error)) && !error;
     }
@@ -396,7 +396,7 @@ namespace steamos_virtual_session {
         manager.current = state_e::Failed;
         break;
       }
-      if (is_socket(socket)) {
+      if (owned_wayland_socket_exists(socket)) {
         manager.current = state_e::WaitingForCapture;
         BOOST_LOG(info) << "SteamOS virtual display socket ready: " << width << 'x' << height << '@' << fps;
         return true;
@@ -436,7 +436,7 @@ namespace steamos_virtual_session {
   bool capture_socket(std::string &socket_path) {
     std::scoped_lock lock {manager.mutex};
     const auto socket {manager.runtime_directory / "wayland-0"};
-    if (manager.runtime_directory.empty() || (manager.current != state_e::WaitingForCapture && manager.current != state_e::Ready && manager.current != state_e::Streaming) || !is_socket(socket)) {
+    if (manager.runtime_directory.empty() || (manager.current != state_e::WaitingForCapture && manager.current != state_e::Ready && manager.current != state_e::Streaming) || !owned_wayland_socket_exists(socket)) {
       return false;
     }
     socket_path = socket.string();
