@@ -154,6 +154,15 @@ TEST_F(SteamOSVirtualSessionTest, GamescopeArgumentsRejectMissingHeadlessBackend
   EXPECT_NE(error.find("headless"), std::string::npos);
 }
 
+TEST_F(SteamOSVirtualSessionTest, RejectsEncoderOrCaptureOnDifferentGpu) {
+  config::steamos_virtual_display.capture_gpu = "1002:744c";
+  config::steamos_virtual_display.encoder_gpu = "1002:7550";
+  rtsp_stream::launch_session_t launch {};
+  std::string error;
+  EXPECT_FALSE(steamos_virtual_session::prepare(launch, error));
+  EXPECT_NE(error.find("one AMD dGPU"), std::string::npos);
+}
+
 TEST_F(SteamOSVirtualSessionTest, FakeGamescopeReadinessAndCleanup) {
   rtsp_stream::launch_session_t launch {};
   launch.id = 42;

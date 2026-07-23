@@ -28,6 +28,8 @@ extern "C" {
 #include "src/video_colorspace.h"
 #include "vulkan_encode.h"
 
+#include "src/steamos_virtual_session.h"
+
 // SPIR-V data generated at build time
 static const std::vector<uint32_t> rgb2yuv_comp_spv_data
 #include "shaders/rgb2yuv.spv.inc"
@@ -89,7 +91,14 @@ namespace vk {
 
   static int create_vulkan_hwdevice(AVBufferRef **hw_device_buf) {
     // Resolve render device path to Vulkan device index
-    if (auto render_path = platf::resolve_render_device(); render_path[0] == '/') {
+    const auto render_path {platf::resolve_render_device()};
+    std::string owned_render_node;
+    const bool owned_virtual_session {steamos_virtual_session::encoder_render_node(owned_render_node)};
+    if (owned_virtual_session && render_path != owned_render_node) {
+      BOOST_LOG(error) << "SteamOS virtual session rejected a Vulkan encoder device outside its owned AMD render node"sv;
+      return -1;
+    }
+    if (!render_path.empty() && render_path[0] == '/') {
       if (auto idx = find_vulkan_index_for_render_node(render_path.c_str()); !idx.empty() && av_hwdevice_ctx_create(hw_device_buf, AV_HWDEVICE_TYPE_VULKAN, idx.c_str(), nullptr, 0) >= 0) {
         return 0;
       }
@@ -98,6 +107,13 @@ namespace vk {
       if (av_hwdevice_ctx_create(hw_device_buf, AV_HWDEVICE_TYPE_VULKAN, render_path.c_str(), nullptr, 0) >= 0) {
         return 0;
       }
+    }
+    // An owned virtual session must not fall back to a different GPU, including
+    // an integrated adapter. Normal Sunshine behavior retains the legacy
+    // default-device fallback when no SteamOS virtual session is active.
+    if (owned_virtual_session) {
+      BOOST_LOG(error) << "SteamOS virtual session could not create Vulkan Video on its owned AMD render node"sv;
+      return -1;
     }
     // Final fallback: let FFmpeg pick default
     if (av_hwdevice_ctx_create(hw_device_buf, AV_HWDEVICE_TYPE_VULKAN, nullptr, nullptr, 0) >= 0) {

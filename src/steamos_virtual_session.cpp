@@ -407,7 +407,11 @@ namespace steamos_virtual_session {
       manager.current = state_e::Failed;
       return false;
     }
-    if ((!gpu->render_node.empty() && gpu->render_node != capture_gpu->render_node) || (!gpu->render_node.empty() && gpu->render_node != encoder_gpu->render_node)) {
+    const bool capture_matches {(!gpu->render_node.empty() && gpu->render_node == capture_gpu->render_node) ||
+                                (gpu->render_node.empty() && gpu->gamescope_device == capture_gpu->gamescope_device)};
+    const bool encoder_matches {(!gpu->render_node.empty() && gpu->render_node == encoder_gpu->render_node) ||
+                                (gpu->render_node.empty() && gpu->gamescope_device == encoder_gpu->gamescope_device)};
+    if (!capture_matches || !encoder_matches) {
       error = "SteamOS virtual display requires game rendering, capture, and encoding to use one AMD dGPU";
       manager.current = state_e::Failed;
       return false;
