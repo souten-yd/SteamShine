@@ -29,6 +29,7 @@ extern "C" {
 #include "platform/common.h"
 #include "process.h"
 #include "stream.h"
+#include "steamos_virtual_session.h"
 #include "sync.h"
 #include "system_tray.h"
 #include "thread_safe.h"
@@ -2200,6 +2201,7 @@ namespace stream {
         }
 
         platf::streaming_will_stop();
+        steamos_virtual_session::stop();
       }
 
       BOOST_LOG(debug) << "Session ended"sv;

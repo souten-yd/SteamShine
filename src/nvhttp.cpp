@@ -31,6 +31,7 @@
 #include "platform/common.h"
 #include "process.h"
 #include "rtsp.h"
+#include "steamos_virtual_session.h"
 #include "system_tray.h"
 #include "utility.h"
 #include "uuid.h"
@@ -1037,6 +1038,15 @@ namespace nvhttp {
     host_audio = util::from_view(get_arg(args, "localAudioPlayMode"));
     auto launch_session = make_launch_session(host_audio, args);
 
+    std::string virtual_session_error;
+    if (!steamos_virtual_session::prepare(*launch_session, virtual_session_error)) {
+      BOOST_LOG(error) << "SteamOS virtual session preparation failed: " << virtual_session_error;
+      tree.put("root.<xmlattr>.status_code", 503);
+      tree.put("root.<xmlattr>.status_message", virtual_session_error);
+      tree.put("root.gamesession", 0);
+      return;
+    }
+
     if (rtsp_stream::session_count() == 0) {
       // The display should be restored in case something fails as there are no other sessions.
       revert_display_configuration = true;
@@ -1051,6 +1061,7 @@ namespace nvhttp {
       // due to hotplugging, driver crash, primary monitor change,
       // or any number of other factors).
       if (video::probe_encoders()) {
+        steamos_virtual_session::stop();
         tree.put("root.<xmlattr>.status_code", 503);
         tree.put("root.<xmlattr>.status_message", "Failed to initialize video capture/encoding. Is a display connected and turned on?");
         tree.put("root.gamesession", 0);
@@ -1062,6 +1073,7 @@ namespace nvhttp {
     auto encryption_mode = net::encryption_mode_for_address(request->remote_endpoint().address());
     if (!launch_session->rtsp_cipher && encryption_mode == config::ENCRYPTION_MODE_MANDATORY) {
       BOOST_LOG(error) << "Rejecting client that cannot comply with mandatory encryption requirement"sv;
+      steamos_virtual_session::stop();
 
       tree.put("root.<xmlattr>.status_code", 403);
       tree.put("root.<xmlattr>.status_message", "Encryption is mandatory for this host but unsupported by the client");
@@ -1073,6 +1085,7 @@ namespace nvhttp {
     if (appid > 0) {
       auto err = proc::proc.execute((int) appid, launch_session);
       if (err) {
+        steamos_virtual_session::stop();
         tree.put("root.<xmlattr>.status_code", err);
         tree.put("root.<xmlattr>.status_message", "Failed to start the specified application");
         tree.put("root.gamesession", 0);
@@ -1094,6 +1107,7 @@ namespace nvhttp {
     tree.put("root.gamesession", 1);
 
     rtsp_stream::launch_session_raise(launch_session);
+    steamos_virtual_session::mark_streaming();
 
     // Stream was started successfully, we will revert the config when the app or session terminates
     revert_display_configuration = false;
