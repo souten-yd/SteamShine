@@ -23,6 +23,8 @@
 #include <vector>
 
 #if defined(__linux__)
+  #include <fcntl.h>
+  #include <poll.h>
   #include <signal.h>
   #include <sys/types.h>
   #include <sys/wait.h>
@@ -206,6 +208,11 @@ namespace steamos_virtual_session {
         return false;
       }
       const pid_t child {::fork()};
+      if (child < 0) {
+        ::close(pipe_fds[0]);
+        ::close(pipe_fds[1]);
+        return false;
+      }
       if (child == 0) {
         ::dup2(pipe_fds[1], STDOUT_FILENO);
         ::dup2(pipe_fds[1], STDERR_FILENO);
@@ -215,19 +222,40 @@ namespace steamos_virtual_session {
         _exit(127);
       }
       ::close(pipe_fds[1]);
+      const int flags {::fcntl(pipe_fds[0], F_GETFL)};
+      if (flags < 0 || ::fcntl(pipe_fds[0], F_SETFL, flags | O_NONBLOCK) != 0) {
+        ::close(pipe_fds[0]);
+        ::kill(child, SIGTERM);
+        ::waitpid(child, nullptr, 0);
+        return false;
+      }
       std::array<char, 4096> buffer {};
-      while (help.size() < 65536) {
-        const auto bytes {::read(pipe_fds[0], buffer.data(), buffer.size())};
-        if (bytes <= 0) {
+      int status {};
+      bool exited {false};
+      const auto deadline {std::chrono::steady_clock::now() + std::chrono::seconds {5}};
+      while (std::chrono::steady_clock::now() < deadline && help.size() < 65536) {
+        pollfd descriptor {.fd = pipe_fds[0], .events = POLLIN, .revents = 0};
+        if (::poll(&descriptor, 1, 100) > 0 && (descriptor.revents & (POLLIN | POLLHUP))) {
+          while (help.size() < 65536) {
+            const auto bytes {::read(pipe_fds[0], buffer.data(), buffer.size())};
+            if (bytes > 0) {
+              help.append(buffer.data(), static_cast<std::size_t>(bytes));
+              continue;
+            }
+            break;
+          }
+        }
+        exited = ::waitpid(child, &status, WNOHANG) == child;
+        if (exited) {
           break;
         }
-        help.append(buffer.data(), static_cast<std::size_t>(bytes));
       }
       ::close(pipe_fds[0]);
-      if (child > 0) {
-        ::waitpid(child, nullptr, 0);
+      if (!exited) {
+        ::kill(child, SIGTERM);
+        ::waitpid(child, &status, 0);
       }
-      return child > 0;
+      return WIFEXITED(status) && WEXITSTATUS(status) == 0 && !help.empty();
     }
 #endif
   }  // namespace
