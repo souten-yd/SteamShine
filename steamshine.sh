@@ -150,8 +150,11 @@ update() { git -C "${ROOT_DIR}" diff --quiet || die 'Uncommitted changes detecte
 repair() { configure; "${NO_SERVICE}" || install_service; [[ -x "${PREFIX}/bin/steamshine" ]] || install; }
 uninstall() {
   if "${PURGE}" && "${NON_INTERACTIVE}" && ! "${ASSUME_YES}"; then die '--purge in non-interactive mode requires --yes.' "$EXIT_USAGE"; fi
-  stop || true; run rm -f "$(service_file)" "${PREFIX}/bin/steamshine"; run cmake -E rm -rf "${BUILD_DIR}" "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/steamshine"; run systemctl --user daemon-reload || true
-  if "${PURGE}"; then run cmake -E rm -rf "${HOME}/.config/steamshine" "${STATE_DIR}"; fi
+  "${NO_SERVICE}" || stop || true
+  run rm -f "$(service_file)" "${PREFIX}/bin/steamshine"
+  run rm -rf -- "${PREFIX}/share/steamshine" "${HOME}/.cache/steamshine" "${BUILD_DIR}" "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/steamshine"
+  "${NO_SERVICE}" || run systemctl --user daemon-reload || true
+  if "${PURGE}"; then run rm -rf -- "${HOME}/.config/steamshine" "${STATE_DIR}"; fi
   if "${REMOVE_DEPENDENCIES}"; then say 'Dependencies are intentionally not removed automatically; inspect installed-packages.txt and remove only packages not used elsewhere.'; fi
 }
 rollback() { die 'No rollback snapshot is available yet; restore the timestamped backup in ~/.config/steamshine/backups manually.'; }

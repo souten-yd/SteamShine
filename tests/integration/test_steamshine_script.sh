@@ -27,3 +27,17 @@ tar --zstd -C "${test_root}/stage" -cf "${test_root}/steamshine-steamos-x86_64-t
 HOME="${test_root}/home" XDG_RUNTIME_DIR="${test_root}/home/run" \
   "${root_dir}/steamshine.sh" install --artifact "${test_root}/steamshine-steamos-x86_64-test.tar.zst" --no-service --non-interactive --yes
 test -x "${test_root}/home/.local/bin/steamshine"
+
+# Immutable SteamOS installs must be removable without local development tools.
+# The normal uninstall removes only generated binaries/cache/runtime files and
+# deliberately preserves user configuration and diagnostic state.
+mkdir -p "${test_root}/home/.config/steamshine" "${test_root}/home/.local/state/steamshine"
+printf 'keep\n' >"${test_root}/home/.config/steamshine/sunshine.conf"
+printf 'keep\n' >"${test_root}/home/.local/state/steamshine/diagnostics.log"
+HOME="${test_root}/home" XDG_RUNTIME_DIR="${test_root}/home/run" \
+  "${root_dir}/steamshine.sh" uninstall --no-service --non-interactive --yes
+test ! -e "${test_root}/home/.local/bin/steamshine"
+test ! -e "${test_root}/home/.local/share/steamshine/current"
+test ! -d "${test_root}/home/.cache/steamshine"
+test -f "${test_root}/home/.config/steamshine/sunshine.conf"
+test -f "${test_root}/home/.local/state/steamshine/diagnostics.log"

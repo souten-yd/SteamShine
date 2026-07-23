@@ -1,5 +1,5 @@
 # Installation
 
-For SteamOS/Arch hosts, run `./steamshine.sh bootstrap --non-interactive --yes`. Use `./steamshine.sh` for the interactive menu, `start`, `stop`, `status`, and `logs` for service control, and `diagnose` for prerequisite checks. Use `--dry-run` before any modifying command.
+For SteamOS, install the CI-built immutable artifact, for example `./steamshine.sh install --channel pr --pr 6`, then use `start`, `stop`, `status`, `logs`, and `diagnose` for service control and prerequisite checks. Use `--dry-run` before any modifying command.
 
-The script supports SteamOS/Arch, Debian/Ubuntu, and Fedora. It installs only verified missing official packages when approved, builds into `cmake-build-steamos`, installs the binary under `~/.local/bin`, writes an opt-in configuration, and installs a systemd user service. On SteamOS, first authenticate in an interactive terminal with `sudo -v`, then run `./steamshine.sh bootstrap --non-interactive --yes`.
+The SteamOS artifact installer verifies its checksum and archive paths, then writes only to `~/.local`, `~/.config/steamshine`, `~/.local/state/steamshine`, `~/.cache/steamshine`, and the user systemd directory. It does not invoke `pacman`, install compilers, require `sudo`, disable read-only mode, or write to `/usr` or `/etc`. The interactive development menu can install verified build packages and build into `cmake-build-steamos` on supported development hosts (SteamOS/Arch, Debian/Ubuntu, and Fedora); this is not part of normal SteamOS deployment.
