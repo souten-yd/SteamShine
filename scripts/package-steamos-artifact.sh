@@ -15,7 +15,7 @@ install -m 755 "${binary}" "${stage}/bin/steamshine"
 miniupnpc_library="$(ldconfig -p | awk '/libminiupnpc\.so\.21/ { print $NF; exit }')"
 [[ -n "${miniupnpc_library}" && -f "${miniupnpc_library}" ]] || { echo "Missing libminiupnpc.so.21 required by SteamShine" >&2; exit 1; }
 install -m 644 "${miniupnpc_library}" "${stage}/lib/"
-patchelf --set-rpath '$ORIGIN/../lib' "${stage}/bin/steamshine"
+patchelf --set-rpath "\$ORIGIN/../lib" "${stage}/bin/steamshine"
 install -m 755 \
   "${root_dir}/scripts/diagnose-steamos-virtual-display.sh" \
   "${root_dir}/scripts/test-steamos-virtual-display.sh" \
