@@ -57,7 +57,19 @@ jobs:
             scripts/test-steamos-ssd-writes.sh \
             scripts/test-steamos-virtual-display.sh \
             tests/integration/test_steamshine_script.sh
-          git -C "${GITHUB_WORKSPACE}" diff --check
+          ! grep -nE '[[:blank:]]+$|^(<<<<<<<|=======|>>>>>>>)' \
+            src/steamos_virtual_session.cpp \
+            src/steamos_virtual_session.h \
+            tests/unit/test_steamos_virtual_session.cpp \
+            steamshine.sh \
+            scripts/diagnose-steamos-virtual-display.sh \
+            scripts/package-steamos-artifact.sh \
+            scripts/test-steamos-latency.sh \
+            scripts/test-steamos-reconnect.sh \
+            scripts/test-steamos-ssd-writes.sh \
+            scripts/test-steamos-virtual-display.sh \
+            tests/integration/test_steamshine_script.sh \
+            .github/workflows/build-steamos.yml
       - name: Configure
         run: cmake -S . -B cmake-build-steamos -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=ON -DBUILD_DOCS=OFF
       - name: Build
