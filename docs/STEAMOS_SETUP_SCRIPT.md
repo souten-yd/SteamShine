@@ -15,6 +15,6 @@ Examples:
 
 Supported commands are `menu`, `check`, `install`, `build`, `configure`, `start`, `stop`, `restart`, `status`, `logs`, `diagnose`, `update`, `repair`, `uninstall`, `bootstrap`, and `rollback`. All modifying commands accept `--dry-run`.
 
-The script uses user locations (`~/.local`, `~/.config/steamshine`, `~/.local/state/steamshine`, and `$XDG_RUNTIME_DIR/steamshine`) and a systemd user service. It never disables SteamOS read-only mode. Package installation is explicit through pacman and records requested package names; uninstall never removes shared packages automatically.
+The script supports SteamOS/Arch (`pacman`), Debian/Ubuntu (`apt`), and Fedora (`dnf`). It verifies each candidate package exists in the active repository before requesting installation, uses the official dependency inventory from `scripts/linux_build.sh`, and installs with `--needed` or the manager equivalent. It requires normal sudo authorization but never disables SteamOS read-only mode. User-local files remain under `~/.local`, `~/.config/steamshine`, `~/.local/state/steamshine`, and `$XDG_RUNTIME_DIR/steamshine`; uninstall never removes shared packages automatically.
 
 Exit statuses: 0 success; 1 general error; 2 usage; 3 unsupported OS; 4 missing dependency; 6 build failure; 7 test failure; 8 service failure; 9 configuration failure; 10 uninstall failure.
