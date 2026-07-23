@@ -37,6 +37,7 @@ opus
 qt6-base
 qt6-svg
 shaderc
+systemd-sysvcompat
 udev
 vulkan-icd-loader
 wayland

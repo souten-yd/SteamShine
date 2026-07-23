@@ -82,15 +82,20 @@ jobs:
           pacman-key --lsign-key AF1D2199EF0A3CCF
           pacman -Syy --noconfirm --noprogressbar
           # The Arch base image splits GCC runtime libraries that SteamOS owns
-          # through gcc-libs. Remove only those conflicting CI-image packages
-          # before installing the SteamOS 3.8 toolchain below.
-          for package in systemd-sysvcompat gcc libasan libatomic libgcc libgfortran \
-            libgomp liblsan libobjc libquadmath libstdc++ libtsan libubsan; do
-            if pacman -Q "${package}" >/dev/null; then
-              pacman -Rdd --noconfirm --noprogressbar "${package}"
-            fi
-          done
+          # through gcc-libs. Replace them in one pacman transaction so pacman
+          # itself never runs after libgcc_s has been removed.
           pacman -S --noconfirm --needed --noprogressbar --disable-download-timeout \
+            --overwrite '/usr/lib/libasan.so*' \
+            --overwrite '/usr/lib/libatomic.so*' \
+            --overwrite '/usr/lib/libgcc_s.so*' \
+            --overwrite '/usr/lib/libgfortran.so*' \
+            --overwrite '/usr/lib/libgomp.so*' \
+            --overwrite '/usr/lib/liblsan.so*' \
+            --overwrite '/usr/lib/libobjc.so*' \
+            --overwrite '/usr/lib/libquadmath.so*' \
+            --overwrite '/usr/lib/libstdc++.so*' \
+            --overwrite '/usr/lib/libtsan.so*' \
+            --overwrite '/usr/lib/libubsan.so*' \
             $(grep -Ev '^(#|$)' ci/steamos/packages.txt)
           pacman -Q glibc gcc-libs qt6-base
       - name: Mark workspace as safe for CMake version discovery

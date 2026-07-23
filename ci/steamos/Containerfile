@@ -11,8 +11,19 @@ RUN pacman-key --init \
     && pacman-key --add /tmp/steam-os-ci-builder.asc \
     && test "$(gpg --homedir /etc/pacman.d/gnupg --with-colons --list-keys AF1D2199EF0A3CCF | awk -F: '$1 == "fpr" { print $10; exit }')" = "889B5EBDDD505A683621900DAF1D2199EF0A3CCF" \
     && pacman-key --lsign-key AF1D2199EF0A3CCF \
-    && pacman -Syy --noconfirm --noprogressbar \
-    && for package in systemd-sysvcompat gcc libasan libatomic libgcc libgfortran libgomp liblsan libobjc libquadmath libstdc++ libtsan libubsan; do if pacman -Q "${package}" >/dev/null; then pacman -Rdd --noconfirm --noprogressbar "${package}"; fi; done
+    && pacman -Syy --noconfirm --noprogressbar
 
-RUN pacman -S --noconfirm --needed --noprogressbar $(grep -Ev '^(#|$)' /tmp/packages.txt) \
+RUN pacman -S --noconfirm --needed --noprogressbar \
+    --overwrite '/usr/lib/libasan.so*' \
+    --overwrite '/usr/lib/libatomic.so*' \
+    --overwrite '/usr/lib/libgcc_s.so*' \
+    --overwrite '/usr/lib/libgfortran.so*' \
+    --overwrite '/usr/lib/libgomp.so*' \
+    --overwrite '/usr/lib/liblsan.so*' \
+    --overwrite '/usr/lib/libobjc.so*' \
+    --overwrite '/usr/lib/libquadmath.so*' \
+    --overwrite '/usr/lib/libstdc++.so*' \
+    --overwrite '/usr/lib/libtsan.so*' \
+    --overwrite '/usr/lib/libubsan.so*' \
+    $(grep -Ev '^(#|$)' /tmp/packages.txt) \
     && pacman -Q glibc gcc-libs qt6-base
