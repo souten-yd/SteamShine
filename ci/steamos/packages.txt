@@ -34,6 +34,7 @@ libxtst
 miniupnpc
 openssl
 opus
+patchelf
 pipewire
 qt6-base
 qt6-svg

@@ -172,6 +172,7 @@ jobs:
           test -x "${smoke_home}/.local/share/steamshine/current/scripts/test-steamos-reconnect.sh"
           test -x "${smoke_home}/.local/share/steamshine/current/scripts/test-steamos-latency.sh"
           test -x "${smoke_home}/.local/share/steamshine/current/scripts/test-steamos-ssd-writes.sh"
+          test -f "${smoke_home}/.local/share/steamshine/current/lib/libminiupnpc.so.21"
           HOME="${smoke_home}" XDG_RUNTIME_DIR="${smoke_home}/run" \
             ./steamshine.sh uninstall --non-interactive --yes --no-service
       - uses: actions/upload-artifact@v4

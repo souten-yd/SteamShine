@@ -9,7 +9,7 @@ steamshine-steamos-x86_64-<commit>.tar.zst
 steamshine-steamos-x86_64-<commit>.tar.zst.sha256
 ```
 
-The archive contains only user-space application files, scripts, a systemd user-service template, license, build metadata, and runtime dependency report. It deliberately does not bundle graphics drivers, Mesa, Vulkan ICDs, VAAPI drivers, or PipeWire daemons. The CI build installs PipeWire only because its `libpipewire-0.3` development interface is a required CMake dependency; it does not start PipeWire, Gamescope, Steam, or any GPU workload.
+The archive contains user-space application files, scripts, a systemd user-service template, licenses, build metadata, and a runtime dependency report. It deliberately does not bundle graphics drivers, Mesa, Vulkan ICDs, VAAPI drivers, or PipeWire daemons. `libminiupnpc.so.21` is the sole bundled general-purpose library because stock SteamOS does not guarantee that ABI; the archive sets only a relative `$ORIGIN/../lib` RPATH and includes its license. The CI build installs PipeWire only because its `libpipewire-0.3` development interface is a required CMake dependency; it does not start PipeWire, Gamescope, Steam, or any GPU workload.
 
 The build verifies the staged executable with `ldd`, dynamic-section inspection, and a symbol-version ceiling for the SteamOS 3.8 glibc, libstdc++, and Qt baselines. A build that references a newer ABI is rejected before it can be uploaded.
 
