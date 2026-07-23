@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cerrno>
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
@@ -67,6 +68,39 @@ namespace steamos_virtual_session {
       std::error_code error;
       return std::filesystem::is_socket(std::filesystem::status(path, error)) && !error;
     }
+
+#if defined(__linux__)
+    /**
+     * @brief Check whether an owned process group still has a live member.
+     *
+     * @param process_group Process group established by SteamShine before exec.
+     * @return True when at least one process in the owned group remains alive.
+     */
+    bool process_group_exists(const pid_t process_group) {
+      return ::kill(-process_group, 0) == 0 || errno == EPERM;
+    }
+
+    /**
+     * @brief Gracefully stop an owned process group and force-stop remaining children.
+     *
+     * @param process_group Process group established by SteamShine before exec.
+     * @param timeout Maximum graceful-shutdown time.
+     */
+    void stop_owned_process_group(const pid_t process_group, const std::chrono::seconds timeout) {
+      if (process_group <= 0) {
+        return;
+      }
+      ::kill(-process_group, SIGTERM);
+      const auto deadline {std::chrono::steady_clock::now() + timeout};
+      while (process_group_exists(process_group) && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds {50});
+      }
+      if (process_group_exists(process_group)) {
+        ::kill(-process_group, SIGKILL);
+      }
+      ::waitpid(process_group, nullptr, WNOHANG);
+    }
+#endif
 
     /**
      * @brief Read one trimmed sysfs attribute without invoking external tools.
@@ -435,8 +469,7 @@ namespace steamos_virtual_session {
       error = "Timed out waiting for the Gamescope Wayland socket";
       manager.current = state_e::Failed;
     }
-    ::kill(-manager.process_group, SIGTERM);
-    ::waitpid(child, nullptr, 0);
+    stop_owned_process_group(manager.process_group, std::chrono::seconds {config::steamos_virtual_display.shutdown_timeout_seconds});
     std::filesystem::remove_all(manager.runtime_directory, ec);
     manager.process_group = -1;
     return false;
@@ -493,15 +526,7 @@ namespace steamos_virtual_session {
 #if defined(__linux__)
     if (manager.process_group > 0) {
       manager.current = state_e::Stopping;
-      ::kill(-manager.process_group, SIGTERM);
-      const auto deadline {std::chrono::steady_clock::now() + std::chrono::seconds {config::steamos_virtual_display.shutdown_timeout_seconds}};
-      while (::waitpid(manager.process_group, nullptr, WNOHANG) == 0 && std::chrono::steady_clock::now() < deadline) {
-        std::this_thread::sleep_for(std::chrono::milliseconds {50});
-      }
-      if (::waitpid(manager.process_group, nullptr, WNOHANG) == 0) {
-        ::kill(-manager.process_group, SIGKILL);
-        ::waitpid(manager.process_group, nullptr, 0);
-      }
+      stop_owned_process_group(manager.process_group, std::chrono::seconds {config::steamos_virtual_display.shutdown_timeout_seconds});
       manager.process_group = -1;
     }
 #endif

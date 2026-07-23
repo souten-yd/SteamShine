@@ -5,14 +5,18 @@
 #include "../tests_common.h"
 
 #if defined(__linux__)
+  #include <cerrno>
   #include <cstdlib>
   #include <filesystem>
   #include <fstream>
   #include <iterator>
+  #include <signal.h>
   #include <src/config.h>
   #include <src/rtsp.h>
   #include <src/steamos_virtual_session.h>
   #include <string_view>
+  #include <thread>
+  #include <unistd.h>
 
 namespace {
   /**
@@ -42,9 +46,19 @@ namespace {
       return executable;
     }
     output << "python3 -c 'import os, socket, signal, sys; p=os.path.join(os.environ[\"XDG_RUNTIME_DIR\"], \"wayland-0\"); s=socket.socket(socket.AF_UNIX); s.bind(p); s.listen(); signal.signal(signal.SIGTERM, lambda *_: sys.exit(0)); signal.signal(signal.SIGINT, lambda *_: sys.exit(0)); [signal.pause() for _ in iter(int, 1)]' &\n";
-    output << "child=$!\n";
-    output << "trap 'kill \"$child\" 2>/dev/null; wait \"$child\" 2>/dev/null; exit 0' TERM INT\n";
-    output << "wait \"$child\"\n";
+    output << "socket_child=$!\n";
+    if (mode == "leave-child") {
+      output << "sh -c 'trap \"\" TERM INT; while :; do sleep 1; done' &\n";
+      output << "ignored_child=$!\n";
+      output << "printf '%s\\n' \"$ignored_child\" > \"$XDG_RUNTIME_DIR/ignored-child.pid\"\n";
+      output << "trap 'exit 0' TERM INT\n";
+      output << "while :; do sleep 1; done\n";
+      output.close();
+      std::filesystem::permissions(executable, std::filesystem::perms::owner_exec, std::filesystem::perm_options::add);
+      return executable;
+    }
+    output << "trap 'kill \"$socket_child\" 2>/dev/null; wait \"$socket_child\" 2>/dev/null; exit 0' TERM INT\n";
+    output << "wait \"$socket_child\"\n";
     output.close();
     std::filesystem::permissions(executable, std::filesystem::perms::owner_exec, std::filesystem::perm_options::add);
     return executable;
@@ -160,6 +174,27 @@ TEST_F(SteamOSVirtualSessionTest, CleansUpAfterGamescopeEarlyCrash) {
   EXPECT_FALSE(steamos_virtual_session::prepare(launch, error));
   EXPECT_NE(error.find("exited"), std::string::npos);
   EXPECT_EQ(steamos_virtual_session::state(), steamos_virtual_session::state_e::Failed);
+}
+
+TEST_F(SteamOSVirtualSessionTest, ForcedCleanupKillsOwnedChildAfterGamescopeExits) {
+  config::steamos_virtual_display.gamescope_path = make_fake_gamescope(root, "leave-child").string();
+  rtsp_stream::launch_session_t launch {};
+  launch.id = 9;
+  std::string error;
+  ASSERT_TRUE(steamos_virtual_session::prepare(launch, error)) << error;
+  std::string runtime_directory;
+  std::string wayland_display;
+  ASSERT_TRUE(steamos_virtual_session::application_environment(runtime_directory, wayland_display));
+  std::ifstream input {std::filesystem::path {runtime_directory} / "ignored-child.pid"};
+  pid_t child {};
+  input >> child;
+  ASSERT_GT(child, 0);
+  steamos_virtual_session::stop();
+  for (int attempt = 0; attempt < 20 && ::kill(child, 0) == 0; ++attempt) {
+    std::this_thread::sleep_for(std::chrono::milliseconds {50});
+  }
+  EXPECT_EQ(::kill(child, 0), -1);
+  EXPECT_EQ(errno, ESRCH);
 }
 
 TEST_F(SteamOSVirtualSessionTest, RejectsDuplicateOwnedSession) {
