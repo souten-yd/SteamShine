@@ -65,25 +65,26 @@ jobs:
       # snapshot before checkout so recursive submodule checkout is available.
       - name: Install checkout tool
         run: |
-          sed -i 's|^Server = .*|Server = https://archive.archlinux.org/repos/2025/06/30/$repo/os/$arch|' /etc/pacman.d/mirrorlist
+          sed -i "s|^Server = .*|Server = https://archive.archlinux.org/repos/2025/06/30/\$repo/os/\$arch|" /etc/pacman.d/mirrorlist
           pacman -Syy --noconfirm --noprogressbar
           pacman -S --noconfirm --needed --noprogressbar git
       - uses: actions/checkout@v4
         with:
           submodules: recursive
       - name: Install SteamOS 3.8 ABI build tools
+        shell: bash
         run: |
           # Refresh only the official Arch package signing keyring first.
           # The fixed archive snapshot is then verified with those keys.
-          sed -i 's|^Server = .*|Server = https://geo.mirror.pkgbuild.com/$repo/os/$arch|' /etc/pacman.d/mirrorlist
+          sed -i "s|^Server = .*|Server = https://geo.mirror.pkgbuild.com/\$repo/os/\$arch|" /etc/pacman.d/mirrorlist
           pacman -Syy --noconfirm --noprogressbar
           pacman -S --noconfirm --needed --noprogressbar archlinux-keyring
           pacman-key --init
           pacman-key --populate archlinux
           cp ci/steamos/mirrorlist /etc/pacman.d/mirrorlist
           pacman -Syy --noconfirm --noprogressbar
-          pacman -S --noconfirm --needed --noprogressbar --disable-download-timeout \
-            $(grep -Ev '^(#|$)' ci/steamos/packages.txt)
+          mapfile -t build_packages < <(grep -Ev '^(#|$)' ci/steamos/packages.txt)
+          pacman -S --noconfirm --needed --noprogressbar --disable-download-timeout "${build_packages[@]}"
           pacman -Q glibc gcc-libs qt6-base
       - name: Mark workspace as safe for CMake version discovery
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
@@ -137,10 +138,16 @@ jobs:
           tests/integration/test_steamshine_script.sh
       - name: Verify runtime linkage
         run: |
-          ! ldd cmake-build-steamos/sunshine | grep -E 'not found'
+          if ldd cmake-build-steamos/sunshine | grep -Eq 'not found'; then
+            echo 'Unresolved runtime dependency' >&2
+            exit 1
+          fi
           readelf -d cmake-build-steamos/sunshine
-          ! readelf --version-info cmake-build-steamos/sunshine | grep -E \
-            'GLIBC_2\.(4[2-9]|[5-9][0-9])|GLIBCXX_3\.4\.(3[5-9]|[4-9][0-9])|Qt_6\.(1[0-9]|[2-9][0-9])'
+          if readelf --version-info cmake-build-steamos/sunshine | grep -Eq \
+            'GLIBC_2\.(4[2-9]|[5-9][0-9])|GLIBCXX_3\.4\.(3[5-9]|[4-9][0-9])|Qt_6\.(1[0-9]|[2-9][0-9])'; then
+            echo 'Artifact references an ABI newer than SteamOS 3.8' >&2
+            exit 1
+          fi
       - name: Stage and package
         run: scripts/package-steamos-artifact.sh cmake-build-steamos dist
       - name: Smoke test immutable user-space installer
