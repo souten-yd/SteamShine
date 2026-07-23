@@ -6,6 +6,7 @@
 
 #if defined(__linux__)
   #include <cerrno>
+  #include <chrono>
   #include <cstdlib>
   #include <filesystem>
   #include <fstream>
