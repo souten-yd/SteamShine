@@ -35,7 +35,7 @@ mkdir -p "${test_root}/home/.config/steamshine" "${test_root}/home/.local/state/
 printf 'keep\n' >"${test_root}/home/.config/steamshine/sunshine.conf"
 printf 'keep\n' >"${test_root}/home/.local/state/steamshine/diagnostics.log"
 HOME="${test_root}/home" XDG_RUNTIME_DIR="${test_root}/home/run" \
-  "${root_dir}/steamshine.sh" uninstall --no-service --non-interactive --yes
+  "${root_dir}/steamshine.sh" uninstall --build-dir "${test_root}/cmake-build-steamos" --no-service --non-interactive --yes
 test ! -e "${test_root}/home/.local/bin/steamshine"
 test ! -e "${test_root}/home/.local/share/steamshine/current"
 test ! -d "${test_root}/home/.cache/steamshine"
