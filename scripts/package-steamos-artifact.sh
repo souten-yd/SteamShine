@@ -12,7 +12,13 @@ stage="$(mktemp -d)"
 trap 'rm -rf -- "${stage}"' EXIT
 mkdir -p "${stage}/bin" "${stage}/lib" "${stage}/share" "${stage}/scripts" "${stage}/systemd-user" "${output_dir}"
 install -m 755 "${binary}" "${stage}/bin/steamshine"
-install -m 755 "${root_dir}/scripts/diagnose-steamos-virtual-display.sh" "${root_dir}/scripts/test-steamos-virtual-display.sh" "${root_dir}/scripts/test-steamos-reconnect.sh" "${stage}/scripts/"
+install -m 755 \
+  "${root_dir}/scripts/diagnose-steamos-virtual-display.sh" \
+  "${root_dir}/scripts/test-steamos-virtual-display.sh" \
+  "${root_dir}/scripts/test-steamos-reconnect.sh" \
+  "${root_dir}/scripts/test-steamos-latency.sh" \
+  "${root_dir}/scripts/test-steamos-ssd-writes.sh" \
+  "${stage}/scripts/"
 install -m 644 "${root_dir}/LICENSE" "${stage}/LICENSE"
 install -m 644 "${root_dir}/packaging/linux/app-dev.lizardbyte.app.Sunshine.service.in" "${stage}/systemd-user/steamshine.service.in"
 ldd "${binary}" >"${stage}/RUNTIME_DEPENDENCIES.txt"

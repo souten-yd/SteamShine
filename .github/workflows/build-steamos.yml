@@ -143,6 +143,10 @@ jobs:
           test -f "${smoke_home}/.local/share/steamshine/current/RUNTIME_DEPENDENCIES.txt"
           test -f "${smoke_home}/.local/share/steamshine/current/systemd-user/steamshine.service.in"
           test -x "${smoke_home}/.local/share/steamshine/current/scripts/diagnose-steamos-virtual-display.sh"
+          test -x "${smoke_home}/.local/share/steamshine/current/scripts/test-steamos-virtual-display.sh"
+          test -x "${smoke_home}/.local/share/steamshine/current/scripts/test-steamos-reconnect.sh"
+          test -x "${smoke_home}/.local/share/steamshine/current/scripts/test-steamos-latency.sh"
+          test -x "${smoke_home}/.local/share/steamshine/current/scripts/test-steamos-ssd-writes.sh"
           HOME="${smoke_home}" XDG_RUNTIME_DIR="${smoke_home}/run" \
             ./steamshine.sh uninstall --non-interactive --yes --no-service
       - uses: actions/upload-artifact@v4
