@@ -18,7 +18,7 @@ die() { printf 'steamshine: %s\n' "$*" >&2; exit "${2:-1}"; }
 run() { if "${DRY_RUN}"; then printf '[dry-run]'; printf ' %q' "$@"; printf '\n'; else "$@"; fi; }
 usage() { cat <<'EOF'
 Usage: ./steamshine.sh <command> [options]
-Commands: menu check install build configure start stop restart status logs diagnose update repair uninstall bootstrap rollback hardware-test
+Commands: menu check compatibility-check install build configure start stop restart status logs diagnose update repair uninstall bootstrap rollback hardware-test
 Options: --non-interactive --yes --dry-run --verbose --quiet --force --no-start --no-build --no-packages --no-service --config PATH --prefix PATH --build-dir PATH --channel stable|nightly|pr --pr NUMBER --release TAG --artifact PATH --game-gpu ID --capture-gpu ID --encoder-gpu ID --gamescope-path PATH --default-width PX --default-height PX --default-fps FPS --log-file PATH --purge --remove-dependencies --clean --debug --release
 EOF
 }
@@ -145,6 +145,12 @@ stop() { run systemctl --user disable --now steamshine; }
 status() { systemctl --user status steamshine --no-pager; }
 logs() { journalctl --user -u steamshine --no-pager -n 200; }
 diagnose() { check; command -v gamescope >/dev/null && gamescope --version || true; pw-cli info 0 >/dev/null 2>&1 && say 'PipeWire reachable' || say 'PipeWire is not reachable'; }
+compatibility_check() {
+  check
+  local collector="${PREFIX}/share/steamshine/current/scripts/collect-steamos-runtime-baseline.sh"
+  [[ -x "${collector}" ]] || collector="${ROOT_DIR}/scripts/collect-steamos-runtime-baseline.sh"
+  "${collector}"
+}
 bootstrap() { install; "${NO_START}" || "${NO_SERVICE}" || start; "${DRY_RUN}" || diagnose; say 'SteamShine is ready'; }
 update() { git -C "${ROOT_DIR}" diff --quiet || die 'Uncommitted changes detected; update refused.'; run git -C "${ROOT_DIR}" fetch --all --prune; run git -C "${ROOT_DIR}" pull --ff-only; install; "${NO_START}" || start; }
 repair() { configure; "${NO_SERVICE}" || install_service; [[ -x "${PREFIX}/bin/steamshine" ]] || install; }
@@ -172,5 +178,5 @@ menu() { while true; do cat <<'EOF'
 6) Start  7) Stop  8) Status  9) Logs  10) Repair  11) Update  12) Uninstall  13) Purge  0) Exit
 EOF
 read -r -p '> ' choice; case "$choice" in 1) check;; 2) install_packages;; 3) build;; 4) configure;; 5) bootstrap;; 6) start;; 7) stop;; 8) status;; 9) logs;; 10) repair;; 11) update;; 12) uninstall;; 13) PURGE=true; uninstall;; 0) return;; *) say 'Invalid selection';; esac; done; }
-main() { require_bash; parse "$@"; if [[ -z "${COMMAND}" ]]; then [[ -t 0 && -t 1 ]] || { usage; exit "$EXIT_USAGE"; }; menu; return; fi; case "${COMMAND}" in menu) menu;; check) check;; install) install;; build) build;; configure) configure;; start) start;; stop) stop;; restart) stop; start;; status) status;; logs) logs;; diagnose) diagnose;; update) update;; repair) repair;; uninstall) uninstall;; bootstrap) bootstrap;; rollback) rollback;; hardware-test) hardware_test;; *) usage; exit "$EXIT_USAGE";; esac; }
+main() { require_bash; parse "$@"; if [[ -z "${COMMAND}" ]]; then [[ -t 0 && -t 1 ]] || { usage; exit "$EXIT_USAGE"; }; menu; return; fi; case "${COMMAND}" in menu) menu;; check) check;; compatibility-check) compatibility_check;; install) install;; build) build;; configure) configure;; start) start;; stop) stop;; restart) stop; start;; status) status;; logs) logs;; diagnose) diagnose;; update) update;; repair) repair;; uninstall) uninstall;; bootstrap) bootstrap;; rollback) rollback;; hardware-test) hardware_test;; *) usage; exit "$EXIT_USAGE";; esac; }
 main "$@"
