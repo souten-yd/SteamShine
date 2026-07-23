@@ -103,6 +103,28 @@ namespace steamos_virtual_session {
 #endif
 
     /**
+     * @brief Return a failed manager to a reusable state while holding its mutex.
+     *
+     * Only the saved process group and per-session runtime directory are
+     * touched, so a failed SteamShine launch cannot affect a user's unrelated
+     * Gamescope or desktop session.
+     */
+    void recover_failed_session_locked() {
+#if defined(__linux__)
+      if (manager.process_group > 0) {
+        stop_owned_process_group(manager.process_group, std::chrono::seconds {config::steamos_virtual_display.shutdown_timeout_seconds});
+      }
+      manager.process_group = -1;
+#endif
+      std::error_code error;
+      std::filesystem::remove_all(manager.runtime_directory, error);
+      manager.runtime_directory.clear();
+      manager.render_node.clear();
+      manager.stream_requested = false;
+      manager.current = config::steamos_virtual_display.enabled ? state_e::Idle : state_e::Disabled;
+    }
+
+    /**
      * @brief Read one trimmed sysfs attribute without invoking external tools.
      *
      * @param path Sysfs attribute path.
@@ -352,6 +374,11 @@ namespace steamos_virtual_session {
     manager.current = state_e::Disabled;
     return false;
 #else
+    if (manager.current == state_e::Failed) {
+      manager.current = state_e::Recovering;
+      recover_failed_session_locked();
+      BOOST_LOG(info) << "SteamOS virtual display recovery completed";
+    }
     if (manager.current != state_e::Idle && manager.current != state_e::Disabled) {
       error = "A SteamShine virtual display session is already active";
       return false;
@@ -541,12 +568,7 @@ namespace steamos_virtual_session {
     }
 #endif
     manager.current = state_e::Recovering;
-    std::error_code ec;
-    std::filesystem::remove_all(manager.runtime_directory, ec);
-    manager.runtime_directory.clear();
-    manager.render_node.clear();
-    manager.stream_requested = false;
-    manager.current = config::steamos_virtual_display.enabled ? state_e::Idle : state_e::Disabled;
+    recover_failed_session_locked();
   }
 
   state_e state() {

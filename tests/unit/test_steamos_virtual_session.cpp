@@ -188,6 +188,20 @@ TEST_F(SteamOSVirtualSessionTest, CleansUpAfterGamescopeStartupTimeout) {
   EXPECT_FALSE(std::filesystem::exists(session_directory));
 }
 
+TEST_F(SteamOSVirtualSessionTest, RecoversForReconnectAfterGamescopeStartupFailure) {
+  config::steamos_virtual_display.gamescope_path = make_fake_gamescope(root, "crash-before-ready").string();
+  rtsp_stream::launch_session_t launch {};
+  launch.id = 13;
+  std::string error;
+  ASSERT_FALSE(steamos_virtual_session::prepare(launch, error));
+  EXPECT_EQ(steamos_virtual_session::state(), steamos_virtual_session::state_e::Failed);
+
+  config::steamos_virtual_display.gamescope_path = make_fake_gamescope(root).string();
+  error.clear();
+  EXPECT_TRUE(steamos_virtual_session::prepare(launch, error)) << error;
+  EXPECT_EQ(steamos_virtual_session::state(), steamos_virtual_session::state_e::WaitingForCapture);
+}
+
 TEST_F(SteamOSVirtualSessionTest, RejectsRegularFileInsteadOfWaylandSocket) {
   config::steamos_virtual_display.gamescope_path = make_fake_gamescope(root, "invalid-socket").string();
   config::steamos_virtual_display.startup_timeout_seconds = 1;
