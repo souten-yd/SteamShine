@@ -83,12 +83,12 @@ jobs:
           FORCE_FULL: ${{ github.ref == 'refs/heads/master' || inputs.full_validation }}
         run: |
           set -euo pipefail
-          # A synchronized pull request is an incremental validation: the prior
-          # head has already passed its own layer. Comparing the head commit to
-          # its parent lets a docs-only follow-up stay docs-only instead of
-          # rebuilding the cumulative pull request. First commits and unknown
-          # history fail closed below when their parent cannot be read.
-          base_sha="${HEAD_SHA}^"
+          # Compare the entire pull-request delta, not only HEAD^: concurrency
+          # may cancel a full C++ validation between two pushes. A later shell
+          # or documentation commit must not hide the unvalidated runtime
+          # change that remains in the PR. Documentation-only PRs still use
+          # the fast layer; any cumulative runtime change fails closed to full.
+          base_sha="${{ github.event.pull_request.base.sha || github.event.before }}"
           if ! git cat-file -e "${base_sha}^{commit}" 2>/dev/null; then
             base_sha="${HEAD_SHA}"
           fi
