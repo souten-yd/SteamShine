@@ -48,6 +48,7 @@ namespace steamos_virtual_session {
       std::atomic_uint64_t encoded_packets {0};  ///< Encoded packets emitted during the owned session.
       std::atomic_uint64_t encoded_bytes {0};  ///< Encoded payload bytes emitted during the owned session.
       std::atomic_uint64_t idr_packets {0};  ///< IDR packets emitted during the owned session.
+      std::atomic_uint64_t captured_frames {0};  ///< Wayland DMA-BUF frames acquired for the owned session.
 #if defined(__linux__)
       pid_t process_group {-1};  ///< Process group containing Gamescope and its children.
 #endif
@@ -537,6 +538,7 @@ namespace steamos_virtual_session {
     manager.encoded_packets.store(0, std::memory_order_relaxed);
     manager.encoded_bytes.store(0, std::memory_order_relaxed);
     manager.idr_packets.store(0, std::memory_order_relaxed);
+    manager.captured_frames.store(0, std::memory_order_relaxed);
     std::error_code ec;
     std::filesystem::create_directories(manager.runtime_directory, ec);
     if (ec) {
@@ -685,6 +687,12 @@ namespace steamos_virtual_session {
     }
   }
 
+  void mark_captured_frame() {
+    if (manager.packet_tracking.load(std::memory_order_acquire)) {
+      manager.captured_frames.fetch_add(1, std::memory_order_relaxed);
+    }
+  }
+
   bool application_environment(std::string &runtime_directory, std::string &wayland_display) {
     std::scoped_lock lock {manager.mutex};
     if (manager.runtime_directory.empty() || (manager.current != state_e::WaitingForCapture && manager.current != state_e::Ready && manager.current != state_e::Streaming)) {
@@ -750,7 +758,8 @@ namespace steamos_virtual_session {
       BOOST_LOG(info) << "SteamOS virtual display stopping owned Gamescope session";
       BOOST_LOG(info) << "SteamOS virtual display encoded packets=" << manager.encoded_packets.load(std::memory_order_relaxed)
                       << " bytes=" << manager.encoded_bytes.load(std::memory_order_relaxed)
-                      << " idr=" << manager.idr_packets.load(std::memory_order_relaxed);
+                      << " idr=" << manager.idr_packets.load(std::memory_order_relaxed)
+                      << " captured_frames=" << manager.captured_frames.load(std::memory_order_relaxed);
       stop_owned_process_group(manager.process_group, std::chrono::seconds {config::steamos_virtual_display.shutdown_timeout_seconds});
       manager.process_group = -1;
     }

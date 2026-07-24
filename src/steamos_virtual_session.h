@@ -76,6 +76,15 @@ namespace steamos_virtual_session {
   void mark_encoded_packet(size_t bytes, bool idr);
 
   /**
+   * @brief Record one successfully acquired Wayland DMA-BUF frame.
+   *
+   * This lock-free counter is maintained only while the owned session is
+   * streaming. It supplies final acceptance evidence without file I/O on the
+   * capture thread.
+   */
+  void mark_captured_frame();
+
+  /**
    * @brief Return the owned Wayland environment for the application launcher.
    *
    * The values are available only after Gamescope has passed readiness. Callers

@@ -19,7 +19,7 @@ if [[ -n "${COMMAND_PATH:-}" ]]; then
 fi
 
 write_summary() {
-  local result="$1" capture_event=false streaming_event=false cleanup_event=false metrics packets bytes idr
+  local result="$1" capture_event=false streaming_event=false cleanup_event=false metrics packets bytes idr captured_frames
   grep -Rqs 'SteamOS virtual display capture attached' "${report_dir}"/service-*.log 2>/dev/null && capture_event=true
   grep -Rqs 'SteamOS virtual display streaming started' "${report_dir}"/service-*.log 2>/dev/null && streaming_event=true
   grep -Rqs 'SteamOS virtual display stopping owned Gamescope session' "${report_dir}"/service-*.log 2>/dev/null && cleanup_event=true
@@ -27,9 +27,11 @@ write_summary() {
   packets="$(sed -n 's/.*encoded packets=\([0-9][0-9]*\).*/\1/p' <<<"${metrics}")"
   bytes="$(sed -n 's/.* bytes=\([0-9][0-9]*\).*/\1/p' <<<"${metrics}")"
   idr="$(sed -n 's/.* idr=\([0-9][0-9]*\).*/\1/p' <<<"${metrics}")"
+  captured_frames="$(sed -n 's/.* captured_frames=\([0-9][0-9]*\).*/\1/p' <<<"${metrics}")"
   [[ -n "${packets}" ]] || packets=null
   [[ -n "${bytes}" ]] || bytes=null
   [[ -n "${idr}" ]] || idr=null
+  [[ -n "${captured_frames}" ]] || captured_frames=null
   cat >"${report_dir}/hardware-report.json" <<EOF
 {
   "started_at": "${test_started}",
@@ -42,7 +44,8 @@ write_summary() {
   "encoded_packet_count": ${packets},
   "encoded_bytes": ${bytes},
   "idr_frame_count": ${idr},
-  "note": "Packet counters are emitted once during owned-session cleanup; null means no completed live stream was observed."
+  "captured_frame_count": ${captured_frames},
+  "note": "Frame and packet counters are emitted once during owned-session cleanup; null means no completed live stream was observed."
 }
 EOF
 }
@@ -54,7 +57,7 @@ trap 'result=$?; write_summary "$( ((result == 0)) && printf pass || printf fail
 # can never satisfy the hardware acceptance test. $1 is the post-disconnect
 # journal label. Returns zero only when packets, bytes, and an IDR are present.
 require_encoded_stream_evidence() {
-  local label="$1" journal metrics packets bytes idr
+  local label="$1" journal metrics packets bytes idr captured_frames
   journal="${report_dir}/service-${label}.log"
   [[ -r "${journal}" ]] || {
     echo "FAIL: no SteamShine service evidence for ${label}" | tee -a "${report}"
@@ -64,12 +67,13 @@ require_encoded_stream_evidence() {
   packets="$(sed -n 's/.*encoded packets=\([0-9][0-9]*\).*/\1/p' <<<"${metrics}")"
   bytes="$(sed -n 's/.* bytes=\([0-9][0-9]*\).*/\1/p' <<<"${metrics}")"
   idr="$(sed -n 's/.* idr=\([0-9][0-9]*\).*/\1/p' <<<"${metrics}")"
-  if [[ ! "${packets}" =~ ^[1-9][0-9]*$ || ! "${bytes}" =~ ^[1-9][0-9]*$ || ! "${idr}" =~ ^[1-9][0-9]*$ ]]; then
-    echo "FAIL: ${label} has no encoded packet, byte, and IDR evidence" | tee -a "${report}"
+  captured_frames="$(sed -n 's/.* captured_frames=\([0-9][0-9]*\).*/\1/p' <<<"${metrics}")"
+  if [[ ! "${packets}" =~ ^[1-9][0-9]*$ || ! "${bytes}" =~ ^[1-9][0-9]*$ || ! "${idr}" =~ ^[1-9][0-9]*$ || ! "${captured_frames}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "FAIL: ${label} has no captured-frame, packet, byte, and IDR evidence" | tee -a "${report}"
     return 1
   fi
-  printf '%s\t%s\t%s\t%s\n' "${label}" "${packets}" "${bytes}" "${idr}" >>"${report_dir}/encoded-stream-evidence.tsv"
-  printf 'encoded_stream_evidence=%s packets=%s bytes=%s idr=%s\n' "${label}" "${packets}" "${bytes}" "${idr}" | tee -a "${report}"
+  printf '%s\t%s\t%s\t%s\t%s\n' "${label}" "${captured_frames}" "${packets}" "${bytes}" "${idr}" >>"${report_dir}/encoded-stream-evidence.tsv"
+  printf 'encoded_stream_evidence=%s captured_frames=%s packets=%s bytes=%s idr=%s\n' "${label}" "${captured_frames}" "${packets}" "${bytes}" "${idr}" | tee -a "${report}"
 }
 
 owned_session_directories() {
@@ -105,9 +109,59 @@ owned_gamescope_report() {
   local pid pgid command
   while IFS= read -r pid; do
     pgid="$(ps -o pgid= -p "${pid}" 2>/dev/null | tr -d ' ' || true)"
-    command="$(tr '\0' ' ' <"${PROC_ROOT:-/proc}/${pid}/cmdline" 2>/dev/null || true)"
+    if [[ -r "${PROC_ROOT:-/proc}/${pid}/cmdline" ]]; then
+      command="$(tr '\0' ' ' <"${PROC_ROOT:-/proc}/${pid}/cmdline" 2>/dev/null || true)"
+    else
+      command=unknown
+    fi
     printf 'owned_gamescope_pid=%s pgid=%s command=%s\n' "${pid}" "${pgid:-unknown}" "${command:-unknown}"
   done < <(owned_gamescope_processes)
+}
+
+# Require the private runtime/socket/process evidence while Moonlight remains
+# connected. Journal messages alone can be stale or refer to a different
+# desktop session, so they are not sufficient proof that SteamShine owns the
+# headless display currently being streamed.
+require_owned_virtual_session_evidence() {
+  local label="$1" directory socket proc_root pid session_count=0 process_count=0
+  proc_root="${PROC_ROOT:-/proc}"
+  while IFS= read -r directory; do
+    [[ -n "${directory}" ]] || continue
+    session_count=$((session_count + 1))
+    socket="${directory}/gamescope-0"
+    if [[ ! -S "${socket}" ]]; then
+      echo "FAIL: ${label} owned runtime has no private Gamescope Wayland socket: ${socket}" | tee -a "${report}"
+      return 1
+    fi
+    printf 'owned_runtime=%s owned_wayland_socket=%s\n' "${directory}" "${socket}" >>"${report_dir}/owned-session-evidence.tsv"
+  done < <(owned_session_directories)
+  if ((session_count == 0)); then
+    echo "FAIL: ${label} has no marker-owned SteamShine virtual runtime" | tee -a "${report}"
+    return 1
+  fi
+  while IFS= read -r pid; do
+    [[ -n "${pid}" && -d "${proc_root}/${pid}" ]] || continue
+    process_count=$((process_count + 1))
+    printf 'owned_gamescope_pid=%s\n' "${pid}" >>"${report_dir}/owned-session-evidence.tsv"
+  done < <(owned_gamescope_processes)
+  if ((process_count == 0)); then
+    echo "FAIL: ${label} has no live process using the owned virtual runtime" | tee -a "${report}"
+    return 1
+  fi
+  printf 'owned_session_evidence=%s sessions=%s processes=%s\n' "${label}" "${session_count}" "${process_count}" | tee -a "${report}"
+}
+
+# The hook is intentionally inert in normal installations. Shell integration
+# tests set both variables to model an owned socket appearing at connect time
+# and disappearing at disconnect time without a GPU or Gamescope daemon.
+run_test_event_hook() {
+  local event="$1"
+  [[ "${STEAMSHINE_TEST_MODE:-}" == 1 && -n "${STEAMSHINE_TEST_EVENT_HOOK:-}" ]] || return 0
+  [[ -x "${STEAMSHINE_TEST_EVENT_HOOK}" ]] || {
+    echo "FAIL: STEAMSHINE_TEST_EVENT_HOOK is not executable" | tee -a "${report}"
+    return 1
+  }
+  "${STEAMSHINE_TEST_EVENT_HOOK}" "${event}" "${runtime_dir}" "${PROC_ROOT:-/proc}"
 }
 
 collect_service_evidence() {
@@ -167,10 +221,12 @@ echo 'Vulkan Video H.264 preflight passed; verify actual IDR/bitstream output du
 for attempt in $(seq 1 10); do
   echo "Attempt ${attempt}: connect Moonlight now, then press Enter once the stream is established."
   read -r
+  run_test_event_hook "connected-${attempt}"
   collect "connected-${attempt}"
+  require_owned_virtual_session_evidence "connected-${attempt}"
   if [[ "${attempt}" -eq 1 ]]; then
     echo "Keep Moonlight connected for ${sample_seconds} seconds while latency and SteamShine write counters are collected."
-    STEAMSHINE_HARDWARE_REPORT_DIR="${report_dir}" "${script_dir}/test-steamos-latency.sh" &
+    STEAMSHINE_HARDWARE_REPORT_DIR="${report_dir}" "${script_dir}/test-steamos-latency.sh" "${sample_seconds}" &
     latency_process=$!
     STEAMSHINE_HARDWARE_REPORT_DIR="${report_dir}" "${script_dir}/test-steamos-ssd-writes.sh" "${sample_seconds}" &
     writes_process=$!
@@ -179,6 +235,7 @@ for attempt in $(seq 1 10); do
   fi
   echo "Attempt ${attempt}: disconnect Moonlight now, then press Enter after cleanup."
   read -r
+  run_test_event_hook "disconnected-${attempt}"
   collect "disconnected-${attempt}"
   require_encoded_stream_evidence "disconnected-${attempt}"
   if owned_gamescope_processes | grep -q .; then echo "FAIL: owned Gamescope remains" | tee -a "${report}"; exit 1; fi

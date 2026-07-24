@@ -201,6 +201,8 @@ test -f "${test_root}/home/.local/state/steamshine/diagnostics.log"
 proc_root="${PROC_ROOT}"
 steamos_fixture_write_proc_io 101 28672 4
 steamos_fixture_write_proc_io 202 4096 2
+printf '101 (steamshine) S 0 0 0 0 0 0 0 0 0 0 10 5\n' >"${proc_root}/101/stat"
+printf 'VmRSS:\t4096 kB\nvoluntary_ctxt_switches:\t2\nnonvoluntary_ctxt_switches:\t1\n' >"${proc_root}/101/status"
 mkdir -p "${test_root}/hardware-bin"
 cat >"${test_root}/hardware-bin/pgrep" <<'EOF'
 #!/usr/bin/env bash
@@ -215,7 +217,7 @@ cat >"${test_root}/hardware-bin/journalctl" <<'EOF'
 printf '%s\n' 'SteamOS virtual display capture attached'
 printf '%s\n' 'SteamOS virtual display streaming started'
 printf '%s\n' 'SteamOS virtual display stopping owned Gamescope session'
-printf '%s\n' 'SteamOS virtual display encoded packets=42 bytes=8192 idr=1'
+printf '%s\n' 'SteamOS virtual display encoded packets=42 bytes=8192 idr=1 captured_frames=60'
 EOF
 chmod 755 "${test_root}/hardware-bin/journalctl"
 cat >"${test_root}/hardware-bin/gamescope" <<'EOF'
@@ -239,8 +241,9 @@ grep -Fq 'write_bytes=32768' "${hardware_report}/ssd-writes.log"
 grep -Fq 'delta write_bytes=0' "${hardware_report}/ssd-writes.log"
 grep -Fq 'journal_bytes=' "${hardware_report}/ssd-writes.log"
 PATH="${test_root}/hardware-bin:${PATH}" STEAMSHINE_HARDWARE_REPORT_DIR="${hardware_report}" \
-  "${root_dir}/scripts/test-steamos-latency.sh"
+  PROC_ROOT="${proc_root}" "${root_dir}/scripts/test-steamos-latency.sh" 0
 grep -Fq 'pidstat unavailable' "${hardware_report}/latency.log"
+grep -Fq 'proc_cpu_delta pid=101 cpu_ticks=0' "${hardware_report}/latency.log"
 
 # The interactive harness must preserve evidence even where the SteamOS image
 # omits optional diagnostic programs.  The fake binary accepts the encoder
@@ -252,11 +255,43 @@ EOF
 chmod 755 "${test_root}/hardware-bin/steamshine"
 hardware_acceptance_report="${test_root}/hardware-acceptance-report"
 acceptance_input="${test_root}/acceptance-input"
+cat >"${test_root}/hardware-bin/event-hook" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+event="$1"
+runtime_dir="$2"
+proc_root="$3"
+session="${runtime_dir}/session-fixture"
+if [[ "${event}" == connected-* ]]; then
+  mkdir -p "${session}" "${proc_root}/101"
+  printf '%s\n' 'steamshine-steamos-virtual-session-v1' >"${session}/steamshine-owner"
+  python3 - "${session}/gamescope-0" <<'PY' &
+import signal
+import socket
+import sys
+path = sys.argv[1]
+sock = socket.socket(socket.AF_UNIX)
+sock.bind(path)
+sock.listen()
+signal.pause()
+PY
+  echo "$!" >"${session}/socket.pid"
+  for _ in $(seq 1 20); do [[ -S "${session}/gamescope-0" ]] && break; sleep 0.01; done
+  printf 'XDG_RUNTIME_DIR=%s\0' "${session}" >"${proc_root}/101/environ"
+else
+  if [[ -r "${session}/socket.pid" ]]; then kill "$(<"${session}/socket.pid")" 2>/dev/null || true; fi
+  rm -rf -- "${session}" "${proc_root}/101"
+fi
+EOF
+chmod 755 "${test_root}/hardware-bin/event-hook"
 for _ in $(seq 1 20); do printf '\n'; done >"${acceptance_input}"
 for _ in video audio keyboard mouse gamepad; do printf 'y\n'; done >>"${acceptance_input}"
 HOME="${test_root}/home" XDG_RUNTIME_DIR="${test_root}/home/run" PATH="${test_root}/hardware-bin:${PATH}" \
   STEAMSHINE_BINARY="${test_root}/hardware-bin/steamshine" STEAMSHINE_HARDWARE_REPORT_DIR="${hardware_acceptance_report}" \
-  STEAMSHINE_HARDWARE_SAMPLE_SECONDS=0 "${root_dir}/scripts/test-steamos-virtual-display.sh" <"${acceptance_input}"
+  STEAMSHINE_HARDWARE_SAMPLE_SECONDS=0 STEAMSHINE_TEST_MODE=1 STEAMSHINE_TEST_EVENT_HOOK="${test_root}/hardware-bin/event-hook" \
+  "${root_dir}/scripts/test-steamos-virtual-display.sh" <"${acceptance_input}"
 grep -Fq '"result": "pass"' "${hardware_acceptance_report}/hardware-report.json"
 grep -Fq '"connect_disconnect_cycles": 10' "${hardware_acceptance_report}/hardware-report.json"
 test "$(wc -l <"${hardware_acceptance_report}/encoded-stream-evidence.tsv")" -eq 10
+grep -Fq '"captured_frame_count": 60' "${hardware_acceptance_report}/hardware-report.json"
+test "$(grep -c '^owned_session_evidence=connected-' "${hardware_acceptance_report}/virtual-display.log")" -eq 10

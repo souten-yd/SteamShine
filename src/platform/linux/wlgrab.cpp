@@ -235,6 +235,7 @@ namespace wl {
             }
             break;
           case platf::capture_e::ok:
+            steamos_virtual_session::mark_captured_frame();
             if (!push_captured_image_cb(std::move(img_out), true)) {
               return platf::capture_e::ok;
             }
@@ -401,6 +402,7 @@ namespace wl {
             }
             break;
           case platf::capture_e::ok:
+            steamos_virtual_session::mark_captured_frame();
             if (!push_captured_image_cb(std::move(img_out), true)) {
               return platf::capture_e::ok;
             }
