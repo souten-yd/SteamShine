@@ -583,7 +583,7 @@ namespace steamos_virtual_session {
       }
       if (owned_wayland_socket_exists(socket)) {
         manager.current = state_e::WaitingForCapture;
-        BOOST_LOG(info) << "SteamOS virtual display socket ready: " << width << 'x' << height << '@' << fps << " on AMD PCI " << manager.pci_bdf << " (" << manager.render_node << ')';
+        BOOST_LOG(info) << "SteamOS virtual display socket ready: " << request.width << 'x' << request.height << '@' << request.fps << " on AMD PCI " << manager.pci_bdf << " (" << manager.render_node << ')';
         return true;
       }
       std::this_thread::sleep_for(std::chrono::milliseconds {50});
