@@ -91,7 +91,9 @@ namespace steamos_virtual_session {
           break;
         }
         const auto name {entry.path().filename().string()};
-        if (name.empty() || !std::all_of(name.begin(), name.end(), [](unsigned char character) { return std::isdigit(character); })) {
+        if (name.empty() || !std::all_of(name.begin(), name.end(), [](unsigned char character) {
+              return std::isdigit(character);
+            })) {
           continue;
         }
         std::ifstream environment {entry.path() / "environ", std::ios::binary};
