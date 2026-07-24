@@ -135,6 +135,9 @@ jobs:
           set -euo pipefail
           cd "${GITHUB_WORKSPACE}"
           mode='${{ needs.classify-changes.outputs.mode }}'
+          if [[ "${mode}" == docs ]]; then
+            git diff --check HEAD^ HEAD
+          fi
           if [[ "${mode}" == shell ]]; then
             shellcheck steamshine.sh scripts/*.sh tests/fixtures/steamos/fixture.sh tests/integration/test_steamshine_script.sh
             actionlint .github/workflows/build-steamos.yml .github/workflows/build-ci-image.yml
