@@ -641,6 +641,12 @@ namespace steamos_virtual_session {
       return;
     }
     const auto base {runtime_base()};
+    const auto *runtime_root_value {std::getenv("XDG_RUNTIME_DIR")};
+    const auto runtime_root {runtime_root_value ? std::filesystem::path {runtime_root_value} : std::filesystem::path {}};
+    if (base.empty() || runtime_root.empty() || !std::filesystem::is_directory(runtime_root) || !path_is_within_runtime_root(base, runtime_root)) {
+      BOOST_LOG(warning) << "SteamOS virtual display refused orphan cleanup outside XDG_RUNTIME_DIR";
+      return;
+    }
     std::error_code error;
     for (const auto &entry : std::filesystem::directory_iterator {base, error}) {
       if (error || !entry.is_directory(error) || entry.is_symlink(error) || !entry.path().filename().string().starts_with("session-")) {

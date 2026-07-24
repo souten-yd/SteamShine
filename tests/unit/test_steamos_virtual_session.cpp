@@ -183,6 +183,21 @@ TEST_F(SteamOSVirtualSessionTest, CleansOnlyMarkedOrphanRuntimeDirectories) {
   EXPECT_TRUE(std::filesystem::exists(foreign));
 }
 
+TEST_F(SteamOSVirtualSessionTest, DoesNotCleanOrphansOutsideUserRuntime) {
+  const auto external_base {root / "external-runtime"};
+  const auto external_owned {external_base / "session-orphan"};
+  std::filesystem::create_directories(external_owned);
+  {
+    std::ofstream marker {external_owned / "steamshine-owner"};
+    marker << "steamshine-steamos-virtual-session-v1\n";
+  }
+  config::steamos_virtual_display.runtime_directory = external_base.string();
+
+  steamos_virtual_session::cleanup_orphan_sessions();
+
+  EXPECT_TRUE(std::filesystem::exists(external_owned));
+}
+
 TEST_F(SteamOSVirtualSessionTest, GamescopeArgumentsUseAdvertisedHeadlessBackendAndFitPolicy) {
   std::string error;
   const auto arguments {steamos_virtual_session::gamescope_arguments("--backend headless --nested-width --nested-height --nested-refresh --expose-wayland --scaler --hdr-enabled --prefer-vk-device", 2560, 1440, 120, true, "1002:744c", error)};
