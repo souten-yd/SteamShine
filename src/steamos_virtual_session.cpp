@@ -35,6 +35,10 @@
 #endif
 
 namespace steamos_virtual_session {
+  /**
+   * @brief Name of the Wayland socket exposed by a headless Gamescope server.
+   */
+  constexpr std::string_view gamescope_wayland_display {"gamescope-0"};
   namespace {
     struct manager_t {
       std::mutex mutex;  ///< Serializes virtual-session state transitions.
@@ -572,7 +576,7 @@ namespace steamos_virtual_session {
       manager.current = state_e::Failed;
       return false;
     }
-    const auto socket {manager.runtime_directory / "wayland-0"};
+    const auto socket {manager.runtime_directory / gamescope_wayland_display};
     {
       std::ofstream marker {manager.runtime_directory / owner_marker_name.data(), std::ios::binary | std::ios::trunc};
       marker << owner_marker_contents;
@@ -590,6 +594,12 @@ namespace steamos_virtual_session {
       const auto path {config::steamos_virtual_display.gamescope_path};
       const auto runtime {manager.runtime_directory.string()};
       ::setenv("XDG_RUNTIME_DIR", runtime.c_str(), 1);
+      // A headless Gamescope owns its Wayland server.  Inheriting the desktop
+      // display name makes Gamescope try to connect to a non-existent parent
+      // socket below this private runtime directory before it starts that
+      // server.
+      ::unsetenv("WAYLAND_DISPLAY");
+      ::unsetenv("DISPLAY");
       std::vector<char *> argv;
       argv.reserve(arguments.size() + 5);
       argv.push_back(const_cast<char *>(path.c_str()));
@@ -687,13 +697,13 @@ namespace steamos_virtual_session {
       return false;
     }
     runtime_directory = manager.runtime_directory.string();
-    wayland_display = "wayland-0";
+    wayland_display = std::string {gamescope_wayland_display};
     return true;
   }
 
   bool capture_socket(std::string &socket_path) {
     std::scoped_lock lock {manager.mutex};
-    const auto socket {manager.runtime_directory / "wayland-0"};
+    const auto socket {manager.runtime_directory / gamescope_wayland_display};
     if (manager.runtime_directory.empty() || (manager.current != state_e::WaitingForCapture && manager.current != state_e::Ready && manager.current != state_e::Streaming) || !owned_wayland_socket_exists(socket)) {
       return false;
     }

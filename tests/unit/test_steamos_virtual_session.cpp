@@ -61,7 +61,7 @@ namespace {
       return executable;
     }
     if (mode == "invalid-socket") {
-      output << "touch \"$XDG_RUNTIME_DIR/wayland-0\"\n";
+      output << "touch \"$XDG_RUNTIME_DIR/gamescope-0\"\n";
       output << "trap 'exit 0' TERM INT\n";
       output << "while :; do sleep 1; done\n";
       output.close();
@@ -71,7 +71,7 @@ namespace {
     if (mode == "delayed-ready") {
       output << "sleep 1\n";
     }
-    output << "python3 -c 'import os, socket, signal, sys; p=os.path.join(os.environ[\"XDG_RUNTIME_DIR\"], \"wayland-0\"); s=socket.socket(socket.AF_UNIX); s.bind(p); s.listen(); signal.signal(signal.SIGTERM, lambda *_: sys.exit(0)); signal.signal(signal.SIGINT, lambda *_: sys.exit(0)); [signal.pause() for _ in iter(int, 1)]' &\n";
+    output << "python3 -c 'import os, socket, signal, sys; p=os.path.join(os.environ[\"XDG_RUNTIME_DIR\"], \"gamescope-0\"); s=socket.socket(socket.AF_UNIX); s.bind(p); s.listen(); signal.signal(signal.SIGTERM, lambda *_: sys.exit(0)); signal.signal(signal.SIGINT, lambda *_: sys.exit(0)); [signal.pause() for _ in iter(int, 1)]' &\n";
     output << "socket_child=$!\n";
     if (mode == "leave-child") {
       output << "sh -c 'trap \"\" TERM INT; while :; do sleep 1; done' &\n";
@@ -201,7 +201,7 @@ TEST_F(SteamOSVirtualSessionTest, FakeGamescopeReadinessAndCleanup) {
   EXPECT_TRUE(steamos_virtual_session::application_environment(runtime_directory, wayland_display));
   const auto expected_runtime_directory {std::filesystem::path {config::steamos_virtual_display.runtime_directory} / ("session-" + std::to_string(::getpid()) + "-42")};
   EXPECT_EQ(runtime_directory, expected_runtime_directory.string());
-  EXPECT_EQ(wayland_display, "wayland-0");
+  EXPECT_EQ(wayland_display, "gamescope-0");
   std::ifstream arguments_file {std::filesystem::path {runtime_directory} / "gamescope-arguments"};
   const std::string arguments {(std::istreambuf_iterator<char> {arguments_file}), std::istreambuf_iterator<char> {}};
   EXPECT_NE(arguments.find("--backend\nheadless\n"), std::string::npos);
