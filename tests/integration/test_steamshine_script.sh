@@ -19,12 +19,14 @@ fi
 # VA-API is optional, but the compatibility report must identify the AMD driver
 # by its actual radeonsi filename and never mistake an Intel i965 driver for it.
 touch "${fake_dri}/i965_drv_video.so"
-if STEAMSHINE_DRI_ROOTS="${fake_dri}" "${root_dir}/steamshine.sh" compatibility-check 2>&1 | grep -Fq 'VAAPI_AMD_DRIVER_AVAILABLE'; then
+vaapi_output="$(STEAMSHINE_DRI_ROOTS="${fake_dri}" "${root_dir}/steamshine.sh" compatibility-check 2>&1)"
+if grep -Fq 'VAAPI_AMD_DRIVER_AVAILABLE' <<<"${vaapi_output}"; then
   echo 'An Intel-only VA-API directory was misidentified as AMD radeonsi.' >&2
   exit 1
 fi
 touch "${fake_dri}/radeonsi_drv_video.so"
-STEAMSHINE_DRI_ROOTS="${fake_dri}" "${root_dir}/steamshine.sh" compatibility-check 2>&1 | grep -Fq 'VAAPI_AMD_DRIVER_AVAILABLE'
+vaapi_output="$(STEAMSHINE_DRI_ROOTS="${fake_dri}" "${root_dir}/steamshine.sh" compatibility-check 2>&1)"
+grep -Fq 'VAAPI_AMD_DRIVER_AVAILABLE' <<<"${vaapi_output}"
 
 "${root_dir}/steamshine.sh" --help >/dev/null
 if "${root_dir}/steamshine.sh" </dev/null >/dev/null 2>&1; then
@@ -138,7 +140,8 @@ printf 'write_bytes: 28672\ncancelled_write_bytes: 0\nsyscw: 4\n' >"${proc_root}
 printf 'write_bytes: 4096\ncancelled_write_bytes: 0\nsyscw: 2\n' >"${proc_root}/202/io"
 cat >"${test_root}/hardware-bin/pgrep" <<'EOF'
 #!/usr/bin/env bash
-printf '101\n202\n'
+# Include a vanished PID without an io file; collection must skip it safely.
+printf '101\n202\n303\n'
 EOF
 chmod 755 "${test_root}/hardware-bin/pgrep"
 hardware_report="${test_root}/hardware-report"
