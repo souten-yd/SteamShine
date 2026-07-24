@@ -56,6 +56,7 @@ namespace steamos_virtual_session {
 
     constexpr std::string_view owner_marker_name {"steamshine-owner"};
     constexpr std::string_view owner_marker_contents {"steamshine-steamos-virtual-session-v1\n"};
+    constexpr std::string_view gamescope_pid_name {"gamescope.pid"};
 
     /**
      * @brief Check that a path is a UNIX-domain socket.
@@ -606,6 +607,18 @@ namespace steamos_virtual_session {
       return false;
     }
     manager.process_group = child;
+    {
+      std::ofstream pid_file {manager.runtime_directory / gamescope_pid_name.data(), std::ios::trunc};
+      pid_file << child << '\n';
+      if (!pid_file) {
+        stop_owned_process_group(manager.process_group, std::chrono::seconds {config::steamos_virtual_display.shutdown_timeout_seconds});
+        manager.process_group = -1;
+        std::filesystem::remove_all(manager.runtime_directory, ec);
+        error = "Failed to record owned Gamescope process identity";
+        manager.current = state_e::Failed;
+        return false;
+      }
+    }
     manager.current = state_e::WaitingForDisplay;
     const auto deadline {std::chrono::steady_clock::now() + std::chrono::seconds {config::steamos_virtual_display.startup_timeout_seconds}};
     while (std::chrono::steady_clock::now() < deadline) {

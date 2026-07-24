@@ -238,6 +238,11 @@ TEST_F(SteamOSVirtualSessionTest, FakeGamescopeReadinessAndCleanup) {
   const auto expected_runtime_directory {std::filesystem::path {config::steamos_virtual_display.runtime_directory} / ("session-" + std::to_string(::getpid()) + "-42")};
   EXPECT_EQ(runtime_directory, expected_runtime_directory.string());
   EXPECT_EQ(wayland_display, "gamescope-0");
+  std::ifstream pid_file {std::filesystem::path {runtime_directory} / "gamescope.pid"};
+  pid_t gamescope_pid {};
+  pid_file >> gamescope_pid;
+  EXPECT_GT(gamescope_pid, 0);
+  EXPECT_EQ(::getpgid(gamescope_pid), gamescope_pid);
   std::ifstream arguments_file {std::filesystem::path {runtime_directory} / "gamescope-arguments"};
   const std::string arguments {(std::istreambuf_iterator<char> {arguments_file}), std::istreambuf_iterator<char> {}};
   EXPECT_NE(arguments.find("--backend\nheadless\n"), std::string::npos);

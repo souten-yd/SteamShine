@@ -88,8 +88,28 @@ owned_session_directories() {
 }
 
 owned_gamescope_processes() {
-  local environment pid value proc_root
+  local directory pid_file pid environment value proc_root recorded_process=false
   proc_root="${PROC_ROOT:-/proc}"
+  # SteamShine records the Gamescope group leader at spawn time. Prefer that
+  # ownership record over a broad /proc scan, then retain the scan as a
+  # diagnostic fallback for children in the same private runtime.
+  while IFS= read -r directory; do
+    pid_file="${directory}/gamescope.pid"
+    [[ -r "${pid_file}" && ! -L "${pid_file}" ]] || continue
+    pid="$(<"${pid_file}")"
+    [[ "${pid}" =~ ^[1-9][0-9]*$ && -r "${proc_root}/${pid}/environ" ]] || continue
+    while IFS= read -r -d '' environment; do
+      value="${environment#XDG_RUNTIME_DIR=}"
+      if [[ "${environment}" == XDG_RUNTIME_DIR=* && "${value}" == "${directory}" ]]; then
+        printf '%s\n' "${pid}"
+        recorded_process=true
+        break
+      fi
+    done <"${proc_root}/${pid}/environ" 2>/dev/null || true
+  done < <(owned_session_directories)
+  if "${recorded_process}"; then
+    return 0
+  fi
   for pid in "${proc_root}"/[0-9]*; do
     pid="${pid##*/}"
     [[ -r "${proc_root}/${pid}/environ" ]] || continue
