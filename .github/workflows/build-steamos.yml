@@ -172,6 +172,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          # Artifacts must identify the reviewed PR head, not GitHub's
+          # temporary refs/pull/*/merge commit. This also keeps BUILD_INFO,
+          # the archive name, and the release-promotion provenance aligned.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           # The upstream repository contains packaging- and non-Linux-only
           # submodules.  Checkout itself must stay bounded and reproducible;
           # initialise only the Linux runtime dependency closure below.
