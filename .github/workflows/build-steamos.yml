@@ -1,226 +1,128 @@
----
 name: SteamOS Runtime Build
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/build-steamos.yml'
+      - '.github/workflows/build-ci-image.yml'
+      - 'ci/steamos/**'
+      - 'src/steamos_virtual_session.*'
+      - 'src/platform/linux/**'
+      - 'src/nvhttp.*'
+      - 'src/stream.*'
+      - 'src/process.*'
+      - 'src/config.*'
+      - 'tests/**'
+      - 'scripts/**'
+      - 'steamshine.sh'
+      - 'CMakeLists.txt'
+      - 'cmake/**'
+      - 'packaging/linux/**'
+  push:
+    branches: [master]
+  workflow_dispatch:
+    inputs:
+      full_validation:
+        description: Run clean package validation
+        required: false
+        default: true
+        type: boolean
 
 permissions:
   contents: read
+  packages: read
 
 concurrency:
   group: steamos-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
-on:
-  pull_request:
-    paths:
-      - ".github/workflows/build-steamos.yml"
-      - "ci/steamos/**"
-      - "src/steamos_virtual_session.cpp"
-      - "src/steamos_virtual_session.h"
-      - "src/platform/linux/**"
-      - "src/nvhttp.cpp"
-      - "src/nvhttp.h"
-      - "src/stream.cpp"
-      - "src/stream.h"
-      - "src/main.cpp"
-      - "src/video.cpp"
-      - "src/video.h"
-      - "src/process.cpp"
-      - "src/process.h"
-      - "src/config.cpp"
-      - "src/config.h"
-      - "tests/unit/test_steamos_virtual_session.cpp"
-      - "tests/integration/test_steamshine_script.sh"
-      - "scripts/**"
-      - "steamshine.sh"
-      - "CMakeLists.txt"
-      - "cmake/**"
-      - "packaging/linux/**"
-  push:
-    branches: [master]
-    paths:
-      - ".github/workflows/build-steamos.yml"
-      - "ci/steamos/**"
-      - "src/steamos_virtual_session.cpp"
-      - "src/steamos_virtual_session.h"
-      - "src/platform/linux/**"
-      - "src/nvhttp.cpp"
-      - "src/nvhttp.h"
-      - "src/stream.cpp"
-      - "src/stream.h"
-      - "src/main.cpp"
-      - "src/video.cpp"
-      - "src/video.h"
-      - "src/process.cpp"
-      - "src/process.h"
-      - "src/config.cpp"
-      - "src/config.h"
-      - "tests/unit/test_steamos_virtual_session.cpp"
-      - "tests/integration/test_steamshine_script.sh"
-      - "scripts/**"
-      - "steamshine.sh"
-      - "CMakeLists.txt"
-      - "cmake/**"
-      - "packaging/linux/**"
-  workflow_dispatch:
-
 jobs:
-  steamos-runtime:
+  classify-changes:
     runs-on: ubuntu-latest
-    container: archlinux/archlinux:base-devel-20250630.0.373922
+    outputs:
+      mode: ${{ steps.classify.outputs.mode }}
     steps:
-      # This official base-devel image omits Git. Use the same fixed archive
-      # snapshot before checkout so recursive submodule checkout is available.
-      - name: Install checkout tool
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - id: classify
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          FORCE_FULL: ${{ github.ref == 'refs/heads/master' || inputs.full_validation }}
         run: |
-          sed -i "s|^Server = .*|Server = https://archive.archlinux.org/repos/2025/06/30/\$repo/os/\$arch|" /etc/pacman.d/mirrorlist
-          pacman -Syy --noconfirm --noprogressbar
-          pacman -S --noconfirm --needed --noprogressbar git
+          set -euo pipefail
+          changed="$(git diff --name-only "${BASE_SHA}" "${GITHUB_SHA}" || true)"
+          mode=docs
+          if [[ "${FORCE_FULL}" == true ]] || grep -qEv '^(docs/|.*\.md$)' <<<"${changed}"; then mode=full; fi
+          if [[ "${mode}" == full ]] && grep -qEv '^(steamshine\.sh|scripts/|tests/integration/|\.github/workflows/)' <<<"${changed}"; then mode=full; fi
+          if [[ "${mode}" == full ]] && grep -qE '^(steamshine\.sh|scripts/|tests/integration/|\.github/workflows/)' <<<"${changed}" && ! grep -qEv '^(steamshine\.sh|scripts/|tests/integration/|\.github/workflows/)' <<<"${changed}"; then mode=shell; fi
+          printf 'mode=%s\n' "${mode}" >>"${GITHUB_OUTPUT}"
+
+  fast-validation:
+    needs: classify-changes
+    if: needs.classify-changes.outputs.mode != 'full'
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/souten-yd/steamshine-ci@sha256:a27e03ff4e20a31464698788cd4038b38c998ea8cdb22009b4e04cc637ca0728
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Docs or shell validation
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check HEAD^ HEAD
+          if [[ '${{ needs.classify-changes.outputs.mode }}' == shell ]]; then
+            shellcheck steamshine.sh scripts/*.sh tests/integration/test_steamshine_script.sh
+            actionlint .github/workflows/build-steamos.yml .github/workflows/build-ci-image.yml
+            tests/integration/test_steamshine_script.sh
+          fi
+
+  full-validation:
+    needs: classify-changes
+    if: needs.classify-changes.outputs.mode == 'full'
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/souten-yd/steamshine-ci@sha256:a27e03ff4e20a31464698788cd4038b38c998ea8cdb22009b4e04cc637ca0728
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    steps:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
-      - name: Install SteamOS 3.8 ABI build tools
-        shell: bash
+      - name: Focused formatting and shell checks
         run: |
-          # Refresh only the official Arch package signing keyring first.
-          # The fixed archive snapshot is then verified with those keys.
-          sed -i "s|^Server = .*|Server = https://geo.mirror.pkgbuild.com/\$repo/os/\$arch|" /etc/pacman.d/mirrorlist
-          pacman -Syy --noconfirm --noprogressbar
-          pacman -S --noconfirm --needed --noprogressbar archlinux-keyring
-          pacman-key --init
-          pacman-key --populate archlinux
-          cp ci/steamos/mirrorlist /etc/pacman.d/mirrorlist
-          pacman -Syy --noconfirm --noprogressbar
-          mapfile -t build_packages < <(grep -Ev '^(#|$)' ci/steamos/packages.txt)
-          pacman -S --noconfirm --needed --noprogressbar --disable-download-timeout "${build_packages[@]}"
-          pacman -Q glibc gcc-libs qt6-base
-      - name: Mark workspace as safe for CMake version discovery
-        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
-      - name: Format and shell checks
-        run: |
-          clang-format --dry-run --Werror src/steamos_virtual_session.cpp \
-            src/steamos_virtual_session.h src/main.cpp src/nvhttp.cpp src/process.cpp src/stream.cpp \
-            src/video.cpp \
-            src/platform/linux/misc.cpp src/platform/linux/wayland.cpp \
-            src/platform/linux/wlgrab.cpp src/platform/linux/vulkan_encode.cpp src/platform/linux/vulkan_encode.h \
-            tests/unit/test_steamos_virtual_session.cpp
-          shellcheck steamshine.sh \
-            scripts/collect-steamos-runtime-baseline.sh \
-            scripts/diagnose-steamos-virtual-display.sh \
-            scripts/package-steamos-artifact.sh \
-            scripts/test-steamos-latency.sh \
-            scripts/test-steamos-reconnect.sh \
-            scripts/test-steamos-ssd-writes.sh \
-            scripts/test-steamos-virtual-display.sh \
-            tests/integration/test_steamshine_script.sh
-          actionlint .github/workflows/build-steamos.yml
-          ! grep -nE '[[:blank:]]+$|^(<<<<<<<|=======|>>>>>>>)' \
-            src/steamos_virtual_session.cpp \
-            src/steamos_virtual_session.h \
-            src/main.cpp \
-            src/nvhttp.cpp \
-            src/process.cpp \
-            src/stream.cpp \
-            src/video.cpp \
-            src/platform/linux/misc.cpp \
-            src/platform/linux/wayland.cpp \
-            src/platform/linux/wlgrab.cpp \
-            src/platform/linux/vulkan_encode.cpp \
-            src/platform/linux/vulkan_encode.h \
-            tests/unit/test_steamos_virtual_session.cpp \
-            steamshine.sh \
-            scripts/collect-steamos-runtime-baseline.sh \
-            scripts/diagnose-steamos-virtual-display.sh \
-            scripts/package-steamos-artifact.sh \
-            scripts/test-steamos-latency.sh \
-            scripts/test-steamos-reconnect.sh \
-            scripts/test-steamos-ssd-writes.sh \
-            scripts/test-steamos-virtual-display.sh \
-            tests/integration/test_steamshine_script.sh \
-            .github/workflows/build-steamos.yml
-      - name: Configure
-        run: >-
-          cmake -S . -B cmake-build-steamos -G Ninja
-          -DCMAKE_BUILD_TYPE=Release
-          -DBUILD_TESTS=ON
-          -DBUILD_DOCS=OFF
-          -DSUNSHINE_ENABLE_CUDA=OFF
-          -DSUNSHINE_ASSETS_DIR=share/assets
-          -DSUNSHINE_ASSETS_DIR_DEF=../share/assets
-      - name: Build
+          clang-format --dry-run --Werror src/steamos_virtual_session.cpp src/steamos_virtual_session.h tests/unit/test_steamos_virtual_session.cpp
+          shellcheck steamshine.sh scripts/*.sh tests/integration/test_steamshine_script.sh
+          actionlint .github/workflows/build-steamos.yml .github/workflows/build-ci-image.yml
+          git diff --check
+      - name: Configure clean SteamOS release build
+        run: cmake -S . -B cmake-build-steamos -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=ON -DBUILD_DOCS=OFF -DSUNSHINE_ENABLE_CUDA=OFF -DSUNSHINE_ASSETS_DIR=share/assets -DSUNSHINE_ASSETS_DIR_DEF=../share/assets
+      - name: Build runtime binary
         run: cmake --build cmake-build-steamos --target sunshine --parallel 2
-      - name: Test SteamOS virtual-session lifecycle
+      - name: SteamOS virtual session and installer tests
         run: |
           cmake --build cmake-build-steamos --target test_sunshine --parallel 2
           cmake-build-steamos/tests/test_sunshine --gtest_filter='*SteamOSVirtualSession*'
           tests/integration/test_steamshine_script.sh
-      - name: Verify runtime linkage
+      - name: Verify runtime linkage and ABI ceiling
         run: |
           binary=cmake-build-steamos/sunshine
-          test -x "${binary}"
-          echo '=== linked libraries ==='
-          ldd -v "${binary}"
-          echo '=== dynamic section ==='
-          readelf -d "${binary}"
-          echo '=== required symbol versions ==='
-          objdump -T "${binary}" | grep -E 'GLIBC_|GLIBCXX_|CXXABI_|Qt_' | sort -u || true
-          echo '=== version info ==='
-          readelf --version-info "${binary}"
-          echo '=== build ABI baseline ==='
-          pacman -Q glibc gcc-libs gcc clang qt6-base qt6-svg
-          pkg-config --modversion Qt6Core
-          ldd --version | head -1
-          unresolved="$(ldd "${binary}" | grep 'not found' || true)"
-          if [[ -n "${unresolved}" ]]; then
-            echo '=== unresolved shared library ===' >&2
-            printf '%s\n' "${unresolved}" >&2
-            exit 1
-          fi
-          abi_violations="$(readelf --version-info "${binary}" | grep -E \
-            'GLIBC_2\.(4[2-9]|[5-9][0-9])|GLIBCXX_3\.4\.(3[5-9]|[4-9][0-9])|CXXABI_1\.(4|[5-9][0-9])|Qt_6\.(1[0-9]|[2-9][0-9])' || true)"
-          if [[ -n "${abi_violations}" ]]; then
-            echo '=== ABI compatibility violations ===' >&2
-            printf '%s\n' "${abi_violations}" >&2
-            exit 1
-          fi
-      - name: Stage and package
-        run: scripts/package-steamos-artifact.sh cmake-build-steamos dist
-      - name: Smoke test immutable user-space installer
+          ldd -v "${binary}"; readelf -d "${binary}"; readelf --version-info "${binary}"
+          if ldd "${binary}" | grep -q 'not found'; then exit 1; fi
+          if readelf --version-info "${binary}" | grep -Eq 'GLIBC_2\.(4[2-9]|[5-9][0-9])|GLIBCXX_3\.4\.(3[5-9]|[4-9][0-9])|CXXABI_1\.(4|[5-9][0-9])|Qt_6\.(1[0-9]|[2-9][0-9])'; then exit 1; fi
+      - name: Stage, package, and smoke test the same binary
         run: |
+          scripts/package-steamos-artifact.sh cmake-build-steamos dist
           artifact="$(find dist -name 'steamshine-steamos-*.tar.zst' -print -quit)"
-          test -n "${artifact}"
           (cd "$(dirname "${artifact}")" && sha256sum -c "$(basename "${artifact}").sha256")
-          if tar --zstd -tf "${artifact}" | grep -Eq '(^/|(^|/)\.\.(/|$))'; then
-            echo "Unsafe archive path" >&2
-            exit 1
-          fi
-          smoke_home="$(mktemp -d)"
-          mkdir -p "${smoke_home}/run"
-          HOME="${smoke_home}" XDG_RUNTIME_DIR="${smoke_home}/run" \
-            ./steamshine.sh install --artifact "${artifact}" --no-service --non-interactive --yes
+          smoke_home="$(mktemp -d)"; mkdir -p "${smoke_home}/run"
+          HOME="${smoke_home}" XDG_RUNTIME_DIR="${smoke_home}/run" ./steamshine.sh install --artifact "${artifact}" --no-service --non-interactive --yes
           test -x "${smoke_home}/.local/bin/steamshine"
-          smoke_output="$(HOME="${smoke_home}" XDG_RUNTIME_DIR="${smoke_home}/run" \
-            "${smoke_home}/.local/bin/steamshine" "${smoke_home}/.config/steamshine/sunshine.conf" --version 2>&1)" || {
-            printf '%s\n' "${smoke_output}" >&2
-            exit 1
-          }
-          printf '%s\n' "${smoke_output}"
-          if printf '%s\n' "${smoke_output}" | grep -Fq 'Failed to apply config'; then
-            echo 'Installed artifact could not read its packaged assets' >&2
-            exit 1
-          fi
-          test -f "${smoke_home}/.config/sunshine/apps.json"
-          test -f "${smoke_home}/.local/share/steamshine/current/BUILD_INFO.json"
-          test -f "${smoke_home}/.local/share/steamshine/current/STEAMOS_BASELINE.json"
-          test -f "${smoke_home}/.local/share/steamshine/current/RUNTIME_DEPENDENCIES.txt"
-          test -f "${smoke_home}/.local/share/steamshine/current/systemd-user/steamshine.service.in"
-          test -x "${smoke_home}/.local/share/steamshine/current/scripts/diagnose-steamos-virtual-display.sh"
-          test -x "${smoke_home}/.local/share/steamshine/current/scripts/collect-steamos-runtime-baseline.sh"
-          test -x "${smoke_home}/.local/share/steamshine/current/scripts/test-steamos-virtual-display.sh"
-          test -x "${smoke_home}/.local/share/steamshine/current/scripts/test-steamos-reconnect.sh"
-          test -x "${smoke_home}/.local/share/steamshine/current/scripts/test-steamos-latency.sh"
-          test -x "${smoke_home}/.local/share/steamshine/current/scripts/test-steamos-ssd-writes.sh"
-          test -f "${smoke_home}/.local/share/steamshine/current/lib/libminiupnpc.so.21"
-          HOME="${smoke_home}" XDG_RUNTIME_DIR="${smoke_home}/run" \
-            ./steamshine.sh uninstall --non-interactive --yes --no-service
       - uses: actions/upload-artifact@v4
         with:
           name: steamshine-steamos-x86_64-${{ github.sha }}

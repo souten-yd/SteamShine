@@ -1,4 +1,4 @@
-# Updated only from the successful SteamOS CI Image workflow metadata.
-# Fast/full workflows refuse to use a mutable tag once this lock is populated.
+# Generated from successful SteamOS CI Image run 30090986501. Fast and full
+# workflows must use this immutable digest, never a mutable registry tag.
 image=ghcr.io/souten-yd/steamshine-ci
-digest=unresolved
+digest=sha256:a27e03ff4e20a31464698788cd4038b38c998ea8cdb22009b4e04cc637ca0728
