@@ -25,6 +25,10 @@ uploads `ci-timings.json`; compare ten baseline and ten candidate reports with:
 scripts/compare-steamos-ci-timings.sh baseline/*.json -- candidate/*.json
 ```
 
+The full-validation artifact also contains `build-timings.json`, derived from
+the same Ninja log, with compile and link durations kept separate from test and
+package timings.
+
 `SteamOS Artifact Promotion` is manual and takes a successful Runtime Build run
 ID plus its artifact name. It verifies the source workflow and checksum, then
 creates a release from that artifact. It intentionally does not configure,

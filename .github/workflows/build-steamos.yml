@@ -141,6 +141,8 @@ jobs:
         run: cd "${GITHUB_WORKSPACE}" && cmake -S . -B cmake-build-steamos -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=ON -DBUILD_DOCS=OFF -DSUNSHINE_ENABLE_CUDA=OFF -DSUNSHINE_ASSETS_DIR=share/assets -DSUNSHINE_ASSETS_DIR_DEF=../share/assets
       - name: Build runtime binary
         run: cd "${GITHUB_WORKSPACE}" && cmake --build cmake-build-steamos --target sunshine --parallel 2
+      - name: Record compile and link timing
+        run: cd "${GITHUB_WORKSPACE}" && python3 scripts/collect-ninja-timing.py cmake-build-steamos/.ninja_log dist/build-timings.json
       - name: SteamOS virtual session and installer tests
         run: |
           cd "${GITHUB_WORKSPACE}"
