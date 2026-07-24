@@ -9,6 +9,7 @@ mkdir -p "${report_dir}"
 report="${report_dir}/virtual-display.log"
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 steamshine_binary="${STEAMSHINE_BINARY:-${HOME}/.local/bin/steamshine}"
+steamshine_config="${STEAMSHINE_CONFIG:-${HOME}/.config/steamshine/sunshine.conf}"
 
 owned_gamescope_processes() {
   local environment pid value
@@ -48,7 +49,7 @@ if [[ ! -x "${steamshine_binary}" ]]; then
   echo "FAIL: installed SteamShine binary is unavailable: ${steamshine_binary}" | tee -a "${report}"
   exit 1
 fi
-if ! "${steamshine_binary}" vulkan-video-probe 2>&1 | tee -a "${report}"; then
+if ! "${steamshine_binary}" "${steamshine_config}" --vulkan-video-probe 2>&1 | tee -a "${report}"; then
   echo 'FAIL: Vulkan Video H.264 preflight failed; refusing Moonlight acceptance cycles' | tee -a "${report}"
   exit 1
 fi

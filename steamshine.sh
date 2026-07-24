@@ -240,7 +240,7 @@ hardware_test() {
   compatibility_check >"${report_dir}/compatibility.log" 2>&1 || die "Hardware-test compatibility gate failed; see ${report_dir}/compatibility.log" "$EXIT_DEPENDENCY"
   "${ROOT_DIR}/scripts/diagnose-steamos-virtual-display.sh" >"${report_dir}/diagnose.log" 2>&1 || true
   start
-  if ! STEAMSHINE_HARDWARE_REPORT_DIR="${report_dir}" "${ROOT_DIR}/scripts/test-steamos-virtual-display.sh"; then
+  if ! STEAMSHINE_CONFIG="${CONFIG_FILE}" STEAMSHINE_HARDWARE_REPORT_DIR="${report_dir}" "${ROOT_DIR}/scripts/test-steamos-virtual-display.sh"; then
     stop || true
     die "Hardware-test failed; the SteamShine user service was stopped. See ${report_dir}" "$EXIT_TEST"
   fi
