@@ -22,11 +22,10 @@ extern "C" {
 #include <libavutil/hwcontext_vulkan.h>
 }
 
-#include "src/steamos_virtual_session.h"
-
 #include "graphics.h"
 #include "src/config.h"
 #include "src/logging.h"
+#include "src/steamos_virtual_session.h"
 #include "src/video_colorspace.h"
 #include "vulkan_encode.h"
 
