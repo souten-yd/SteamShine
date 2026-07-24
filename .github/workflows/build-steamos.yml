@@ -164,6 +164,9 @@ jobs:
       - name: Stage, package, and smoke test the same binary
         run: |
           cd "${GITHUB_WORKSPACE}"
+          # The root-owned container bind mount must be explicitly trusted before
+          # packaging reads the version from the checked-out Git repository.
+          git config --global --add safe.directory "${GITHUB_WORKSPACE}"
           scripts/package-steamos-artifact.sh cmake-build-steamos dist
           artifact="$(find dist -name 'steamshine-steamos-*.tar.zst' -print -quit)"
           (cd "$(dirname "${artifact}")" && sha256sum -c "$(basename "${artifact}").sha256")
