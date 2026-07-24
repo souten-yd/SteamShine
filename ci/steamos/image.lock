@@ -1,0 +1,4 @@
+# Updated only from the successful SteamOS CI Image workflow metadata.
+# Fast/full workflows refuse to use a mutable tag once this lock is populated.
+image=ghcr.io/souten-yd/steamshine-ci
+digest=unresolved
