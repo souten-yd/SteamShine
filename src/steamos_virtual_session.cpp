@@ -35,10 +35,6 @@
 #endif
 
 namespace steamos_virtual_session {
-  /**
-   * @brief Name of the Wayland socket exposed by a headless Gamescope server.
-   */
-  constexpr auto gamescope_wayland_display = "gamescope-0"sv;
   namespace {
     struct manager_t {
       std::mutex mutex;  ///< Serializes virtual-session state transitions.
@@ -576,7 +572,7 @@ namespace steamos_virtual_session {
       manager.current = state_e::Failed;
       return false;
     }
-    const auto socket {manager.runtime_directory / gamescope_wayland_display};
+    const auto socket {manager.runtime_directory / "gamescope-0"};
     {
       std::ofstream marker {manager.runtime_directory / owner_marker_name.data(), std::ios::binary | std::ios::trunc};
       marker << owner_marker_contents;
@@ -697,13 +693,13 @@ namespace steamos_virtual_session {
       return false;
     }
     runtime_directory = manager.runtime_directory.string();
-    wayland_display = std::string {gamescope_wayland_display};
+    wayland_display = "gamescope-0";
     return true;
   }
 
   bool capture_socket(std::string &socket_path) {
     std::scoped_lock lock {manager.mutex};
-    const auto socket {manager.runtime_directory / gamescope_wayland_display};
+    const auto socket {manager.runtime_directory / "gamescope-0"};
     if (manager.runtime_directory.empty() || (manager.current != state_e::WaitingForCapture && manager.current != state_e::Ready && manager.current != state_e::Streaming) || !owned_wayland_socket_exists(socket)) {
       return false;
     }
