@@ -1139,6 +1139,39 @@ namespace vk {
       error = "Could not retain the selected Vulkan device for H.264";
       return false;
     }
+
+    // h264_vulkan validates that its input is backed by a Vulkan frames
+    // context during avcodec_open2(). The streaming path creates this context
+    // before opening the encoder; the standalone diagnostic must mirror that
+    // setup without allocating or submitting a frame.
+    AVBufferRef *frames {av_hwframe_ctx_alloc(device)};
+    if (!frames) {
+      error = "Could not allocate Vulkan H.264 hardware frames context";
+      return false;
+    }
+    auto frames_guard = util::fail_guard([&frames]() {
+      av_buffer_unref(&frames);
+    });
+    auto *frames_context {(AVHWFramesContext *) frames->data};
+    frames_context->format = AV_PIX_FMT_VULKAN;
+    frames_context->sw_format = AV_PIX_FMT_NV12;
+    frames_context->width = context->width;
+    frames_context->height = context->height;
+    auto *vulkan_frames {(AVVulkanFramesContext *) frames_context->hwctx};
+    vulkan_frames->tiling = VK_IMAGE_TILING_OPTIMAL;
+    vulkan_frames->usage = (VkImageUsageFlagBits) (VK_IMAGE_USAGE_STORAGE_BIT |
+                                                   VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+                                                   VK_IMAGE_USAGE_SAMPLED_BIT |
+                                                   VK_IMAGE_USAGE_VIDEO_ENCODE_SRC_BIT_KHR);
+    if (av_hwframe_ctx_init(frames) < 0) {
+      error = "Could not initialize Vulkan H.264 hardware frames context";
+      return false;
+    }
+    context->hw_frames_ctx = av_buffer_ref(frames);
+    if (!context->hw_frames_ctx) {
+      error = "Could not retain Vulkan H.264 hardware frames context";
+      return false;
+    }
     const int result {avcodec_open2(context, codec, nullptr)};
     if (result < 0) {
       std::array<char, AV_ERROR_MAX_STRING_SIZE> message {};
