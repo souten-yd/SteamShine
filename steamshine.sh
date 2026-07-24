@@ -191,7 +191,7 @@ compatibility_check() {
   [[ "${BUILD_ID:-}" == "${expected_build}" ]] || die "SteamOS BUILD_ID ${BUILD_ID:-unknown} is incompatible with artifact baseline ${expected_build}." "$EXIT_UNSUPPORTED"
   actual_glibc="$(ldd --version | awk 'NR == 1 { for (i = NF; i > 0; --i) if ($i ~ /^[0-9]+\.[0-9]+/) { print $i; exit } }')"
   version_at_least "${actual_glibc}" "$(json_value max_glibc "${baseline}")" || die "Host glibc ${actual_glibc:-unknown} is older than the required ABI baseline." "$EXIT_UNSUPPORTED"
-  actual_glibcxx="$(strings /usr/lib/libstdc++.so.6 2>/dev/null | grep '^GLIBCXX_' | sort -V | tail -1 || true)"
+  actual_glibcxx="$(strings /usr/lib/libstdc++.so.6 2>/dev/null | grep -E '^GLIBCXX_[0-9]+(\.[0-9]+)+$' | sort -V | tail -1 || true)"
   version_at_least "${actual_glibcxx#GLIBCXX_}" "${expected_glibcxx}" || die "Host ${actual_glibcxx:-unknown} is older than required GLIBCXX_${expected_glibcxx}." "$EXIT_UNSUPPORTED"
   command -v gamescope >/dev/null || die 'Gamescope is required for a SteamOS virtual display.' "$EXIT_DEPENDENCY"
   gamescope --help 2>&1 | grep -q -- '--backend' || die 'Gamescope lacks --backend required for headless operation.' "$EXIT_DEPENDENCY"

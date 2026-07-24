@@ -5,6 +5,14 @@ set -euo pipefail
 
 root_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 
+# Only numeric GLIBCXX symbol versions are ABI candidates.  libstdc++ also
+# exposes GLIBCXX_TUNABLES, which must never be selected as a version ceiling.
+runtime_baseline="$("${root_dir}/scripts/collect-steamos-runtime-baseline.sh")"
+if grep -Fq '"max_glibcxx": "GLIBCXX_TUNABLES"' <<<"${runtime_baseline}"; then
+  echo 'Runtime baseline selected GLIBCXX_TUNABLES instead of a numeric ABI version.' >&2
+  exit 1
+fi
+
 "${root_dir}/steamshine.sh" --help >/dev/null
 if "${root_dir}/steamshine.sh" </dev/null >/dev/null 2>&1; then
   echo 'Expected non-TTY invocation without a command to fail.' >&2
