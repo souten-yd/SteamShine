@@ -15,6 +15,7 @@ on:
       - 'src/config.*'
       - 'tests/unit/test_steamos_virtual_session.cpp'
       - 'tests/unit/test_steamos_virtual_session_core.cpp'
+      - 'tests/steamos_core/CMakeLists.txt'
       - 'tests/integration/test_steamshine_script.sh'
       - 'tests/fixtures/steamos/**'
       - 'scripts/**'
@@ -108,9 +109,9 @@ jobs:
             tests/integration/test_steamshine_script.sh
           fi
           if [[ "${mode}" == cpp-core ]]; then
-            cmake -S . -B cmake-build-steamos-fast -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=ON -DBUILD_DOCS=OFF -DSUNSHINE_ENABLE_CUDA=OFF
+            cmake -S tests/steamos_core -B cmake-build-steamos-fast -G Ninja -DCMAKE_BUILD_TYPE=Release
             cmake --build cmake-build-steamos-fast --target test_steamos_virtual_session_core --parallel 2
-            cmake-build-steamos-fast/tests/test_steamos_virtual_session_core --gtest_color=yes
+            cmake-build-steamos-fast/test_steamos_virtual_session_core --gtest_color=yes
           fi
 
   full-validation:
@@ -143,8 +144,9 @@ jobs:
       - name: SteamOS virtual session and installer tests
         run: |
           cd "${GITHUB_WORKSPACE}"
-          cmake --build cmake-build-steamos --target test_steamos_virtual_session_core --parallel 2
-          cmake-build-steamos/tests/test_steamos_virtual_session_core --gtest_color=yes
+          cmake -S tests/steamos_core -B cmake-build-steamos-core -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build cmake-build-steamos-core --target test_steamos_virtual_session_core --parallel 2
+          cmake-build-steamos-core/test_steamos_virtual_session_core --gtest_color=yes
           cmake --build cmake-build-steamos --target test_sunshine --parallel 2
           cmake-build-steamos/tests/test_sunshine --gtest_filter='*SteamOSVirtualSession*'
           tests/integration/test_steamshine_script.sh
