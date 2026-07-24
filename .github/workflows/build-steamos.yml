@@ -77,6 +77,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          cd "${GITHUB_WORKSPACE}"
           git diff --check HEAD^ HEAD
           if [[ '${{ needs.classify-changes.outputs.mode }}' == shell ]]; then
             shellcheck steamshine.sh scripts/*.sh tests/integration/test_steamshine_script.sh
@@ -102,27 +103,31 @@ jobs:
           submodules: recursive
       - name: Focused formatting and shell checks
         run: |
+          cd "${GITHUB_WORKSPACE}"
           clang-format --dry-run --Werror src/steamos_virtual_session.cpp src/steamos_virtual_session.h tests/unit/test_steamos_virtual_session.cpp
           shellcheck steamshine.sh scripts/*.sh tests/integration/test_steamshine_script.sh
           actionlint .github/workflows/build-steamos.yml .github/workflows/build-ci-image.yml
           git diff --check
       - name: Configure clean SteamOS release build
-        run: cmake -S . -B cmake-build-steamos -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=ON -DBUILD_DOCS=OFF -DSUNSHINE_ENABLE_CUDA=OFF -DSUNSHINE_ASSETS_DIR=share/assets -DSUNSHINE_ASSETS_DIR_DEF=../share/assets
+        run: cd "${GITHUB_WORKSPACE}" && cmake -S . -B cmake-build-steamos -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=ON -DBUILD_DOCS=OFF -DSUNSHINE_ENABLE_CUDA=OFF -DSUNSHINE_ASSETS_DIR=share/assets -DSUNSHINE_ASSETS_DIR_DEF=../share/assets
       - name: Build runtime binary
-        run: cmake --build cmake-build-steamos --target sunshine --parallel 2
+        run: cd "${GITHUB_WORKSPACE}" && cmake --build cmake-build-steamos --target sunshine --parallel 2
       - name: SteamOS virtual session and installer tests
         run: |
+          cd "${GITHUB_WORKSPACE}"
           cmake --build cmake-build-steamos --target test_sunshine --parallel 2
           cmake-build-steamos/tests/test_sunshine --gtest_filter='*SteamOSVirtualSession*'
           tests/integration/test_steamshine_script.sh
       - name: Verify runtime linkage and ABI ceiling
         run: |
+          cd "${GITHUB_WORKSPACE}"
           binary=cmake-build-steamos/sunshine
           ldd -v "${binary}"; readelf -d "${binary}"; readelf --version-info "${binary}"
           if ldd "${binary}" | grep -q 'not found'; then exit 1; fi
           if readelf --version-info "${binary}" | grep -Eq 'GLIBC_2\.(4[2-9]|[5-9][0-9])|GLIBCXX_3\.4\.(3[5-9]|[4-9][0-9])|CXXABI_1\.(4|[5-9][0-9])|Qt_6\.(1[0-9]|[2-9][0-9])'; then exit 1; fi
       - name: Stage, package, and smoke test the same binary
         run: |
+          cd "${GITHUB_WORKSPACE}"
           scripts/package-steamos-artifact.sh cmake-build-steamos dist
           artifact="$(find dist -name 'steamshine-steamos-*.tar.zst' -print -quit)"
           (cd "$(dirname "${artifact}")" && sha256sum -c "$(basename "${artifact}").sha256")
