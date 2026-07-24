@@ -11,6 +11,9 @@ It does not run Windows, macOS, FreeBSD, Flatpak, AppImage, Docker, or broad ups
 An unknown or mixed change fails closed to clean full validation. Documentation
 and shell-only changes avoid a Sunshine binary build; shell validation runs
 ShellCheck, actionlint, and the installer/hardware-fixture integration test.
+Documentation-only follow-up commits validate only their own parent-to-head
+diff, so a previously validated pull request does not rebuild solely because
+the PR's cumulative history also contains runtime changes.
 The standalone `tests/steamos_core` CMake project covers request normalization
 and Gamescope argument construction without configuring or linking the Sunshine
 runtime. `tests/steamos_lifecycle` independently links only the virtual-session
