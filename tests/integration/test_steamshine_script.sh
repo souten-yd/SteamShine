@@ -19,13 +19,13 @@ fi
 # VA-API is optional, but the compatibility report must identify the AMD driver
 # by its actual radeonsi filename and never mistake an Intel i965 driver for it.
 touch "${fake_dri}/i965_drv_video.so"
-vaapi_output="$(STEAMSHINE_DRI_ROOTS="${fake_dri}" "${root_dir}/steamshine.sh" compatibility-check 2>&1)"
+vaapi_output="$(STEAMSHINE_DRI_ROOTS="${fake_dri}" "${root_dir}/steamshine.sh" vaapi-driver-status 2>&1)"
 if grep -Fq 'VAAPI_AMD_DRIVER_AVAILABLE' <<<"${vaapi_output}"; then
   echo 'An Intel-only VA-API directory was misidentified as AMD radeonsi.' >&2
   exit 1
 fi
 touch "${fake_dri}/radeonsi_drv_video.so"
-vaapi_output="$(STEAMSHINE_DRI_ROOTS="${fake_dri}" "${root_dir}/steamshine.sh" compatibility-check 2>&1)"
+vaapi_output="$(STEAMSHINE_DRI_ROOTS="${fake_dri}" "${root_dir}/steamshine.sh" vaapi-driver-status 2>&1)"
 grep -Fq 'VAAPI_AMD_DRIVER_AVAILABLE' <<<"${vaapi_output}"
 
 "${root_dir}/steamshine.sh" --help >/dev/null
