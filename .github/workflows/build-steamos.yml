@@ -73,16 +73,25 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 2
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - id: classify
         shell: bash
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           FORCE_FULL: ${{ github.ref == 'refs/heads/master' || inputs.full_validation }}
         run: |
           set -euo pipefail
-          if [[ -z "${BASE_SHA}" ]] || ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then BASE_SHA="${GITHUB_SHA}^"; fi
-          changed="$(git diff --name-only "${BASE_SHA}" "${GITHUB_SHA}" || true)"
-          git diff --check "${BASE_SHA}" "${GITHUB_SHA}"
+          # A synchronized pull request is an incremental validation: the prior
+          # head has already passed its own layer. Comparing the head commit to
+          # its parent lets a docs-only follow-up stay docs-only instead of
+          # rebuilding the cumulative pull request. First commits and unknown
+          # history fail closed below when their parent cannot be read.
+          base_sha="${HEAD_SHA}^"
+          if ! git cat-file -e "${base_sha}^{commit}" 2>/dev/null; then
+            base_sha="${HEAD_SHA}"
+          fi
+          changed="$(git diff --name-only "${base_sha}" "${HEAD_SHA}" || true)"
+          git diff --check "${base_sha}" "${HEAD_SHA}"
           declare -A categories=()
           while IFS= read -r path; do
             [[ -n "${path}" ]] || continue
