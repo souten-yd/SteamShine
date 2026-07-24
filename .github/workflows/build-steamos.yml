@@ -20,6 +20,8 @@ on:
       - "src/nvhttp.h"
       - "src/stream.cpp"
       - "src/stream.h"
+      - "src/video.cpp"
+      - "src/video.h"
       - "src/process.cpp"
       - "src/process.h"
       - "src/config.cpp"
@@ -43,6 +45,8 @@ on:
       - "src/nvhttp.h"
       - "src/stream.cpp"
       - "src/stream.h"
+      - "src/video.cpp"
+      - "src/video.h"
       - "src/process.cpp"
       - "src/process.h"
       - "src/config.cpp"
@@ -92,6 +96,7 @@ jobs:
         run: |
           clang-format --dry-run --Werror src/steamos_virtual_session.cpp \
             src/steamos_virtual_session.h src/nvhttp.cpp src/process.cpp src/stream.cpp \
+            src/video.cpp \
             src/platform/linux/misc.cpp src/platform/linux/wayland.cpp \
             src/platform/linux/wlgrab.cpp src/platform/linux/vulkan_encode.cpp \
             tests/unit/test_steamos_virtual_session.cpp
@@ -111,6 +116,7 @@ jobs:
             src/nvhttp.cpp \
             src/process.cpp \
             src/stream.cpp \
+            src/video.cpp \
             src/platform/linux/misc.cpp \
             src/platform/linux/wayland.cpp \
             src/platform/linux/wlgrab.cpp \
