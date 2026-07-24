@@ -109,7 +109,7 @@ After=graphical-session.target
 StartLimitIntervalSec=60
 StartLimitBurst=3
 [Service]
-ExecStart=${PREFIX}/bin/steamshine --config ${CONFIG_FILE}
+ExecStart=${PREFIX}/bin/steamshine ${CONFIG_FILE}
 Restart=on-failure
 RestartSec=5
 [Install]

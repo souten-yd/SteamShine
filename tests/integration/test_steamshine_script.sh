@@ -27,6 +27,24 @@ tar --zstd -C "${test_root}/stage" -cf "${test_root}/steamshine-steamos-x86_64-t
 (cd "${test_root}" && sha256sum steamshine-steamos-x86_64-test.tar.zst >steamshine-steamos-x86_64-test.tar.zst.sha256)
 HOME="${test_root}/home" XDG_RUNTIME_DIR="${test_root}/home/run" \
   "${root_dir}/steamshine.sh" install --artifact "${test_root}/steamshine-steamos-x86_64-test.tar.zst" --no-service --non-interactive --yes
+
+# The service passes Sunshine's configuration file as its positional argument.
+# `--config` is not a Sunshine CLI option and would otherwise cause a restart
+# loop before the host begins accepting Moonlight connections.
+mkdir -p "${test_root}/mock-bin"
+cat >"${test_root}/mock-bin/systemctl" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+chmod 755 "${test_root}/mock-bin/systemctl"
+HOME="${test_root}/home" XDG_RUNTIME_DIR="${test_root}/home/run" PATH="${test_root}/mock-bin:${PATH}" \
+  "${root_dir}/steamshine.sh" install --artifact "${test_root}/steamshine-steamos-x86_64-test.tar.zst" --non-interactive --yes
+service_unit="${test_root}/home/.config/systemd/user/steamshine.service"
+grep -Fq "ExecStart=${test_root}/home/.local/bin/steamshine ${test_root}/home/.config/steamshine/sunshine.conf" "${service_unit}"
+if grep -Fq -- '--config' "${service_unit}"; then
+  echo 'The generated service must not pass an unsupported --config option.' >&2
+  exit 1
+fi
 test -x "${test_root}/home/.local/bin/steamshine"
 HOME="${test_root}/home" XDG_RUNTIME_DIR="${test_root}/home/run" \
   "${root_dir}/steamshine.sh" install --artifact "${test_root}/steamshine-steamos-x86_64-test.tar.zst" --no-service --non-interactive --yes
