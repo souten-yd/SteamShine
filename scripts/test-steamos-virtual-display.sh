@@ -45,6 +45,30 @@ EOF
 }
 trap 'result=$?; write_summary "$( ((result == 0)) && printf pass || printf fail )"' EXIT
 
+# Verify that a completed owned virtual session emitted actual GameStream
+# packet evidence. The counters are produced in the stream send path and
+# written once when the owned session stops, so a ready Wayland socket alone
+# can never satisfy the hardware acceptance test. $1 is the post-disconnect
+# journal label. Returns zero only when packets, bytes, and an IDR are present.
+require_encoded_stream_evidence() {
+  local label="$1" journal metrics packets bytes idr
+  journal="${report_dir}/service-${label}.log"
+  [[ -r "${journal}" ]] || {
+    echo "FAIL: no SteamShine service evidence for ${label}" | tee -a "${report}"
+    return 1
+  }
+  metrics="$(grep 'SteamOS virtual display encoded packets=' "${journal}" | tail -n 1 || true)"
+  packets="$(sed -n 's/.*encoded packets=\([0-9][0-9]*\).*/\1/p' <<<"${metrics}")"
+  bytes="$(sed -n 's/.* bytes=\([0-9][0-9]*\).*/\1/p' <<<"${metrics}")"
+  idr="$(sed -n 's/.* idr=\([0-9][0-9]*\).*/\1/p' <<<"${metrics}")"
+  if [[ ! "${packets}" =~ ^[1-9][0-9]*$ || ! "${bytes}" =~ ^[1-9][0-9]*$ || ! "${idr}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "FAIL: ${label} has no encoded packet, byte, and IDR evidence" | tee -a "${report}"
+    return 1
+  fi
+  printf '%s\t%s\t%s\t%s\n' "${label}" "${packets}" "${bytes}" "${idr}" >>"${report_dir}/encoded-stream-evidence.tsv"
+  printf 'encoded_stream_evidence=%s packets=%s bytes=%s idr=%s\n' "${label}" "${packets}" "${bytes}" "${idr}" | tee -a "${report}"
+}
+
 owned_session_directories() {
   local directory marker
   for directory in "${runtime_dir}"/session-*; do
@@ -153,6 +177,7 @@ for attempt in $(seq 1 10); do
   echo "Attempt ${attempt}: disconnect Moonlight now, then press Enter after cleanup."
   read -r
   collect "disconnected-${attempt}"
+  require_encoded_stream_evidence "disconnected-${attempt}"
   if owned_gamescope_processes | grep -q .; then echo "FAIL: owned Gamescope remains" | tee -a "${report}"; exit 1; fi
   if owned_session_directories | grep -q .; then echo "FAIL: owned runtime session remains" | tee -a "${report}"; exit 1; fi
   completed_attempts="${attempt}"

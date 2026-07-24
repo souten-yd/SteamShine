@@ -144,6 +144,30 @@ cat >"${test_root}/hardware-bin/pgrep" <<'EOF'
 printf '101\n202\n303\n'
 EOF
 chmod 755 "${test_root}/hardware-bin/pgrep"
+cat >"${test_root}/hardware-bin/journalctl" <<'EOF'
+#!/usr/bin/env bash
+# A completed owned session must leave all three event classes in the user
+# journal.  Repeating this bounded fixture models each acceptance cycle.
+printf '%s\n' 'SteamOS virtual display capture attached'
+printf '%s\n' 'SteamOS virtual display streaming started'
+printf '%s\n' 'SteamOS virtual display stopping owned Gamescope session'
+printf '%s\n' 'SteamOS virtual display encoded packets=42 bytes=8192 idr=1'
+EOF
+chmod 755 "${test_root}/hardware-bin/journalctl"
+cat >"${test_root}/hardware-bin/gamescope" <<'EOF'
+#!/usr/bin/env bash
+if [[ "${1:-}" == '--version' ]]; then
+  printf '%s\n' 'gamescope 3.16.23.4-test'
+elif [[ "${1:-}" == '--help' ]]; then
+  printf '%s\n' '--backend headless --nested-width --nested-height --nested-refresh --expose-wayland --prefer-vk-device'
+fi
+EOF
+chmod 755 "${test_root}/hardware-bin/gamescope"
+cat >"${test_root}/hardware-bin/vulkaninfo" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' 'Vulkan test fixture: AMD discrete GPU'
+EOF
+chmod 755 "${test_root}/hardware-bin/vulkaninfo"
 hardware_report="${test_root}/hardware-report"
 PATH="${test_root}/hardware-bin:${PATH}" PROC_ROOT="${proc_root}" STEAMSHINE_HARDWARE_REPORT_DIR="${hardware_report}" \
   "${root_dir}/scripts/test-steamos-ssd-writes.sh" 0
@@ -171,3 +195,4 @@ HOME="${test_root}/home" XDG_RUNTIME_DIR="${test_root}/home/run" PATH="${test_ro
   STEAMSHINE_HARDWARE_SAMPLE_SECONDS=0 "${root_dir}/scripts/test-steamos-virtual-display.sh" <"${acceptance_input}"
 grep -Fq '"result": "pass"' "${hardware_acceptance_report}/hardware-report.json"
 grep -Fq '"connect_disconnect_cycles": 10' "${hardware_acceptance_report}/hardware-report.json"
+test "$(wc -l <"${hardware_acceptance_report}/encoded-stream-evidence.tsv")" -eq 10
