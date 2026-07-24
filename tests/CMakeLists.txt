@@ -23,6 +23,21 @@ if(NOT TARGET gtest)
 endif()
 include_directories("${GTEST_SOURCE_DIR}/googletest/include" "${GTEST_SOURCE_DIR}")
 
+# Pure SteamOS request and Gamescope-argument tests intentionally avoid the
+# Sunshine runtime target. Fast CI can compile and run this small target without
+# linking capture, encoder, or HTTP implementation code.
+add_library(steamos_virtual_session_core STATIC
+    "${CMAKE_SOURCE_DIR}/src/steamos_virtual_session_core.cpp"
+)
+target_include_directories(steamos_virtual_session_core PUBLIC "${CMAKE_SOURCE_DIR}")
+target_compile_options(steamos_virtual_session_core PRIVATE ${SUNSHINE_COMPILE_OPTIONS})
+
+add_executable(test_steamos_virtual_session_core
+    "${CMAKE_SOURCE_DIR}/tests/unit/test_steamos_virtual_session_core.cpp"
+)
+target_link_libraries(test_steamos_virtual_session_core PRIVATE steamos_virtual_session_core gmock_main)
+add_test(NAME SteamOSVirtualSessionCore COMMAND test_steamos_virtual_session_core)
+
 # coverage
 # https://gcovr.com/en/stable/guide/compiling.html#compiler-options
 option(SUNSHINE_LLVM_COVERAGE "Use LLVM source-based coverage" OFF)

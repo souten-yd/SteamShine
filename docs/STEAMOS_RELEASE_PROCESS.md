@@ -4,6 +4,32 @@ The `SteamOS Runtime Build` GitHub Actions workflow builds an x86_64 artifact fr
 
 It does not run Windows, macOS, FreeBSD, Flatpak, AppImage, Docker, or broad upstream Sunshine test matrices for a normal SteamOS pull request. CUDA and NVIDIA dependencies are disabled for this AMD-focused artifact. ROCm is not bundled; when available on the host, it is reported only by the explicit diagnostic command.
 
+## Validation layers
+
+`SteamOS Runtime Build` first classifies a pull request as `docs`, `shell`,
+`cpp-core`, `capture-encode`, `packaging`, `build-system`, or `unclassified`.
+An unknown or mixed change fails closed to clean full validation. Documentation
+and shell-only changes avoid a Sunshine binary build; shell validation runs
+ShellCheck, actionlint, and the installer/hardware-fixture integration test.
+The standalone `test_steamos_virtual_session_core` target covers request
+normalization and Gamescope argument construction without linking the Sunshine
+runtime. Lifecycle fake-Gamescope tests remain in the full validation layer.
+
+The full layer uses the digest locked in `ci/steamos/image.lock`, configures a
+new build directory, and builds the runtime binary once. Its unit, ABI, package,
+and installer-smoke steps consume that same binary. It does not restore a CMake
+build directory or treat a compiler cache as validation evidence. Each workflow
+uploads `ci-timings.json`; compare ten baseline and ten candidate reports with:
+
+```bash
+scripts/compare-steamos-ci-timings.sh baseline/*.json -- candidate/*.json
+```
+
+`SteamOS Artifact Promotion` is manual and takes a successful Runtime Build run
+ID plus its artifact name. It verifies the source workflow and checksum, then
+creates a release from that artifact. It intentionally does not configure,
+compile, or package a second binary.
+
 ```text
 steamshine-steamos-x86_64-<commit>.tar.zst
 steamshine-steamos-x86_64-<commit>.tar.zst.sha256

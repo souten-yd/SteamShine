@@ -57,19 +57,6 @@ namespace steamos_virtual_session {
     constexpr std::string_view owner_marker_contents {"steamshine-steamos-virtual-session-v1\n"};
 
     /**
-     * @brief Clamp a requested dimension or FPS to a safe Gamescope range.
-     *
-     * @param value Client-provided value.
-     * @param fallback Configured fallback value.
-     * @param minimum Inclusive supported minimum.
-     * @param maximum Inclusive supported maximum.
-     * @return Normalized value.
-     */
-    int normalize(const int value, const int fallback, const int minimum, const int maximum) {
-      return std::clamp(value > 0 ? value : fallback, minimum, maximum);
-    }
-
-    /**
      * @brief Check that a path is a UNIX-domain socket.
      *
      * @param path Candidate socket path.
@@ -441,53 +428,6 @@ namespace steamos_virtual_session {
 #endif
   }  // namespace
 
-  std::vector<std::string> gamescope_arguments(const std::string &help_text, const int width, const int height, const int fps, const bool enable_hdr, const std::string &gpu_device, std::string &error) {
-    const auto has_option {[&help_text](const std::string_view option) {
-      return help_text.find(option) != std::string::npos;
-    }};
-    if (!has_option("--nested-width") || !has_option("--nested-height") || !has_option("--nested-refresh") || !has_option("--expose-wayland")) {
-      error = "Installed Gamescope does not advertise nested Wayland display options";
-      return {};
-    }
-    std::vector<std::string> arguments;
-    if (has_option("--backend") && help_text.find("headless") != std::string::npos) {
-      arguments.emplace_back("--backend");
-      arguments.emplace_back("headless");
-    } else if (has_option("--headless")) {
-      arguments.emplace_back("--headless");
-    } else {
-      error = "Installed Gamescope does not advertise a headless backend";
-      return {};
-    }
-    arguments.emplace_back("--nested-width");
-    arguments.emplace_back(std::to_string(width));
-    arguments.emplace_back("--nested-height");
-    arguments.emplace_back(std::to_string(height));
-    arguments.emplace_back("--nested-refresh");
-    arguments.emplace_back(std::to_string(fps));
-    arguments.emplace_back("--expose-wayland");
-    if (has_option("--scaler")) {
-      arguments.emplace_back("--scaler");
-      arguments.emplace_back("fit");
-    }
-    if (enable_hdr) {
-      if (!has_option("--hdr-enabled")) {
-        error = "Client requested HDR but installed Gamescope does not advertise HDR output";
-        return {};
-      }
-      arguments.emplace_back("--hdr-enabled");
-    }
-    if (!gpu_device.empty()) {
-      if (!has_option("--prefer-vk-device")) {
-        error = "Installed Gamescope does not advertise AMD Vulkan device selection";
-        return {};
-      }
-      arguments.emplace_back("--prefer-vk-device");
-      arguments.emplace_back(gpu_device);
-    }
-    return arguments;
-  }
-
   bool prepare(const rtsp_stream::launch_session_t &launch_session, std::string &error) {
     std::scoped_lock lock {manager.mutex};
     if (!config::steamos_virtual_display.enabled) {
@@ -514,9 +454,7 @@ namespace steamos_virtual_session {
       manager.current = state_e::Failed;
       return false;
     }
-    const int width {normalize(launch_session.width, config::steamos_virtual_display.default_width, 640, 7680)};
-    const int height {normalize(launch_session.height, config::steamos_virtual_display.default_height, 480, 4320)};
-    const int fps {normalize(launch_session.fps, config::steamos_virtual_display.default_fps, 30, 240)};
+    const auto request {normalize_display_request(launch_session.width, launch_session.height, launch_session.fps, config::steamos_virtual_display.default_width, config::steamos_virtual_display.default_height, config::steamos_virtual_display.default_fps)};
     const auto gpu {select_amd_dgpu(config::steamos_virtual_display.game_gpu, error)};
     if (!gpu) {
       manager.current = state_e::Failed;
@@ -549,7 +487,7 @@ namespace steamos_virtual_session {
       manager.current = state_e::Failed;
       return false;
     }
-    const auto arguments {gamescope_arguments(help_text, width, height, fps, launch_session.enable_hdr, gpu->gamescope_device, error)};
+    const auto arguments {gamescope_arguments(help_text, request.width, request.height, request.fps, launch_session.enable_hdr, gpu->gamescope_device, error)};
     if (arguments.empty()) {
       manager.current = state_e::Failed;
       return false;

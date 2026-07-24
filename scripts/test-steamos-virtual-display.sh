@@ -3,7 +3,7 @@
 # shellcheck disable=SC1091,SC2009
 set -euo pipefail
 runtime_dir="${XDG_RUNTIME_DIR:?XDG_RUNTIME_DIR is required}/steamshine"
-state_dir="${HOME}/.local/state/steamshine"
+state_dir="${STATE_ROOT:-${HOME}/.local/state}/steamshine"
 report_dir="${STEAMSHINE_HARDWARE_REPORT_DIR:-${state_dir}/hardware-tests/$(date +%Y%m%d-%H%M%S)}"
 mkdir -p "${report_dir}"
 report="${report_dir}/virtual-display.log"
@@ -14,6 +14,9 @@ test_started="$(date --iso-8601=seconds)"
 completed_attempts=0
 sample_seconds="${STEAMSHINE_HARDWARE_SAMPLE_SECONDS:-60}"
 [[ "${sample_seconds}" =~ ^[0-9]+$ ]] || { echo 'FAIL: STEAMSHINE_HARDWARE_SAMPLE_SECONDS must be a non-negative integer' >&2; exit 2; }
+if [[ -n "${COMMAND_PATH:-}" ]]; then
+  PATH="${COMMAND_PATH}:${PATH}"
+fi
 
 write_summary() {
   local result="$1" capture_event=false streaming_event=false cleanup_event=false metrics packets bytes idr
@@ -130,7 +133,7 @@ collect() {
     . /etc/os-release 2>/dev/null && printf 'OS=%s\n' "${PRETTY_NAME:-unknown}"
     uname -a; gamescope --version 2>&1 || true
     gamescope --help 2>&1 | grep -E -- '--backend|headless|--nested-(width|height|refresh)|--expose-wayland|--prefer-vk-device|--hdr-enabled' || true
-    find /sys/class/drm -name uevent -exec sh -c 'echo ---$1; grep -E "PCI_SLOT_NAME|DRIVER" "$1"' _ {} \; 2>/dev/null || true
+    find "${SYS_ROOT:-/sys}/class/drm" -name uevent -exec sh -c 'echo ---$1; grep -E "PCI_SLOT_NAME|DRIVER" "$1"' _ {} \; 2>/dev/null || true
     if command -v vainfo >/dev/null 2>&1; then vainfo 2>&1 || echo 'DIAGNOSTIC_WARN: vainfo failed'; else echo 'VAAPI_PROBE_SKIPPED: vainfo unavailable'; fi
     vulkaninfo --summary 2>&1 || true
     if command -v rocminfo >/dev/null 2>&1; then rocminfo 2>&1 || true; fi

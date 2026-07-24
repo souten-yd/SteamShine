@@ -4,9 +4,10 @@
  */
 #pragma once
 
+#include "steamos_virtual_session_core.h"
+
 #include <cstddef>
 #include <string>
-#include <vector>
 
 namespace rtsp_stream {
   struct launch_session_t;
@@ -28,24 +29,6 @@ namespace steamos_virtual_session {
     Failed,  ///< Startup or readiness failed.
     Recovering,  ///< Cleanup is returning the manager to Idle.
   };
-
-  /**
-   * @brief Build a Gamescope command from options advertised by its own help text.
-   *
-   * The result never uses an option absent from @p help_text. This keeps the
-   * virtual-display provider compatible with the Gamescope version installed on
-   * the SteamOS host.
-   *
-   * @param help_text Output captured from `gamescope --help`.
-   * @param width Normalized nested display width.
-   * @param height Normalized nested display height.
-   * @param fps Normalized nested display refresh rate.
-   * @param enable_hdr Whether the client requested HDR output.
-   * @param gpu_device PCI vendor/device identifier accepted by Gamescope, if selected.
-   * @param error Receives a reason when the advertised option set is insufficient.
-   * @return Arguments after the executable, or an empty vector on failure.
-   */
-  std::vector<std::string> gamescope_arguments(const std::string &help_text, int width, int height, int fps, bool enable_hdr, const std::string &gpu_device, std::string &error);
 
   /**
    * @brief Start an owned headless Gamescope session for a GameStream launch.

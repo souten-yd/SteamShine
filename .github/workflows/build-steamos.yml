@@ -7,12 +7,16 @@ on:
       - '.github/workflows/build-ci-image.yml'
       - 'ci/steamos/**'
       - 'src/steamos_virtual_session.*'
+      - 'src/steamos_virtual_session_core.*'
       - 'src/platform/linux/**'
       - 'src/nvhttp.*'
       - 'src/stream.*'
       - 'src/process.*'
       - 'src/config.*'
-      - 'tests/**'
+      - 'tests/unit/test_steamos_virtual_session.cpp'
+      - 'tests/unit/test_steamos_virtual_session_core.cpp'
+      - 'tests/integration/test_steamshine_script.sh'
+      - 'tests/fixtures/steamos/**'
       - 'scripts/**'
       - 'steamshine.sh'
       - 'CMakeLists.txt'
@@ -29,6 +33,7 @@ on:
         type: boolean
 
 permissions:
+  actions: read
   contents: read
   packages: read
 
@@ -41,6 +46,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       mode: ${{ steps.classify.outputs.mode }}
+      categories: ${{ steps.classify.outputs.categories }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -52,13 +58,29 @@ jobs:
           FORCE_FULL: ${{ github.ref == 'refs/heads/master' || inputs.full_validation }}
         run: |
           set -euo pipefail
+          if [[ -z "${BASE_SHA}" ]] || ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then BASE_SHA="${GITHUB_SHA}^"; fi
           changed="$(git diff --name-only "${BASE_SHA}" "${GITHUB_SHA}" || true)"
           git diff --check "${BASE_SHA}" "${GITHUB_SHA}"
-          mode=docs
-          if [[ "${FORCE_FULL}" == true ]] || grep -qEv '^(docs/|.*\.md$)' <<<"${changed}"; then mode=full; fi
-          if [[ "${mode}" == full ]] && grep -qEv '^(steamshine\.sh|scripts/|tests/integration/|\.github/workflows/)' <<<"${changed}"; then mode=full; fi
-          if [[ "${mode}" == full ]] && grep -qE '^(steamshine\.sh|scripts/|tests/integration/|\.github/workflows/)' <<<"${changed}" && ! grep -qEv '^(steamshine\.sh|scripts/|tests/integration/|\.github/workflows/)' <<<"${changed}"; then mode=shell; fi
+          declare -A categories=()
+          while IFS= read -r path; do
+            [[ -n "${path}" ]] || continue
+            case "${path}" in
+              docs/*|*.md) categories[docs]=1 ;;
+              packaging/linux/*|scripts/package-steamos-artifact.sh) categories[packaging]=1 ;;
+              steamshine.sh|scripts/*.sh|tests/integration/test_steamshine_script.sh|tests/fixtures/steamos/*) categories[shell]=1 ;;
+              src/steamos_virtual_session_core.*|tests/unit/test_steamos_virtual_session_core.cpp) categories[cpp-core]=1 ;;
+              src/platform/linux/*|src/stream.*|src/process.*|src/nvhttp.*|src/config.*|src/steamos_virtual_session.*) categories[capture-encode]=1 ;;
+              CMakeLists.txt|cmake/*|tests/CMakeLists.txt|.github/workflows/*|ci/steamos/*) categories[build-system]=1 ;;
+              *) categories[unclassified]=1 ;;
+            esac
+          done <<<"${changed}"
+          category_list="$(printf '%s\n' "${!categories[@]}" | sort | paste -sd, -)"
+          mode=full
+          if [[ "${FORCE_FULL}" != true && "${category_list}" == docs ]]; then mode=docs; fi
+          if [[ "${FORCE_FULL}" != true && "${category_list}" == shell ]]; then mode=shell; fi
+          if [[ "${FORCE_FULL}" != true && "${category_list}" == cpp-core ]]; then mode=cpp-core; fi
           printf 'mode=%s\n' "${mode}" >>"${GITHUB_OUTPUT}"
+          printf 'categories=%s\n' "${category_list:-unclassified}" >>"${GITHUB_OUTPUT}"
 
   fast-validation:
     needs: classify-changes
@@ -74,16 +96,21 @@ jobs:
         working-directory: ${{ github.workspace }}
     steps:
       - uses: actions/checkout@v4
-      - name: Docs or shell validation
+      - name: Focused fast validation
         shell: bash
         run: |
           set -euo pipefail
           cd "${GITHUB_WORKSPACE}"
-          if grep -nE '[[:blank:]]+$|^(<<<<<<<|=======|>>>>>>>)' steamshine.sh scripts/*.sh tests/integration/test_steamshine_script.sh .github/workflows/build-steamos.yml .github/workflows/build-ci-image.yml; then exit 1; fi
-          if [[ '${{ needs.classify-changes.outputs.mode }}' == shell ]]; then
-            shellcheck steamshine.sh scripts/*.sh tests/integration/test_steamshine_script.sh
+          mode='${{ needs.classify-changes.outputs.mode }}'
+          if [[ "${mode}" == shell ]]; then
+            shellcheck steamshine.sh scripts/*.sh tests/fixtures/steamos/fixture.sh tests/integration/test_steamshine_script.sh
             actionlint .github/workflows/build-steamos.yml .github/workflows/build-ci-image.yml
             tests/integration/test_steamshine_script.sh
+          fi
+          if [[ "${mode}" == cpp-core ]]; then
+            cmake -S . -B cmake-build-steamos-fast -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=ON -DBUILD_DOCS=OFF -DSUNSHINE_ENABLE_CUDA=OFF
+            cmake --build cmake-build-steamos-fast --target test_steamos_virtual_session_core --parallel 2
+            cmake-build-steamos-fast/tests/test_steamos_virtual_session_core --gtest_color=yes
           fi
 
   full-validation:
@@ -105,10 +132,10 @@ jobs:
       - name: Focused formatting and shell checks
         run: |
           cd "${GITHUB_WORKSPACE}"
-          clang-format --dry-run --Werror src/steamos_virtual_session.cpp src/steamos_virtual_session.h tests/unit/test_steamos_virtual_session.cpp
-          shellcheck steamshine.sh scripts/*.sh tests/integration/test_steamshine_script.sh
+          clang-format --dry-run --Werror src/steamos_virtual_session.cpp src/steamos_virtual_session.h src/steamos_virtual_session_core.cpp src/steamos_virtual_session_core.h tests/unit/test_steamos_virtual_session.cpp tests/unit/test_steamos_virtual_session_core.cpp
+          shellcheck steamshine.sh scripts/*.sh tests/fixtures/steamos/fixture.sh tests/integration/test_steamshine_script.sh
           actionlint .github/workflows/build-steamos.yml .github/workflows/build-ci-image.yml
-          if grep -nE '[[:blank:]]+$|^(<<<<<<<|=======|>>>>>>>)' src/steamos_virtual_session.cpp src/steamos_virtual_session.h tests/unit/test_steamos_virtual_session.cpp steamshine.sh scripts/*.sh tests/integration/test_steamshine_script.sh .github/workflows/build-steamos.yml .github/workflows/build-ci-image.yml; then exit 1; fi
+          if grep -nE '[[:blank:]]+$|^(<<<<<<<|=======|>>>>>>>)' src/steamos_virtual_session.cpp src/steamos_virtual_session.h src/steamos_virtual_session_core.cpp src/steamos_virtual_session_core.h tests/unit/test_steamos_virtual_session.cpp tests/unit/test_steamos_virtual_session_core.cpp steamshine.sh scripts/*.sh tests/fixtures/steamos/fixture.sh tests/integration/test_steamshine_script.sh .github/workflows/build-steamos.yml .github/workflows/build-ci-image.yml; then exit 1; fi
       - name: Configure clean SteamOS release build
         run: cd "${GITHUB_WORKSPACE}" && cmake -S . -B cmake-build-steamos -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=ON -DBUILD_DOCS=OFF -DSUNSHINE_ENABLE_CUDA=OFF -DSUNSHINE_ASSETS_DIR=share/assets -DSUNSHINE_ASSETS_DIR_DEF=../share/assets
       - name: Build runtime binary
@@ -116,6 +143,8 @@ jobs:
       - name: SteamOS virtual session and installer tests
         run: |
           cd "${GITHUB_WORKSPACE}"
+          cmake --build cmake-build-steamos --target test_steamos_virtual_session_core --parallel 2
+          cmake-build-steamos/tests/test_steamos_virtual_session_core --gtest_color=yes
           cmake --build cmake-build-steamos --target test_sunshine --parallel 2
           cmake-build-steamos/tests/test_sunshine --gtest_filter='*SteamOSVirtualSession*'
           tests/integration/test_steamshine_script.sh
@@ -139,4 +168,22 @@ jobs:
         with:
           name: steamshine-steamos-x86_64-${{ github.sha }}
           path: dist/
+          if-no-files-found: error
+
+  record-timings:
+    needs: [classify-changes, fast-validation, full-validation]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Record job and step wall-clock timing
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs" --paginate >jobs.json
+          jq '[.jobs[] | {name, started_at, completed_at, conclusion, steps: [.steps[] | {name, conclusion, started_at, completed_at, seconds: (if .started_at != null and .completed_at != null then ((.completed_at | fromdateiso8601) - (.started_at | fromdateiso8601)) else null end)}]}]' jobs.json >ci-timings.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: steamos-ci-timings-${{ github.sha }}
+          path: ci-timings.json
           if-no-files-found: error

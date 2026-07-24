@@ -7,6 +7,9 @@ root_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 test_root="$(mktemp -d)"
 fake_dri="$(mktemp -d)"
 trap 'rm -rf -- "${test_root}" "${fake_dri}"' EXIT
+# shellcheck source=tests/fixtures/steamos/fixture.sh
+source "${root_dir}/tests/fixtures/steamos/fixture.sh"
+steamos_fixture_init "${test_root}/fixture"
 
 # Only numeric GLIBCXX symbol versions are ABI candidates.  libstdc++ also
 # exposes GLIBCXX_TUNABLES, which must never be selected as a version ceiling.
@@ -134,10 +137,10 @@ test -f "${test_root}/home/.local/state/steamshine/diagnostics.log"
 
 # Hardware-test helper scripts must tolerate SteamOS installations without
 # pidstat or vainfo and must sum multiple process I/O counters safely.
-proc_root="${test_root}/proc"
-mkdir -p "${proc_root}/101" "${proc_root}/202" "${test_root}/hardware-bin"
-printf 'write_bytes: 28672\ncancelled_write_bytes: 0\nsyscw: 4\n' >"${proc_root}/101/io"
-printf 'write_bytes: 4096\ncancelled_write_bytes: 0\nsyscw: 2\n' >"${proc_root}/202/io"
+proc_root="${PROC_ROOT}"
+steamos_fixture_write_proc_io 101 28672 4
+steamos_fixture_write_proc_io 202 4096 2
+mkdir -p "${test_root}/hardware-bin"
 cat >"${test_root}/hardware-bin/pgrep" <<'EOF'
 #!/usr/bin/env bash
 # Include a vanished PID without an io file; collection must skip it safely.
