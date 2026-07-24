@@ -22,6 +22,7 @@
 #include <mutex>
 #include <optional>
 #include <string_view>
+#include <atomic>
 #include <thread>
 #include <vector>
 
@@ -43,6 +44,10 @@ namespace steamos_virtual_session {
       std::string pci_bdf;  ///< PCI BDF of the AMD dGPU selected for Gamescope, capture, and encoding.
       std::string render_node;  ///< AMD dGPU render node shared by Gamescope, capture, and encoders.
       bool stream_requested {false};  ///< Whether RTSP accepted the associated stream before capture attached.
+      std::atomic_bool packet_tracking {false};  ///< Whether the video sender may update virtual-session metrics.
+      std::atomic_uint64_t encoded_packets {0};  ///< Encoded packets emitted during the owned session.
+      std::atomic_uint64_t encoded_bytes {0};  ///< Encoded payload bytes emitted during the owned session.
+      std::atomic_uint64_t idr_packets {0};  ///< IDR packets emitted during the owned session.
 #if defined(__linux__)
       pid_t process_group {-1};  ///< Process group containing Gamescope and its children.
 #endif
@@ -558,6 +563,10 @@ namespace steamos_virtual_session {
     manager.runtime_directory = base / ("session-" + std::to_string(::getpid()) + "-" + std::to_string(launch_session.id));
     manager.pci_bdf = gpu->pci_bdf;
     manager.render_node = gpu->render_node;
+    manager.packet_tracking.store(false, std::memory_order_release);
+    manager.encoded_packets.store(0, std::memory_order_relaxed);
+    manager.encoded_bytes.store(0, std::memory_order_relaxed);
+    manager.idr_packets.store(0, std::memory_order_relaxed);
     std::error_code ec;
     std::filesystem::create_directories(manager.runtime_directory, ec);
     if (ec) {
@@ -686,6 +695,18 @@ namespace steamos_virtual_session {
       manager.current = state_e::Streaming;
       BOOST_LOG(info) << "SteamOS virtual display streaming started";
     }
+    manager.packet_tracking.store(true, std::memory_order_release);
+  }
+
+  void mark_encoded_packet(size_t bytes, bool idr) {
+    if (!manager.packet_tracking.load(std::memory_order_acquire)) {
+      return;
+    }
+    manager.encoded_packets.fetch_add(1, std::memory_order_relaxed);
+    manager.encoded_bytes.fetch_add(bytes, std::memory_order_relaxed);
+    if (idr) {
+      manager.idr_packets.fetch_add(1, std::memory_order_relaxed);
+    }
   }
 
   bool application_environment(std::string &runtime_directory, std::string &wayland_display) {
@@ -740,7 +761,11 @@ namespace steamos_virtual_session {
 #if defined(__linux__)
     if (manager.process_group > 0) {
       manager.current = state_e::Stopping;
+      manager.packet_tracking.store(false, std::memory_order_release);
       BOOST_LOG(info) << "SteamOS virtual display stopping owned Gamescope session";
+      BOOST_LOG(info) << "SteamOS virtual display encoded packets=" << manager.encoded_packets.load(std::memory_order_relaxed)
+                      << " bytes=" << manager.encoded_bytes.load(std::memory_order_relaxed)
+                      << " idr=" << manager.idr_packets.load(std::memory_order_relaxed);
       stop_owned_process_group(manager.process_group, std::chrono::seconds {config::steamos_virtual_display.shutdown_timeout_seconds});
       manager.process_group = -1;
     }

@@ -16,10 +16,17 @@ sample_seconds="${STEAMSHINE_HARDWARE_SAMPLE_SECONDS:-60}"
 [[ "${sample_seconds}" =~ ^[0-9]+$ ]] || { echo 'FAIL: STEAMSHINE_HARDWARE_SAMPLE_SECONDS must be a non-negative integer' >&2; exit 2; }
 
 write_summary() {
-  local result="$1" capture_event=false streaming_event=false cleanup_event=false
+  local result="$1" capture_event=false streaming_event=false cleanup_event=false metrics packets bytes idr
   grep -Rqs 'SteamOS virtual display capture attached' "${report_dir}"/service-*.log 2>/dev/null && capture_event=true
   grep -Rqs 'SteamOS virtual display streaming started' "${report_dir}"/service-*.log 2>/dev/null && streaming_event=true
   grep -Rqs 'SteamOS virtual display stopping owned Gamescope session' "${report_dir}"/service-*.log 2>/dev/null && cleanup_event=true
+  metrics="$(grep -Rh 'SteamOS virtual display encoded packets=' "${report_dir}"/service-*.log 2>/dev/null | tail -n 1 || true)"
+  packets="$(sed -n 's/.*encoded packets=\([0-9][0-9]*\).*/\1/p' <<<"${metrics}")"
+  bytes="$(sed -n 's/.* bytes=\([0-9][0-9]*\).*/\1/p' <<<"${metrics}")"
+  idr="$(sed -n 's/.* idr=\([0-9][0-9]*\).*/\1/p' <<<"${metrics}")"
+  [[ -n "${packets}" ]] || packets=null
+  [[ -n "${bytes}" ]] || bytes=null
+  [[ -n "${idr}" ]] || idr=null
   cat >"${report_dir}/hardware-report.json" <<EOF
 {
   "started_at": "${test_started}",
@@ -29,9 +36,10 @@ write_summary() {
   "capture_attached_evidence": ${capture_event},
   "streaming_started_evidence": ${streaming_event},
   "cleanup_started_evidence": ${cleanup_event},
-  "encoded_packet_count": null,
-  "idr_frame_count": null,
-  "note": "Packet and IDR counters are not yet exported by the streaming backend; null is intentional."
+  "encoded_packet_count": ${packets},
+  "encoded_bytes": ${bytes},
+  "idr_frame_count": ${idr},
+  "note": "Packet counters are emitted once during owned-session cleanup; null means no completed live stream was observed."
 }
 EOF
 }

@@ -4,6 +4,7 @@
  */
 #pragma once
 
+#include <cstddef>
 #include <string>
 #include <vector>
 
@@ -78,6 +79,18 @@ namespace steamos_virtual_session {
    * @brief Mark a prepared session as streaming after the RTSP launch is queued.
    */
   void mark_streaming();
+
+  /**
+   * @brief Record one encoded video packet for the owned virtual session.
+   *
+   * This is an in-memory, lock-free counter used only for the final lifecycle
+   * report. It deliberately performs no file or network I/O on the video
+   * broadcast thread.
+   *
+   * @param bytes Encoded payload bytes before GameStream packetization.
+   * @param idr True when the packet is an IDR/key frame.
+   */
+  void mark_encoded_packet(size_t bytes, bool idr);
 
   /**
    * @brief Return the owned Wayland environment for the application launcher.

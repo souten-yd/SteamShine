@@ -1518,6 +1518,8 @@ namespace stream {
         }
       }
 
+      steamos_virtual_session::mark_encoded_packet(payload.size(), packet->is_idr());
+
       video_short_frame_header_t frame_header = {};
       frame_header.headerType = 0x01;  // Short header type
       frame_header.frameType = packet->is_idr()                     ? 2 :
