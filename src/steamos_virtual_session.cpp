@@ -718,7 +718,7 @@ namespace steamos_virtual_session {
     std::scoped_lock lock {manager.mutex};
 #if defined(__linux__)
     return manager.process_group > 0 && !manager.runtime_directory.empty() &&
-           (manager.current == state_e::WaitingForCapture || manager.current == state_e::Ready || manager.current == state_e::Streaming);
+           (manager.current == state_e::WaitingForCapture || manager.current == state_e::Ready || manager.current == state_e::Streaming || manager.current == state_e::Failed);
 #else
     return false;
 #endif
@@ -729,6 +729,15 @@ namespace steamos_virtual_session {
     if (manager.current == state_e::WaitingForCapture) {
       manager.current = manager.stream_requested ? state_e::Streaming : state_e::Ready;
       BOOST_LOG(info) << "SteamOS virtual display capture attached";
+    }
+  }
+
+  void mark_capture_lost() {
+    std::scoped_lock lock {manager.mutex};
+    if (manager.process_group > 0 && (manager.current == state_e::WaitingForCapture || manager.current == state_e::Ready || manager.current == state_e::Streaming)) {
+      manager.packet_tracking.store(false, std::memory_order_release);
+      manager.current = state_e::Failed;
+      BOOST_LOG(error) << "SteamOS virtual display capture source disappeared";
     }
   }
 

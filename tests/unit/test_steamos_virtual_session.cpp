@@ -256,6 +256,27 @@ TEST_F(SteamOSVirtualSessionTest, FakeGamescopeReadinessAndCleanup) {
   EXPECT_TRUE(std::filesystem::exists(config::steamos_virtual_display.runtime_directory));
 }
 
+TEST_F(SteamOSVirtualSessionTest, CaptureLossRetainsOwnershipForSafeCleanup) {
+  rtsp_stream::launch_session_t launch {};
+  launch.id = 43;
+  std::string error;
+  ASSERT_TRUE(steamos_virtual_session::prepare(launch, error)) << error;
+  steamos_virtual_session::mark_capture_ready();
+
+  steamos_virtual_session::mark_capture_lost();
+
+  EXPECT_EQ(steamos_virtual_session::state(), steamos_virtual_session::state_e::Failed);
+  EXPECT_TRUE(steamos_virtual_session::active());
+  steamos_virtual_session::mark_capture_lost();
+  EXPECT_EQ(steamos_virtual_session::state(), steamos_virtual_session::state_e::Failed);
+
+  steamos_virtual_session::stop();
+
+  EXPECT_EQ(steamos_virtual_session::state(), steamos_virtual_session::state_e::Idle);
+  EXPECT_FALSE(steamos_virtual_session::active());
+  EXPECT_FALSE(std::filesystem::exists(std::filesystem::path {config::steamos_virtual_display.runtime_directory} / ("session-" + std::to_string(::getpid()) + "-43")));
+}
+
 TEST_F(SteamOSVirtualSessionTest, CleansUpAfterGamescopeStartupTimeout) {
   config::steamos_virtual_display.gamescope_path = make_fake_gamescope(root, "never-ready").string();
   config::steamos_virtual_display.startup_timeout_seconds = 1;

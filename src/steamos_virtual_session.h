@@ -122,6 +122,16 @@ namespace steamos_virtual_session {
   void mark_capture_ready();
 
   /**
+   * @brief Record an owned virtual-display capture failure without blocking capture.
+   *
+   * The capture thread only performs this state transition. The existing stream
+   * teardown path subsequently stops the owned application, Gamescope process
+   * group, and runtime directory; no process wait or filesystem operation is
+   * introduced on the capture path.
+   */
+  void mark_capture_lost();
+
+  /**
    * @brief Stop only the process group and runtime directory owned by SteamShine.
    */
   void stop();

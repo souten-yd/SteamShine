@@ -224,8 +224,10 @@ namespace wl {
         auto status = snapshot(pull_free_image_cb, img_out, 1000ms, *cursor);
         switch (status) {
           case platf::capture_e::reinit:
-          case platf::capture_e::error:
           case platf::capture_e::interrupted:
+            return status;
+          case platf::capture_e::error:
+            steamos_virtual_session::mark_capture_lost();
             return status;
           case platf::capture_e::timeout:
             if (!push_captured_image_cb(std::move(img_out), false)) {
@@ -388,8 +390,10 @@ namespace wl {
         auto status = snapshot(pull_free_image_cb, img_out, 1000ms, *cursor);
         switch (status) {
           case platf::capture_e::reinit:
-          case platf::capture_e::error:
           case platf::capture_e::interrupted:
+            return status;
+          case platf::capture_e::error:
+            steamos_virtual_session::mark_capture_lost();
             return status;
           case platf::capture_e::timeout:
             if (!push_captured_image_cb(std::move(img_out), false)) {
