@@ -19,6 +19,10 @@ shellcheck
 actionlint
 zstd
 binutils
+# Standalone lifecycle tests link Boost.Log from the fixed snapshot. The
+# application build still uses the checksum-pinned Boost 1.89 source in the
+# image because Sunshine requests that exact version.
+boost
 nlohmann-json
 libcap
 libdrm
