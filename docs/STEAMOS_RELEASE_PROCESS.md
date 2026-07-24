@@ -23,7 +23,9 @@ the fake-Gamescope lifecycle layer; it does not build `test_sunshine`.
 The full layer uses the digest locked in `ci/steamos/image.lock`, configures a
 new build directory, and builds the runtime binary once. Its unit, ABI, package,
 and installer-smoke steps consume that same binary. It does not restore a CMake
-build directory or treat a compiler cache as validation evidence. Each workflow
+build directory or treat a compiler cache as validation evidence. It initializes
+only the Linux runtime submodule closure (including Moonlight protocol and
+Vulkan headers), not packaging, CUDA, or other non-SteamOS trees. Each workflow
 uploads `ci-timings.json`; compare ten baseline and ten candidate reports with:
 
 ```bash
