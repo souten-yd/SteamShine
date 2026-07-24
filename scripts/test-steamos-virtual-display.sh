@@ -12,6 +12,8 @@ steamshine_binary="${STEAMSHINE_BINARY:-${HOME}/.local/bin/steamshine}"
 steamshine_config="${STEAMSHINE_CONFIG:-${HOME}/.config/steamshine/sunshine.conf}"
 test_started="$(date --iso-8601=seconds)"
 completed_attempts=0
+sample_seconds="${STEAMSHINE_HARDWARE_SAMPLE_SECONDS:-60}"
+[[ "${sample_seconds}" =~ ^[0-9]+$ ]] || { echo 'FAIL: STEAMSHINE_HARDWARE_SAMPLE_SECONDS must be a non-negative integer' >&2; exit 2; }
 
 write_summary() {
   local result="$1" capture_event=false streaming_event=false cleanup_event=false
@@ -52,13 +54,15 @@ owned_gamescope_processes() {
   for pid in "${proc_root}"/[0-9]*; do
     pid="${pid##*/}"
     [[ -r "${proc_root}/${pid}/environ" ]] || continue
+    # hidepid may report the file as readable but reject the actual open.
+    head -c 1 "${proc_root}/${pid}/environ" >/dev/null 2>&1 || continue
     while IFS= read -r -d '' environment; do
       value="${environment#XDG_RUNTIME_DIR=}"
       if [[ "${environment}" == XDG_RUNTIME_DIR=* && "${value}" == "${runtime_dir}"/session-* ]]; then
         printf '%s\n' "${pid}"
         break
       fi
-    done <"${proc_root}/${pid}/environ"
+    done <"${proc_root}/${pid}/environ" 2>/dev/null || true
   done
 }
 
@@ -72,7 +76,9 @@ owned_gamescope_report() {
 }
 
 collect_service_evidence() {
-  local label="$1" journal="${report_dir}/service-${label}.log"
+  local label journal
+  label="$1"
+  journal="${report_dir}/service-${label}.log"
   if ! command -v journalctl >/dev/null 2>&1; then
     echo 'SERVICE_EVIDENCE_SKIPPED: journalctl unavailable'
     return 0
@@ -128,10 +134,10 @@ for attempt in $(seq 1 10); do
   read -r
   collect "connected-${attempt}"
   if [[ "${attempt}" -eq 1 ]]; then
-    echo 'Keep Moonlight connected for 60 seconds while latency and SteamShine write counters are collected.'
+    echo "Keep Moonlight connected for ${sample_seconds} seconds while latency and SteamShine write counters are collected."
     STEAMSHINE_HARDWARE_REPORT_DIR="${report_dir}" "${script_dir}/test-steamos-latency.sh" &
     latency_process=$!
-    STEAMSHINE_HARDWARE_REPORT_DIR="${report_dir}" "${script_dir}/test-steamos-ssd-writes.sh" 60 &
+    STEAMSHINE_HARDWARE_REPORT_DIR="${report_dir}" "${script_dir}/test-steamos-ssd-writes.sh" "${sample_seconds}" &
     writes_process=$!
     wait "${latency_process}"
     wait "${writes_process}"

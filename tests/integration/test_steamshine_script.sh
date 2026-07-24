@@ -130,3 +130,21 @@ grep -Fq 'delta write_bytes=0' "${hardware_report}/ssd-writes.log"
 PATH="${test_root}/hardware-bin:${PATH}" STEAMSHINE_HARDWARE_REPORT_DIR="${hardware_report}" \
   "${root_dir}/scripts/test-steamos-latency.sh"
 grep -Fq 'pidstat unavailable' "${hardware_report}/latency.log"
+
+# The interactive harness must preserve evidence even where the SteamOS image
+# omits optional diagnostic programs.  The fake binary accepts the encoder
+# preflight, while zero sampling duration keeps this lifecycle test fast.
+cat >"${test_root}/hardware-bin/steamshine" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+chmod 755 "${test_root}/hardware-bin/steamshine"
+hardware_acceptance_report="${test_root}/hardware-acceptance-report"
+acceptance_input="${test_root}/acceptance-input"
+for _ in $(seq 1 20); do printf '\n'; done >"${acceptance_input}"
+for _ in video audio keyboard mouse gamepad; do printf 'y\n'; done >>"${acceptance_input}"
+HOME="${test_root}/home" XDG_RUNTIME_DIR="${test_root}/home/run" PATH="${test_root}/hardware-bin:${PATH}" \
+  STEAMSHINE_BINARY="${test_root}/hardware-bin/steamshine" STEAMSHINE_HARDWARE_REPORT_DIR="${hardware_acceptance_report}" \
+  STEAMSHINE_HARDWARE_SAMPLE_SECONDS=0 "${root_dir}/scripts/test-steamos-virtual-display.sh" <"${acceptance_input}"
+grep -Fq '"result": "pass"' "${hardware_acceptance_report}/hardware-report.json"
+grep -Fq '"connect_disconnect_cycles": 10' "${hardware_acceptance_report}/hardware-report.json"
