@@ -6,8 +6,8 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
-#include <string>
 #include <drm_fourcc.h>
+#include <string>
 #include <sys/stat.h>
 #if defined(__FreeBSD__)
   #include <sys/types.h>
