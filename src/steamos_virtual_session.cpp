@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cctype>
 #include <cerrno>
 #include <chrono>
@@ -22,7 +23,6 @@
 #include <mutex>
 #include <optional>
 #include <string_view>
-#include <atomic>
 #include <thread>
 #include <vector>
 
