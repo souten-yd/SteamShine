@@ -2,14 +2,13 @@
  * @file tests/unit/test_steamos_virtual_session.cpp
  * @brief Unit tests for the SteamOS owned virtual-session lifecycle.
  */
-#include "../tests_common.h"
-
 #if defined(__linux__)
   #include <cerrno>
   #include <chrono>
   #include <cstdlib>
   #include <filesystem>
   #include <fstream>
+  #include <gtest/gtest.h>
   #include <iterator>
   #include <signal.h>
   #include <src/config.h>
@@ -100,7 +99,7 @@ namespace {
   /**
    * @brief Test fixture that restores global virtual-display configuration.
    */
-  class SteamOSVirtualSessionTest: public BaseTest {
+  class SteamOSVirtualSessionTest: public ::testing::Test {
   protected:
     config::steamos_virtual_display_t saved {config::steamos_virtual_display};  ///< Configuration restored after each test.
     std::filesystem::path root {std::filesystem::temp_directory_path() / "steamshine-virtual-session-test"};  ///< Test-owned temporary directory.

@@ -13,7 +13,9 @@ and shell-only changes avoid a Sunshine binary build; shell validation runs
 ShellCheck, actionlint, and the installer/hardware-fixture integration test.
 The standalone `tests/steamos_core` CMake project covers request normalization
 and Gamescope argument construction without configuring or linking the Sunshine
-runtime. Lifecycle fake-Gamescope tests remain in the full validation layer.
+runtime. `tests/steamos_lifecycle` independently links only the virtual-session
+manager, test-owned configuration/logging globals, and its direct libraries for
+the fake-Gamescope lifecycle layer; it does not build `test_sunshine`.
 
 The full layer uses the digest locked in `ci/steamos/image.lock`, configures a
 new build directory, and builds the runtime binary once. Its unit, ABI, package,

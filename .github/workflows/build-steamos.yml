@@ -16,6 +16,7 @@ on:
       - 'tests/unit/test_steamos_virtual_session.cpp'
       - 'tests/unit/test_steamos_virtual_session_core.cpp'
       - 'tests/steamos_core/CMakeLists.txt'
+      - 'tests/steamos_lifecycle/**'
       - 'tests/integration/test_steamshine_script.sh'
       - 'tests/fixtures/steamos/**'
       - 'scripts/**'
@@ -39,6 +40,7 @@ on:
       - 'tests/unit/test_steamos_virtual_session.cpp'
       - 'tests/unit/test_steamos_virtual_session_core.cpp'
       - 'tests/steamos_core/CMakeLists.txt'
+      - 'tests/steamos_lifecycle/**'
       - 'tests/integration/test_steamshine_script.sh'
       - 'tests/fixtures/steamos/**'
       - 'scripts/**'
@@ -168,10 +170,10 @@ jobs:
       - name: Focused formatting and shell checks
         run: |
           cd "${GITHUB_WORKSPACE}"
-          clang-format --dry-run --Werror src/steamos_virtual_session.cpp src/steamos_virtual_session.h src/steamos_virtual_session_core.cpp src/steamos_virtual_session_core.h tests/unit/test_steamos_virtual_session.cpp tests/unit/test_steamos_virtual_session_core.cpp
+          clang-format --dry-run --Werror src/steamos_virtual_session.cpp src/steamos_virtual_session.h src/steamos_virtual_session_core.cpp src/steamos_virtual_session_core.h tests/unit/test_steamos_virtual_session.cpp tests/unit/test_steamos_virtual_session_core.cpp tests/steamos_lifecycle/stubs.cpp
           shellcheck steamshine.sh scripts/*.sh tests/fixtures/steamos/fixture.sh tests/integration/test_steamshine_script.sh
           actionlint .github/workflows/build-steamos.yml .github/workflows/build-ci-image.yml
-          if grep -nE '[[:blank:]]+$|^(<<<<<<<|=======|>>>>>>>)' src/steamos_virtual_session.cpp src/steamos_virtual_session.h src/steamos_virtual_session_core.cpp src/steamos_virtual_session_core.h tests/unit/test_steamos_virtual_session.cpp tests/unit/test_steamos_virtual_session_core.cpp steamshine.sh scripts/*.sh tests/fixtures/steamos/fixture.sh tests/integration/test_steamshine_script.sh .github/workflows/build-steamos.yml .github/workflows/build-ci-image.yml; then exit 1; fi
+          if grep -nE '[[:blank:]]+$|^(<<<<<<<|=======|>>>>>>>)' src/steamos_virtual_session.cpp src/steamos_virtual_session.h src/steamos_virtual_session_core.cpp src/steamos_virtual_session_core.h tests/unit/test_steamos_virtual_session.cpp tests/unit/test_steamos_virtual_session_core.cpp tests/steamos_lifecycle/stubs.cpp steamshine.sh scripts/*.sh tests/fixtures/steamos/fixture.sh tests/integration/test_steamshine_script.sh .github/workflows/build-steamos.yml .github/workflows/build-ci-image.yml; then exit 1; fi
       - name: Configure clean SteamOS release build
         run: cd "${GITHUB_WORKSPACE}" && cmake -S . -B cmake-build-steamos -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=ON -DBUILD_DOCS=OFF -DSUNSHINE_ENABLE_CUDA=OFF -DSUNSHINE_ASSETS_DIR=share/assets -DSUNSHINE_ASSETS_DIR_DEF=../share/assets
       - name: Build runtime binary
@@ -184,8 +186,9 @@ jobs:
           cmake -S tests/steamos_core -B cmake-build-steamos-core -G Ninja -DCMAKE_BUILD_TYPE=Release
           cmake --build cmake-build-steamos-core --target test_steamos_virtual_session_core --parallel 2
           cmake-build-steamos-core/test_steamos_virtual_session_core --gtest_color=yes
-          cmake --build cmake-build-steamos --target test_sunshine --parallel 2
-          cmake-build-steamos/tests/test_sunshine --gtest_filter='*SteamOSVirtualSession*'
+          cmake -S tests/steamos_lifecycle -B cmake-build-steamos-lifecycle -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build cmake-build-steamos-lifecycle --target test_steamos_virtual_session_lifecycle --parallel 2
+          cmake-build-steamos-lifecycle/test_steamos_virtual_session_lifecycle --gtest_color=yes
           tests/integration/test_steamshine_script.sh
       - name: Verify runtime linkage and ABI ceiling
         run: |
