@@ -21,7 +21,7 @@ The existing Wayland DMA-BUF backend now opens the owned socket by file descript
 
 ## Remaining hardware-gated work
 
-The dedicated PipeWire-node provider has not been implemented; the current virtual path uses the existing Wayland DMA-BUF capture backend, which is the low-copy display source exposed by Gamescope. PipeWire node ownership/disappearance tests, real AMD encoder verification, and all monitorless Moonlight checks remain hardware-gated. GitHub Actions has exercised configure, build, targeted GTest, installer smoke, runtime linkage, packaging, and Artifact upload; it cannot start Gamescope or access an AMD GPU. Use `./steamshine.sh hardware-test --interactive` on the target system.
+The dedicated PipeWire-node provider has not been implemented; the current virtual path uses the existing Wayland DMA-BUF capture backend, which is the low-copy display source exposed by Gamescope. PipeWire node ownership/disappearance tests and monitorless Moonlight acceptance remain hardware-gated. GitHub Actions run 30067001826 exercised configure, build, targeted GTest, installer smoke, runtime linkage, packaging, and Artifact upload. On the SteamOS 3.8.16 RX 9070 XT host, the final Artifact installed in user space, initialized its packaged assets, started its user service, and passed the Vulkan H.264 encoder-open probe; it did not yet stream a live Moonlight frame. Use `./steamshine.sh hardware-test --interactive` on the target system.
 
 ## Configuration
 
