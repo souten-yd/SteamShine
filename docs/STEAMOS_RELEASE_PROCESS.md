@@ -46,7 +46,10 @@ only when its inputs reach `master`. This prevents every application pull
 request from rebuilding the environment. When changing `Containerfile`, the
 snapshot mirror, or package set, dispatch that workflow, verify its provenance,
 and update `ci/steamos/image.lock` to its returned digest before relying on it
-from Runtime Build.
+from Runtime Build. The image also contains the checksum-verified Boost 1.89.0
+source and the exact LizardByte build-deps FFmpeg bundle required by this source
+revision. Runtime Build passes their immutable paths to CMake, so clean
+validation does not fetch either dependency from the network during configure.
 
 ```text
 steamshine-steamos-x86_64-<commit>.tar.zst

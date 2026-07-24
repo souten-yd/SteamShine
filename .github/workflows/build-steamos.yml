@@ -213,7 +213,7 @@ jobs:
           actionlint .github/workflows/build-steamos.yml .github/workflows/build-ci-image.yml
           if grep -nE '[[:blank:]]+$|^(<<<<<<<|=======|>>>>>>>)' src/steamos_virtual_session.cpp src/steamos_virtual_session.h src/steamos_virtual_session_core.cpp src/steamos_virtual_session_core.h tests/unit/test_steamos_virtual_session.cpp tests/unit/test_steamos_virtual_session_core.cpp tests/steamos_lifecycle/stubs.cpp steamshine.sh scripts/*.sh tests/fixtures/steamos/fixture.sh tests/integration/test_steamshine_script.sh .github/workflows/build-steamos.yml .github/workflows/build-ci-image.yml; then exit 1; fi
       - name: Configure clean SteamOS release build
-        run: cd "${GITHUB_WORKSPACE}" && cmake -S . -B cmake-build-steamos -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=ON -DBUILD_DOCS=OFF -DSUNSHINE_ENABLE_CUDA=OFF -DSUNSHINE_ASSETS_DIR=share/assets -DSUNSHINE_ASSETS_DIR_DEF=../share/assets
+        run: cd "${GITHUB_WORKSPACE}" && cmake -S . -B cmake-build-steamos -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=ON -DBUILD_DOCS=OFF -DSUNSHINE_ENABLE_CUDA=OFF -DFETCHCONTENT_SOURCE_DIR_BOOST=/opt/steamshine-deps/boost-1.89.0 -DFFMPEG_PREPARED_BINARIES=/opt/steamshine-deps/ffmpeg -DSUNSHINE_ASSETS_DIR=share/assets -DSUNSHINE_ASSETS_DIR_DEF=../share/assets
       - name: Build runtime binary
         run: cd "${GITHUB_WORKSPACE}" && cmake --build cmake-build-steamos --target sunshine --parallel 2
       - name: Record compile and link timing

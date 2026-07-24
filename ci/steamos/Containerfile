@@ -18,3 +18,30 @@ RUN cp /etc/pacman.d/steamshine-mirrorlist /etc/pacman.d/mirrorlist \
 RUN pacman -S --noconfirm --needed --noprogressbar \
     $(grep -Ev '^(#|$)' /tmp/packages.txt) \
     && pacman -Q glibc gcc-libs qt6-base
+
+# Sunshine requests Boost 1.89 exactly, while the ABI-pinned Arch snapshot
+# ships Boost 1.88.  Keep the required source in the immutable CI image so a
+# clean validation never falls back to an unpinned GitHub FetchContent request.
+ARG BOOST_VERSION=1.89.0
+ARG BOOST_SHA256=67acec02d0d118b5de9eb441f5fb707b3a1cdd884be00ca24b9a73c995511f74
+RUN set -eu; \
+    archive="/tmp/boost-${BOOST_VERSION}-cmake.tar.xz"; \
+    curl --fail --location --retry 3 --retry-all-errors --output "${archive}" "https://github.com/boostorg/boost/releases/download/boost-${BOOST_VERSION}/boost-${BOOST_VERSION}-cmake.tar.xz"; \
+    printf '%s  %s\n' "${BOOST_SHA256}" "${archive}" | sha256sum --check --strict; \
+    mkdir -p /opt/steamshine-deps; \
+    tar --xz --extract --file "${archive}" --directory /opt/steamshine-deps; \
+    test -f "/opt/steamshine-deps/boost-${BOOST_VERSION}/CMakeLists.txt"; \
+    rm -- "${archive}"
+
+# The source tree pins a prebuilt FFmpeg bundle through build-deps.  Download
+# and verify that exact bundle while producing the immutable image rather than
+# allowing every clean validation to fetch it during CMake configure.
+ARG FFMPEG_BUILD_DEPS_TAG=v2026.713.132551
+ARG FFMPEG_ARCHIVE_SHA256=66512409857d7c11c18875193c098a5131baec060169c8f8e6397387e7a1af7d
+RUN set -eu; \
+    archive="/tmp/Linux-x86_64-ffmpeg.tar.gz"; \
+    curl --fail --location --retry 3 --retry-all-errors --output "${archive}" "https://github.com/LizardByte/build-deps/releases/download/${FFMPEG_BUILD_DEPS_TAG}/Linux-x86_64-ffmpeg.tar.gz"; \
+    printf '%s  %s\n' "${FFMPEG_ARCHIVE_SHA256}" "${archive}" | sha256sum --check --strict; \
+    tar --extract --gzip --file "${archive}" --directory /opt/steamshine-deps; \
+    test -f /opt/steamshine-deps/ffmpeg/lib/libavcodec.a; \
+    rm -- "${archive}"

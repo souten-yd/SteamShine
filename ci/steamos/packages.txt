@@ -14,11 +14,11 @@ python-jinja
 nodejs
 npm
 clang
+curl
 shellcheck
 actionlint
 zstd
 binutils
-boost
 nlohmann-json
 libcap
 libdrm
