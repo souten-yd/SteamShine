@@ -265,6 +265,7 @@ session="${runtime_dir}/session-fixture"
 if [[ "${event}" == connected-* ]]; then
   mkdir -p "${session}" "${proc_root}/101"
   printf '%s\n' 'steamshine-steamos-virtual-session-v1' >"${session}/steamshine-owner"
+  printf '101\n' >"${session}/gamescope.pid"
   python3 - "${session}/gamescope-0" <<'PY' &
 import signal
 import socket
