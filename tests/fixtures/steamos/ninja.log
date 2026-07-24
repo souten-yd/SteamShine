@@ -1,0 +1,5 @@
+# ninja log v5
+10	110	0	CMakeFiles/sunshine.dir/src/steamos_virtual_session_core.cpp.o	compile-core
+20	220	0	CMakeFiles/sunshine.dir/src/stream.cpp.o	compile-stream
+230	280	0	sunshine	link-sunshine
+240	260	0	web-ui	other

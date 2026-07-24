@@ -11,6 +11,13 @@ trap 'rm -rf -- "${test_root}" "${fake_dri}"' EXIT
 source "${root_dir}/tests/fixtures/steamos/fixture.sh"
 steamos_fixture_init "${test_root}/fixture"
 
+# The CI timing report must split compiler work from the final runtime link
+# without requiring a Sunshine build in shell-only validation.
+python3 "${root_dir}/scripts/collect-ninja-timing.py" "${root_dir}/tests/fixtures/steamos/ninja.log" "${test_root}/ninja-timings.json"
+grep -Fq '"tasks": 2' "${test_root}/ninja-timings.json"
+grep -Fq '"milliseconds": 300' "${test_root}/ninja-timings.json"
+grep -Fq '"milliseconds": 50' "${test_root}/ninja-timings.json"
+
 # Only numeric GLIBCXX symbol versions are ABI candidates.  libstdc++ also
 # exposes GLIBCXX_TUNABLES, which must never be selected as a version ceiling.
 runtime_baseline="$("${root_dir}/scripts/collect-steamos-runtime-baseline.sh")"
