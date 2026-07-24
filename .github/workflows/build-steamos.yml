@@ -168,7 +168,35 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          submodules: recursive
+          # The upstream repository contains packaging- and non-Linux-only
+          # submodules.  Checkout itself must stay bounded and reproducible;
+          # initialise only the Linux runtime dependency closure below.
+          submodules: false
+      - name: Initialize SteamOS runtime submodules
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "${GITHUB_WORKSPACE}"
+          git submodule update --init --depth 1 -- \
+            third-party/Simple-Web-Server \
+            third-party/build-deps \
+            third-party/glad \
+            third-party/inputtino \
+            third-party/libdisplaydevice \
+            third-party/lizardbyte-common \
+            third-party/moonlight-common-c \
+            third-party/nv-codec-headers \
+            third-party/plasma-wayland-protocols \
+            third-party/tray \
+            third-party/wayland-protocols \
+            third-party/wlr-protocols
+          # These are the only nested repositories consumed by the Linux
+          # runtime build and the isolated SteamOS GTest targets.  Do not
+          # recurse into FFmpeg's optional codec trees or documentation trees.
+          git -C third-party/build-deps submodule update --init --depth 1 -- \
+            third-party/FFmpeg/Vulkan-Headers
+          git -C third-party/lizardbyte-common submodule update --init --depth 1 -- \
+            third-party/googletest
       - name: Focused formatting and shell checks
         run: |
           cd "${GITHUB_WORKSPACE}"
