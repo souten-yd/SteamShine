@@ -363,6 +363,36 @@ namespace steamos_virtual_session {
       return runtime ? std::filesystem::path {runtime} / "steamshine" : std::filesystem::path {};
     }
 
+    /**
+     * @brief Check whether a prospective session path remains in the user runtime directory.
+     *
+     * Canonicalizing both paths prevents a configured symlink from redirecting
+     * volatile session state into a persistent or foreign directory.
+     *
+     * @param candidate Runtime base configured for SteamShine sessions.
+     * @param runtime_root User-owned XDG runtime directory.
+     * @return True only when @p candidate is equal to or below @p runtime_root.
+     */
+    bool path_is_within_runtime_root(const std::filesystem::path &candidate, const std::filesystem::path &runtime_root) {
+      std::error_code error;
+      const auto canonical_candidate {std::filesystem::weakly_canonical(candidate, error)};
+      if (error) {
+        return false;
+      }
+      const auto canonical_root {std::filesystem::weakly_canonical(runtime_root, error)};
+      if (error) {
+        return false;
+      }
+      auto candidate_part {canonical_candidate.begin()};
+      for (const auto &root_part : canonical_root) {
+        if (candidate_part == canonical_candidate.end() || *candidate_part != root_part) {
+          return false;
+        }
+        ++candidate_part;
+      }
+      return true;
+    }
+
 #if defined(__linux__)
     /**
      * @brief Check the installed Gamescope help text before using version-specific options.
@@ -492,8 +522,10 @@ namespace steamos_virtual_session {
       manager.current = state_e::Failed;
       return false;
     }
+    const auto *runtime_root_value {std::getenv("XDG_RUNTIME_DIR")};
     const auto base {runtime_base()};
-    if (base.empty() || !std::filesystem::exists(base.parent_path())) {
+    const auto runtime_root {runtime_root_value ? std::filesystem::path {runtime_root_value} : std::filesystem::path {}};
+    if (base.empty() || runtime_root.empty() || !std::filesystem::is_directory(runtime_root) || !path_is_within_runtime_root(base, runtime_root)) {
       error = "XDG_RUNTIME_DIR is unavailable; refusing persistent runtime fallback";
       manager.current = state_e::Failed;
       return false;

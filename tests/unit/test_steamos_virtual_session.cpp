@@ -103,6 +103,8 @@ namespace {
   protected:
     config::steamos_virtual_display_t saved {config::steamos_virtual_display};  ///< Configuration restored after each test.
     std::filesystem::path root {std::filesystem::temp_directory_path() / "steamshine-virtual-session-test"};  ///< Test-owned temporary directory.
+    std::string saved_xdg_runtime_directory;  ///< XDG runtime environment restored after each test.
+    bool had_xdg_runtime_directory {false};  ///< Whether XDG runtime was set before test setup.
 
     /**
      * @brief Set up a fake Gamescope and a test-only runtime base.
@@ -110,6 +112,11 @@ namespace {
     void SetUp() override {
       std::filesystem::remove_all(root);
       std::filesystem::create_directories(root / "runtime");
+      if (const auto *runtime {std::getenv("XDG_RUNTIME_DIR")}) {
+        saved_xdg_runtime_directory = runtime;
+        had_xdg_runtime_directory = true;
+      }
+      ASSERT_EQ(::setenv("XDG_RUNTIME_DIR", (root / "runtime").c_str(), 1), 0);
       config::steamos_virtual_display.enabled = true;
       config::steamos_virtual_display.gamescope_path = make_fake_gamescope(root).string();
       config::steamos_virtual_display.game_gpu = "1002:9999";
@@ -124,6 +131,11 @@ namespace {
     void TearDown() override {
       steamos_virtual_session::stop();
       config::steamos_virtual_display = saved;
+      if (had_xdg_runtime_directory) {
+        (void) ::setenv("XDG_RUNTIME_DIR", saved_xdg_runtime_directory.c_str(), 1);
+      } else {
+        (void) ::unsetenv("XDG_RUNTIME_DIR");
+      }
       std::filesystem::remove_all(root);
     }
   };
@@ -142,6 +154,16 @@ TEST_F(SteamOSVirtualSessionTest, FeatureFlagDisabledPreservesNormalLaunch) {
 
 TEST_F(SteamOSVirtualSessionTest, FeatureFlagKeepsWaylandCaptureAvailableBeforeLaunch) {
   EXPECT_TRUE(steamos_virtual_session::capture_backend_required());
+}
+
+TEST_F(SteamOSVirtualSessionTest, RejectsRuntimeDirectoryOutsideUserRuntime) {
+  config::steamos_virtual_display.runtime_directory = "/tmp/steamshine-foreign-runtime";
+  rtsp_stream::launch_session_t launch {};
+  std::string error;
+
+  EXPECT_FALSE(steamos_virtual_session::prepare(launch, error));
+  EXPECT_NE(error.find("XDG_RUNTIME_DIR"), std::string::npos);
+  EXPECT_EQ(steamos_virtual_session::state(), steamos_virtual_session::state_e::Failed);
 }
 
 TEST_F(SteamOSVirtualSessionTest, CleansOnlyMarkedOrphanRuntimeDirectories) {
