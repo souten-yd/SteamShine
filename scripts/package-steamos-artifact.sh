@@ -10,8 +10,10 @@ commit="$(git -C "${root_dir}" rev-parse HEAD)"
 archive="steamshine-steamos-x86_64-${commit}.tar.zst"
 stage="$(mktemp -d)"
 trap 'rm -rf -- "${stage}"' EXIT
-mkdir -p "${stage}/bin" "${stage}/lib" "${stage}/share" "${stage}/scripts" "${stage}/systemd-user" "${output_dir}"
+mkdir -p "${stage}/bin" "${stage}/lib" "${stage}/share/assets" "${stage}/scripts" "${stage}/systemd-user" "${output_dir}"
 install -m 755 "${binary}" "${stage}/bin/steamshine"
+cp -a "${root_dir}/src_assets/common/assets/." "${stage}/share/assets/"
+cp -a "${root_dir}/src_assets/linux/assets/." "${stage}/share/assets/"
 miniupnpc_library="$(ldconfig -p | awk '/libminiupnpc\.so\.21/ { print $NF; exit }')"
 [[ -n "${miniupnpc_library}" && -f "${miniupnpc_library}" ]] || { echo "Missing libminiupnpc.so.21 required by SteamShine" >&2; exit 1; }
 install -m 644 "${miniupnpc_library}" "${stage}/lib/"

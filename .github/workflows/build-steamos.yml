@@ -143,6 +143,8 @@ jobs:
           -DBUILD_TESTS=ON
           -DBUILD_DOCS=OFF
           -DSUNSHINE_ENABLE_CUDA=OFF
+          -DSUNSHINE_ASSETS_DIR=share/assets
+          -DSUNSHINE_ASSETS_DIR_DEF=../share/assets
       - name: Build
         run: cmake --build cmake-build-steamos --target sunshine --parallel 2
       - name: Test SteamOS virtual-session lifecycle
@@ -195,6 +197,8 @@ jobs:
           HOME="${smoke_home}" XDG_RUNTIME_DIR="${smoke_home}/run" \
             ./steamshine.sh install --artifact "${artifact}" --no-service --non-interactive --yes
           test -x "${smoke_home}/.local/bin/steamshine"
+          HOME="${smoke_home}" XDG_RUNTIME_DIR="${smoke_home}/run" \
+            "${smoke_home}/.local/bin/steamshine" --config "${smoke_home}/.config/steamshine/sunshine.conf" version
           test -f "${smoke_home}/.local/share/steamshine/current/BUILD_INFO.json"
           test -f "${smoke_home}/.local/share/steamshine/current/STEAMOS_BASELINE.json"
           test -f "${smoke_home}/.local/share/steamshine/current/RUNTIME_DEPENDENCIES.txt"

@@ -10,6 +10,11 @@
 #include <iostream>
 #include <string>
 
+#if defined(__linux__)
+  #include <limits.h>
+  #include <unistd.h>
+#endif
+
 #ifdef __APPLE__
   #include <mach-o/dyld.h>
 #endif
@@ -38,6 +43,30 @@
 using namespace std::literals;
 
 std::map<int, std::function<void()>> signal_handlers;  ///< Signal handlers.
+
+/**
+ * @brief Anchor a relative asset path at the installed executable directory.
+ *
+ * Immutable SteamOS artifacts compile `SUNSHINE_ASSETS_DIR` as a relative
+ * sibling of `bin/`. System packages retain their absolute asset path and are
+ * intentionally left unchanged.
+ */
+void configure_relative_asset_directory() {
+#if defined(__linux__)
+  const std::filesystem::path assets {SUNSHINE_ASSETS_DIR};
+  if (!assets.is_relative()) {
+    return;
+  }
+  char executable[PATH_MAX];
+  const auto length {readlink("/proc/self/exe", executable, sizeof(executable) - 1)};
+  if (length <= 0) {
+    return;
+  }
+  executable[length] = '\0';
+  std::error_code error;
+  std::filesystem::current_path(std::filesystem::path {executable}.parent_path(), error);
+#endif
+}
 
 /**
  * @brief Forward a POSIX signal to the registered Sunshine handler.
@@ -179,6 +208,7 @@ void mainThreadLoop(const std::shared_ptr<safe::event_t<bool>> &shutdown_event) 
  * @return Process or platform callback exit code.
  */
 int main(int argc, char *argv[]) {
+  configure_relative_asset_directory();
 #ifdef __APPLE__
   // Bundle assets are referenced relative to the executable
   // (e.g. ../Resources/assets), so anchor cwd to Contents/MacOS.

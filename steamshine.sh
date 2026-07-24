@@ -106,12 +106,12 @@ install_service() {
 [Unit]
 Description=SteamShine game streaming host
 After=graphical-session.target
+StartLimitIntervalSec=60
+StartLimitBurst=3
 [Service]
 ExecStart=${PREFIX}/bin/steamshine --config ${CONFIG_FILE}
 Restart=on-failure
 RestartSec=5
-StartLimitIntervalSec=60
-StartLimitBurst=3
 [Install]
 WantedBy=default.target
 EOF
