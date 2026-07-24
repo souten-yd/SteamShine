@@ -52,7 +52,7 @@ if ! "${steamshine_binary}" vulkan-video-probe 2>&1 | tee -a "${report}"; then
   echo 'FAIL: Vulkan Video H.264 preflight failed; refusing Moonlight acceptance cycles' | tee -a "${report}"
   exit 1
 fi
-echo 'Vulkan Video H.264 preflight passed; an actual IDR/bitstream is still recorded by the Moonlight stream acceptance run.' | tee -a "${report}"
+echo 'Vulkan Video H.264 preflight passed; verify actual IDR/bitstream output during the following Moonlight stream acceptance cycles.' | tee -a "${report}"
 for attempt in $(seq 1 10); do
   echo "Attempt ${attempt}: connect Moonlight now, then press Enter once the stream is established."
   read -r
