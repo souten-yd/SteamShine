@@ -25,6 +25,27 @@ on:
       - 'packaging/linux/**'
   push:
     branches: [master]
+    paths:
+      - '.github/workflows/build-steamos.yml'
+      - '.github/workflows/build-ci-image.yml'
+      - 'ci/steamos/**'
+      - 'src/steamos_virtual_session.*'
+      - 'src/steamos_virtual_session_core.*'
+      - 'src/platform/linux/**'
+      - 'src/nvhttp.*'
+      - 'src/stream.*'
+      - 'src/process.*'
+      - 'src/config.*'
+      - 'tests/unit/test_steamos_virtual_session.cpp'
+      - 'tests/unit/test_steamos_virtual_session_core.cpp'
+      - 'tests/steamos_core/CMakeLists.txt'
+      - 'tests/integration/test_steamshine_script.sh'
+      - 'tests/fixtures/steamos/**'
+      - 'scripts/**'
+      - 'steamshine.sh'
+      - 'CMakeLists.txt'
+      - 'cmake/**'
+      - 'packaging/linux/**'
   workflow_dispatch:
     inputs:
       full_validation:
