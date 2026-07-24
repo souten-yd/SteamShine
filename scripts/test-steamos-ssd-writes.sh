@@ -6,6 +6,7 @@ seconds="${1:-60}"
 out_dir="${STEAMSHINE_HARDWARE_REPORT_DIR:-${HOME}/.local/state/steamshine/hardware-tests}"
 mkdir -p "${out_dir}"
 report="${out_dir}/ssd-writes.log"
+test_started="$(date --iso-8601=seconds)"
 
 steamshine_pids() { pgrep -x steamshine 2>/dev/null || true; }
 sum_proc_field() {
@@ -17,11 +18,15 @@ sum_proc_field() {
   done | awk '{sum += $1} END {printf "%.0f\n", sum + 0}'
 }
 report_size() { du -sb "${out_dir}" 2>/dev/null | awk 'NR == 1 {print $1}' || printf '0\n'; }
+journal_size() {
+  command -v journalctl >/dev/null 2>&1 || { printf '0\n'; return 0; }
+  journalctl --user --unit=steamshine --since "${test_started}" --no-pager 2>/dev/null | wc -c | awk '{print $1 + 0}'
+}
 read_counters() {
   local -a pids=(); mapfile -t pids < <(steamshine_pids)
-  printf 'pids=%s write_bytes=%s cancelled_write_bytes=%s syscw=%s report_bytes=%s\n' \
+  printf 'pids=%s write_bytes=%s cancelled_write_bytes=%s syscw=%s report_bytes=%s journal_bytes=%s\n' \
     "$(IFS=,; echo "${pids[*]:-}")" "$(sum_proc_field write_bytes "${pids[@]}")" \
-    "$(sum_proc_field cancelled_write_bytes "${pids[@]}")" "$(sum_proc_field syscw "${pids[@]}")" "$(report_size)"
+    "$(sum_proc_field cancelled_write_bytes "${pids[@]}")" "$(sum_proc_field syscw "${pids[@]}")" "$(report_size)" "$(journal_size)"
 }
 counter_value() {
   local key="$1" counters="$2"
@@ -37,10 +42,11 @@ after="$(read_counters)"
 {
   echo "before ${before}"
   echo "after ${after}"
-  printf 'delta write_bytes=%s cancelled_write_bytes=%s syscw=%s report_bytes=%s\n' \
+  printf 'delta write_bytes=%s cancelled_write_bytes=%s syscw=%s report_bytes=%s journal_bytes=%s\n' \
     "$(counter_delta write_bytes "${before}" "${after}")" \
     "$(counter_delta cancelled_write_bytes "${before}" "${after}")" \
     "$(counter_delta syscw "${before}" "${after}")" \
-    "$(counter_delta report_bytes "${before}" "${after}")"
+    "$(counter_delta report_bytes "${before}" "${after}")" \
+    "$(counter_delta journal_bytes "${before}" "${after}")"
   echo 'Expected during streaming: no high-frequency writes attributable to management or telemetry.'
 } | tee "${report}"

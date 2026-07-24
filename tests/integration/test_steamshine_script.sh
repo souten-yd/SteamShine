@@ -135,6 +135,7 @@ PATH="${test_root}/hardware-bin:${PATH}" PROC_ROOT="${proc_root}" STEAMSHINE_HAR
   "${root_dir}/scripts/test-steamos-ssd-writes.sh" 0
 grep -Fq 'write_bytes=32768' "${hardware_report}/ssd-writes.log"
 grep -Fq 'delta write_bytes=0' "${hardware_report}/ssd-writes.log"
+grep -Fq 'journal_bytes=' "${hardware_report}/ssd-writes.log"
 PATH="${test_root}/hardware-bin:${PATH}" STEAMSHINE_HARDWARE_REPORT_DIR="${hardware_report}" \
   "${root_dir}/scripts/test-steamos-latency.sh"
 grep -Fq 'pidstat unavailable' "${hardware_report}/latency.log"
