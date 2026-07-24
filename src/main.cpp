@@ -75,9 +75,9 @@ std::map<std::string_view, std::function<int(const char *name, int argc, char **
    }},
 #if defined(__linux__)
   {"vulkan-video-probe"sv, [](const char *, int, char **) {
-     std::string error;
-     if (!vk::probe_h264(error)) {
-       BOOST_LOG(error) << "Vulkan Video H.264 preflight failed: " << error;
+     std::string probe_error;
+     if (!vk::probe_h264(probe_error)) {
+       BOOST_LOG(error) << "Vulkan Video H.264 preflight failed: " << probe_error;
        return 1;
      }
      BOOST_LOG(info) << "Vulkan Video H.264 preflight passed on the selected GPU";
