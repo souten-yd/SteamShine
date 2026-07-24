@@ -1,0 +1,4 @@
+# Generated from successful SteamOS CI Image run 30109134193. Fast and full
+# workflows must use this immutable digest, never a mutable registry tag.
+image=ghcr.io/souten-yd/steamshine-ci
+digest=sha256:9ae61a6de9783fe4eeb2fa4d8a2f3669a41743c8dd23958e0eee1c7c193a0e88

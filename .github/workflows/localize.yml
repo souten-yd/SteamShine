@@ -3,13 +3,6 @@ name: localize
 permissions: {}
 
 on:
-  push:
-    branches:
-      - master
-    paths:
-      - '.github/workflows/localize.yml'
-      - 'src/**'
-      - 'locale/sunshine.po'
   workflow_dispatch:
 
 jobs:

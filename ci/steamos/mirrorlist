@@ -1,0 +1,3 @@
+## Official Arch Linux Archive snapshot matching the SteamOS 3.8 ABI baseline.
+## This is consumed only in an ephemeral CI container.
+Server = https://archive.archlinux.org/repos/2025/06/30/$repo/os/$arch

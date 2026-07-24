@@ -1,0 +1,49 @@
+# SteamOS ABI-compatible build dependencies for the x86_64 artifact only.
+# GPU drivers, Steam, Gamescope execution, PipeWire daemons, CUDA, and ROCm
+# are intentionally absent: the target host provides runtime GPU components.
+glibc
+gcc-libs
+base-devel
+gcc
+git
+cmake
+ninja
+pkgconf
+python
+python-jinja
+nodejs
+npm
+clang
+curl
+shellcheck
+actionlint
+zstd
+binutils
+# Standalone lifecycle tests link Boost.Log from the fixed snapshot. The
+# application build still uses the checksum-pinned Boost 1.89 source in the
+# image because Sunshine requests that exact version.
+boost
+nlohmann-json
+libcap
+libdrm
+libevdev
+libnotify
+libpulse
+libva
+libx11
+libxcb
+libxfixes
+libxrandr
+libxtst
+miniupnpc
+openssl
+opus
+patchelf
+pipewire
+qt6-base
+qt6-svg
+shaderc
+systemd-sysvcompat
+udev
+vulkan-icd-loader
+wayland

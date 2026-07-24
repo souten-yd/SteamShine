@@ -791,6 +791,8 @@ namespace config {
     0  // minimum_fps_target (0 = framerate)
   };
 
+  steamos_virtual_display_t steamos_virtual_display {};  ///< SteamOS virtual-display configuration.
+
   /**
    * @brief Default audio configuration values used before file and CLI overrides.
    */
@@ -1686,6 +1688,20 @@ namespace config {
 
     int_f(vars, "max_bitrate", video.max_bitrate);
     double_between_f(vars, "minimum_fps_target", video.minimum_fps_target, {0.0, 1000.0});
+
+    bool_f(vars, "steamos_virtual_display_enabled", steamos_virtual_display.enabled);
+    string_restricted_f(vars, "steamos_virtual_display_mode", steamos_virtual_display.mode, {"auto"sv});
+    string_f(vars, "steamos_gamescope_path", steamos_virtual_display.gamescope_path);
+    path_f(vars, "steamos_runtime_directory", steamos_virtual_display.runtime_directory);
+    string_f(vars, "steamos_game_gpu", steamos_virtual_display.game_gpu);
+    string_f(vars, "steamos_capture_gpu", steamos_virtual_display.capture_gpu);
+    string_f(vars, "steamos_encoder_gpu", steamos_virtual_display.encoder_gpu);
+    int_between_f(vars, "steamos_startup_timeout_seconds", steamos_virtual_display.startup_timeout_seconds, {1, 60});
+    int_between_f(vars, "steamos_shutdown_timeout_seconds", steamos_virtual_display.shutdown_timeout_seconds, {1, 60});
+    int_between_f(vars, "steamos_default_width", steamos_virtual_display.default_width, {640, 7680});
+    int_between_f(vars, "steamos_default_height", steamos_virtual_display.default_height, {480, 4320});
+    int_between_f(vars, "steamos_default_fps", steamos_virtual_display.default_fps, {30, 240});
+    bool_f(vars, "steamos_cleanup_orphan_sessions", steamos_virtual_display.cleanup_orphan_sessions);
 
     path_f(vars, "pkey", nvhttp.pkey);
     path_f(vars, "cert", nvhttp.cert);

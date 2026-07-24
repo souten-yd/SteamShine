@@ -9,6 +9,7 @@
 #include "cuda.h"
 #include "src/logging.h"
 #include "src/platform/common.h"
+#include "src/steamos_virtual_session.h"
 #include "src/video.h"
 #include "vaapi.h"
 #include "wayland.h"
@@ -135,6 +136,8 @@ namespace wl {
       BOOST_LOG(debug) << "[wlgrab] Desktop Resolution: "sv << env_width << 'x' << env_height;
       BOOST_LOG(debug) << "[wlgrab] Logical Desktop Resolution: "sv << env_logical_width << 'x' << env_logical_height;
 
+      steamos_virtual_session::mark_capture_ready();
+
       return 0;
     }
 
@@ -221,8 +224,10 @@ namespace wl {
         auto status = snapshot(pull_free_image_cb, img_out, 1000ms, *cursor);
         switch (status) {
           case platf::capture_e::reinit:
-          case platf::capture_e::error:
           case platf::capture_e::interrupted:
+            return status;
+          case platf::capture_e::error:
+            steamos_virtual_session::mark_capture_lost();
             return status;
           case platf::capture_e::timeout:
             if (!push_captured_image_cb(std::move(img_out), false)) {
@@ -230,6 +235,7 @@ namespace wl {
             }
             break;
           case platf::capture_e::ok:
+            steamos_virtual_session::mark_captured_frame();
             if (!push_captured_image_cb(std::move(img_out), true)) {
               return platf::capture_e::ok;
             }
@@ -385,8 +391,10 @@ namespace wl {
         auto status = snapshot(pull_free_image_cb, img_out, 1000ms, *cursor);
         switch (status) {
           case platf::capture_e::reinit:
-          case platf::capture_e::error:
           case platf::capture_e::interrupted:
+            return status;
+          case platf::capture_e::error:
+            steamos_virtual_session::mark_capture_lost();
             return status;
           case platf::capture_e::timeout:
             if (!push_captured_image_cb(std::move(img_out), false)) {
@@ -394,6 +402,7 @@ namespace wl {
             }
             break;
           case platf::capture_e::ok:
+            steamos_virtual_session::mark_captured_frame();
             if (!push_captured_image_cb(std::move(img_out), true)) {
               return platf::capture_e::ok;
             }
@@ -505,12 +514,20 @@ namespace platf {
    * @brief Create a Wayland capture backend for the requested memory type.
    */
   std::shared_ptr<display_t> wl_display(mem_type_e hwdevice_type, const std::string &display_name, const video::config_t &config) {
-    if (hwdevice_type != platf::mem_type_e::system && hwdevice_type != platf::mem_type_e::vaapi && hwdevice_type != platf::mem_type_e::cuda) {
+    if (hwdevice_type != platf::mem_type_e::system && hwdevice_type != platf::mem_type_e::vaapi && hwdevice_type != platf::mem_type_e::cuda
+#ifdef SUNSHINE_BUILD_VULKAN
+        && hwdevice_type != platf::mem_type_e::vulkan
+#endif
+    ) {
       BOOST_LOG(error) << "[wlgrab] Could not initialize display with the given hw device type."sv;
       return nullptr;
     }
 
-    if (hwdevice_type == platf::mem_type_e::vaapi || hwdevice_type == platf::mem_type_e::cuda) {
+    if (hwdevice_type == platf::mem_type_e::vaapi || hwdevice_type == platf::mem_type_e::cuda
+#ifdef SUNSHINE_BUILD_VULKAN
+        || hwdevice_type == platf::mem_type_e::vulkan
+#endif
+    ) {
       auto wlr = std::make_shared<wl::wlr_vram_t>();
       if (wlr->init(hwdevice_type, display_name, config)) {
         return nullptr;

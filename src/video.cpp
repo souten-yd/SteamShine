@@ -28,6 +28,7 @@ extern "C" {
 #include "logging.h"
 #include "nvenc/nvenc_base.h"
 #include "platform/common.h"
+#include "steamos_virtual_session.h"
 #include "sync.h"
 #include "video.h"
 
@@ -3206,6 +3207,14 @@ namespace video {
     }
 
     auto encoder_list = encoders;
+
+    // A monitorless SteamOS virtual session owns one AMD dGPU and must not
+    // silently turn a capture failure into CPU software encoding. This keeps
+    // the normal path GPU-local and returns a launch error when Vulkan Video
+    // cannot be initialized on the owned render node.
+    if (steamos_virtual_session::active()) {
+      std::erase(encoder_list, &software);
+    }
 
     // If we already have a good encoder, check to see if another probe is required
     if (chosen_encoder && !(chosen_encoder->flags & ALWAYS_REPROBE) && !platf::needs_encoder_reenumeration()) {

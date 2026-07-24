@@ -28,6 +28,7 @@
 #include "logging.h"
 #include "platform/common.h"
 #include "process.h"
+#include "steamos_virtual_session.h"
 #include "system_tray.h"
 #include "utility.h"
 
@@ -190,6 +191,13 @@ namespace proc {
     }
     _env["SUNSHINE_CLIENT_AUDIO_SURROUND_PARAMS"] = launch_session->surround_params;
 
+    std::string virtual_runtime_directory;
+    std::string virtual_wayland_display;
+    if (steamos_virtual_session::application_environment(virtual_runtime_directory, virtual_wayland_display)) {
+      _env["XDG_RUNTIME_DIR"] = virtual_runtime_directory;
+      _env["WAYLAND_DISPLAY"] = virtual_wayland_display;
+    }
+
     if (!_app.output.empty() && _app.output != "null"sv) {
 #ifdef _WIN32
       // fopen() interprets the filename as an ANSI string on Windows, so we must convert it
@@ -301,8 +309,7 @@ namespace proc {
     } else if (_process.running()) {
       // The app is still running only if the initial process launched is still running
       return _app_id;
-    } else if (_app.auto_detach && _process.native_exit_code() == 0 &&
-               std::chrono::steady_clock::now() - _app_launch_time < 5s) {
+    } else if (_app.auto_detach && _process.native_exit_code() == 0 && std::chrono::steady_clock::now() - _app_launch_time < 5s) {
       BOOST_LOG(info) << "App exited gracefully within 5 seconds of launch. Treating the app as a detached command."sv;
       BOOST_LOG(info) << "Adjust this behavior in the Applications tab or apps.json if this is not what you want."sv;
       placebo = true;

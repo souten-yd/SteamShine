@@ -110,6 +110,13 @@ endif()
 file(GLOB_RECURSE TEST_SOURCES CONFIGURE_DEPENDS
         ${CMAKE_SOURCE_DIR}/tests/*.h
         ${CMAKE_SOURCE_DIR}/tests/*.cpp)
+# SteamOS lifecycle tests intentionally build in the standalone target below;
+# keeping them out of test_sunshine prevents a focused lifecycle run from
+# requiring every upstream Sunshine unit-test object.
+list(REMOVE_ITEM TEST_SOURCES
+    ${CMAKE_SOURCE_DIR}/tests/unit/test_steamos_virtual_session.cpp
+    ${CMAKE_SOURCE_DIR}/tests/steamos_lifecycle/stubs.cpp
+)
 # Add macOS-specific test files only when building tests for macOS
 if (APPLE)
     file(GLOB_RECURSE MACOS_TEST_SOURCES CONFIGURE_DEPENDS

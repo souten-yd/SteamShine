@@ -8,6 +8,12 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <string>
+
+#if defined(__linux__)
+  #include <limits.h>
+  #include <unistd.h>
+#endif
 
 #ifdef __APPLE__
   #include <mach-o/dyld.h>
@@ -25,7 +31,11 @@
 #include "logging.h"
 #include "main.h"
 #include "nvhttp.h"
+#if defined(__linux__)
+  #include "platform/linux/vulkan_encode.h"
+#endif
 #include "process.h"
+#include "steamos_virtual_session.h"
 #include "system_tray.h"
 #include "upnp.h"
 #include "video.h"
@@ -33,6 +43,30 @@
 using namespace std::literals;
 
 std::map<int, std::function<void()>> signal_handlers;  ///< Signal handlers.
+
+/**
+ * @brief Anchor a relative asset path at the installed executable directory.
+ *
+ * Immutable SteamOS artifacts compile `SUNSHINE_ASSETS_DIR` as a relative
+ * sibling of `bin/`. System packages retain their absolute asset path and are
+ * intentionally left unchanged.
+ */
+void configure_relative_asset_directory() {
+#if defined(__linux__)
+  const std::filesystem::path assets {SUNSHINE_ASSETS_DIR};
+  if (!assets.is_relative()) {
+    return;
+  }
+  char executable[PATH_MAX];
+  const auto length {readlink("/proc/self/exe", executable, sizeof(executable) - 1)};
+  if (length <= 0) {
+    return;
+  }
+  executable[length] = '\0';
+  std::error_code error;
+  std::filesystem::current_path(std::filesystem::path {executable}.parent_path(), error);
+#endif
+}
 
 /**
  * @brief Forward a POSIX signal to the registered Sunshine handler.
@@ -69,6 +103,17 @@ std::map<std::string_view, std::function<int(const char *name, int argc, char **
   {"version"sv, [](const char *name, int argc, char **argv) {
      return args::version();
    }},
+#if defined(__linux__)
+  {"vulkan-video-probe"sv, [](const char *, int, char **) {
+     std::string probe_error;
+     if (!vk::probe_h264(probe_error)) {
+       BOOST_LOG(error) << "Vulkan Video H.264 preflight failed: " << probe_error;
+       return 1;
+     }
+     BOOST_LOG(info) << "Vulkan Video H.264 preflight passed on the selected GPU";
+     return 0;
+   }},
+#endif
 #ifdef _WIN32
   {"restore-nvprefs-undo"sv, [](const char *name, int argc, char **argv) {
      return args::restore_nvprefs_undo();
@@ -163,6 +208,7 @@ void mainThreadLoop(const std::shared_ptr<safe::event_t<bool>> &shutdown_event) 
  * @return Process or platform callback exit code.
  */
 int main(int argc, char *argv[]) {
+  configure_relative_asset_directory();
 #ifdef __APPLE__
   // Bundle assets are referenced relative to the executable
   // (e.g. ../Resources/assets), so anchor cwd to Contents/MacOS.
@@ -243,6 +289,7 @@ int main(int argc, char *argv[]) {
   // Adding guard here first as it also performs recovery after crash,
   // otherwise people could theoretically end up without display output.
   // It also should be destroyed before forced shutdown to expedite the cleanup.
+  steamos_virtual_session::cleanup_orphan_sessions();
   auto display_device_deinit_guard = display_device::init(platf::appdata() / "display_device.state", config::video);
   if (!display_device_deinit_guard) {
     BOOST_LOG(error) << "Display device session failed to initialize"sv;

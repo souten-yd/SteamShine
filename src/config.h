@@ -291,6 +291,25 @@ namespace config {
     bool native_pen_touch;  ///< Enable native pen and touch injection.
   };
 
+  /**
+   * @brief SteamOS headless virtual-display settings loaded from configuration.
+   */
+  struct steamos_virtual_display_t {
+    bool enabled {false};  ///< Enable the opt-in SteamOS virtual display provider.
+    std::string mode {"auto"};  ///< Virtual display policy; currently only auto is supported.
+    std::string gamescope_path {"gamescope"};  ///< Gamescope executable used for owned sessions.
+    std::string runtime_directory;  ///< Base directory for owned runtime state.
+    std::string game_gpu;  ///< Preferred game render GPU PCI BDF or render node.
+    std::string capture_gpu;  ///< Preferred capture GPU PCI BDF or render node.
+    std::string encoder_gpu;  ///< Preferred encoder GPU PCI BDF or render node.
+    int startup_timeout_seconds {15};  ///< Maximum time spent waiting for virtual-display readiness.
+    int shutdown_timeout_seconds {5};  ///< Maximum time spent waiting for owned child shutdown.
+    int default_width {1920};  ///< Fallback virtual display width.
+    int default_height {1080};  ///< Fallback virtual display height.
+    int default_fps {60};  ///< Fallback virtual display refresh rate.
+    bool cleanup_orphan_sessions {true};  ///< Remove only runtime directories owned by this instance.
+  };
+
   namespace flag {
     /**
      * @brief Enumerates supported flag options.
@@ -381,6 +400,7 @@ namespace config {
   extern stream_t stream;
   extern nvhttp_t nvhttp;
   extern input_t input;
+  extern steamos_virtual_display_t steamos_virtual_display;
   extern sunshine_t sunshine;
 
   /**
