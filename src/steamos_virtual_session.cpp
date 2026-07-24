@@ -574,6 +574,10 @@ namespace steamos_virtual_session {
 #endif
   }
 
+  bool capture_backend_required() {
+    return config::steamos_virtual_display.enabled;
+  }
+
   void mark_streaming() {
     std::scoped_lock lock {manager.mutex};
     manager.stream_requested = true;

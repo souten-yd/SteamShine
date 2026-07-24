@@ -132,12 +132,17 @@ namespace {
 
 TEST_F(SteamOSVirtualSessionTest, FeatureFlagDisabledPreservesNormalLaunch) {
   config::steamos_virtual_display.enabled = false;
+  EXPECT_FALSE(steamos_virtual_session::capture_backend_required());
   rtsp_stream::launch_session_t launch {};
   std::string error;
   EXPECT_TRUE(steamos_virtual_session::prepare(launch, error));
   EXPECT_TRUE(error.empty());
   EXPECT_EQ(steamos_virtual_session::state(), steamos_virtual_session::state_e::Disabled);
   EXPECT_FALSE(steamos_virtual_session::active());
+}
+
+TEST_F(SteamOSVirtualSessionTest, FeatureFlagKeepsWaylandCaptureAvailableBeforeLaunch) {
+  EXPECT_TRUE(steamos_virtual_session::capture_backend_required());
 }
 
 TEST_F(SteamOSVirtualSessionTest, GamescopeArgumentsUseAdvertisedHeadlessBackendAndFitPolicy) {

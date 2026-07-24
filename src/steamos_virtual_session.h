@@ -56,6 +56,16 @@ namespace steamos_virtual_session {
   bool prepare(const rtsp_stream::launch_session_t &launch_session, std::string &error);
 
   /**
+   * @brief Report whether SteamOS virtual-display capture is enabled.
+   *
+   * Linux platform initialization uses this before a session exists so it can
+   * retain the Wayland DMA-BUF backend while the host has no physical output.
+   *
+   * @return True when the opt-in SteamOS virtual-display feature is enabled.
+   */
+  bool capture_backend_required();
+
+  /**
    * @brief Mark a prepared session as streaming after the RTSP launch is queued.
    */
   void mark_streaming();
