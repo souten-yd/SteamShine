@@ -38,7 +38,7 @@ namespace steamos_virtual_session {
   /**
    * @brief Name of the Wayland socket exposed by a headless Gamescope server.
    */
-  constexpr std::string_view gamescope_wayland_display {"gamescope-0"};
+  constexpr std::string_view gamescope_wayland_display { "gamescope-0" };
   namespace {
     struct manager_t {
       std::mutex mutex;  ///< Serializes virtual-session state transitions.
