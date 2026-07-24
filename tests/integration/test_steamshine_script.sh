@@ -110,3 +110,22 @@ test ! -e "${test_root}/home/.local/share/steamshine/current"
 test ! -d "${test_root}/home/.cache/steamshine"
 test -f "${test_root}/home/.config/steamshine/sunshine.conf"
 test -f "${test_root}/home/.local/state/steamshine/diagnostics.log"
+
+# Hardware-test helper scripts must tolerate SteamOS installations without
+# pidstat or vainfo and must sum multiple process I/O counters safely.
+proc_root="${test_root}/proc"
+mkdir -p "${proc_root}/101" "${proc_root}/202" "${test_root}/hardware-bin"
+printf 'write_bytes: 28672\ncancelled_write_bytes: 0\nsyscw: 4\n' >"${proc_root}/101/io"
+printf 'write_bytes: 4096\ncancelled_write_bytes: 0\nsyscw: 2\n' >"${proc_root}/202/io"
+cat >"${test_root}/hardware-bin/pgrep" <<'EOF'
+#!/usr/bin/env bash
+printf '101\n202\n'
+EOF
+chmod 755 "${test_root}/hardware-bin/pgrep"
+hardware_report="${test_root}/hardware-report"
+PATH="${test_root}/hardware-bin:${PATH}" PROC_ROOT="${proc_root}" STEAMSHINE_HARDWARE_REPORT_DIR="${hardware_report}" \
+  "${root_dir}/scripts/test-steamos-ssd-writes.sh" 0
+grep -Fq 'write_bytes=32768' "${hardware_report}/ssd-writes.log"
+PATH="${test_root}/hardware-bin:${PATH}" STEAMSHINE_HARDWARE_REPORT_DIR="${hardware_report}" \
+  "${root_dir}/scripts/test-steamos-latency.sh"
+grep -Fq 'pidstat unavailable' "${hardware_report}/latency.log"

@@ -172,7 +172,7 @@ install_artifact() {
 install() { install_artifact; configure; "${NO_SERVICE}" || install_service; }
 virtual_display_enabled() { [[ -r "${CONFIG_FILE}" ]] && grep -Eq '^steamos_virtual_display_enabled[[:space:]]*=[[:space:]]*true[[:space:]]*$' "${CONFIG_FILE}"; }
 start() { "${NO_SERVICE}" && die 'start requires the user service.' "$EXIT_SERVICE"; if virtual_display_enabled; then compatibility_check; fi; systemctl --user is-active --quiet steamshine && { say 'Already running'; return; }; run systemctl --user enable --now steamshine || die 'Service failed to start.' "$EXIT_SERVICE"; }
-stop() { run systemctl --user disable --now steamshine; }
+stop() { run systemctl --user stop steamshine; }
 status() { systemctl --user status steamshine --no-pager; }
 logs() { journalctl --user -u steamshine --no-pager -n 200; }
 diagnose() { check; command -v gamescope >/dev/null && gamescope --version || true; pw-cli info 0 >/dev/null 2>&1 && say 'PipeWire reachable' || say 'PipeWire is not reachable'; }
@@ -210,7 +210,11 @@ compatibility_check() {
   else
     say 'VAAPI_PROBE_TOOL_MISSING'
   fi
-  if [[ -e /usr/lib/dri/radeonsi_drv_video.so ]]; then say 'VAAPI_AMD_DRIVER_AVAILABLE'; else say 'VAAPI_AMD_DRIVER_MISSING'; fi
+  local vaapi_driver=false vaapi_path
+  for vaapi_path in /usr/lib/dri/radeonsi_drv_video.so /usr/lib64/dri/radeonsi_drv_video.so /run/host/usr/lib/dri/radeonsi_drv_video.so /run/host/usr/lib64/dri/radeonsi_drv_video.so; do
+    [[ -f "${vaapi_path}" ]] && { vaapi_driver=true; break; }
+  done
+  "${vaapi_driver}" && say 'VAAPI_AMD_DRIVER_AVAILABLE' || say 'VAAPI_AMD_DRIVER_MISSING'
   "${collector}"
 }
 bootstrap() { install; "${NO_START}" || "${NO_SERVICE}" || start; "${DRY_RUN}" || diagnose; say 'SteamShine is ready'; }
@@ -242,7 +246,7 @@ hardware_test() {
   start
   if ! STEAMSHINE_CONFIG="${CONFIG_FILE}" STEAMSHINE_HARDWARE_REPORT_DIR="${report_dir}" "${ROOT_DIR}/scripts/test-steamos-virtual-display.sh"; then
     stop || true
-    die "Hardware-test failed; the SteamShine user service was stopped. See ${report_dir}" "$EXIT_TEST"
+    die "Hardware-test failed; SteamShine was stopped for safety but autostart remains enabled. Restart with: systemctl --user start steamshine. See ${report_dir}" "$EXIT_TEST"
   fi
   say "Hardware-test report: ${report_dir}"
 }

@@ -33,7 +33,8 @@ collect() {
     uname -a; gamescope --version 2>&1 || true
     gamescope --help 2>&1 | grep -E -- '--backend|headless|--nested-(width|height|refresh)|--expose-wayland|--prefer-vk-device|--hdr-enabled' || true
     find /sys/class/drm -name uevent -exec sh -c 'echo ---$1; grep -E "PCI_SLOT_NAME|DRIVER" "$1"' _ {} \; 2>/dev/null || true
-    vainfo 2>&1 || true; vulkaninfo --summary 2>&1 || true
+    if command -v vainfo >/dev/null 2>&1; then vainfo 2>&1 || echo 'DIAGNOSTIC_WARN: vainfo failed'; else echo 'VAAPI_PROBE_SKIPPED: vainfo unavailable'; fi
+    vulkaninfo --summary 2>&1 || true
     if command -v rocminfo >/dev/null 2>&1; then rocminfo 2>&1 || true; fi
     if command -v rocm-smi >/dev/null 2>&1; then rocm-smi 2>&1 || true; fi
     if command -v amd-smi >/dev/null 2>&1; then amd-smi metric -g 2>&1 || true; fi
