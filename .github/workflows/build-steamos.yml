@@ -137,6 +137,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # actions/checkout writes this setting in its temporary HOME.  The
+          # subsequent container shell has a different HOME and must trust the
+          # bind-mounted checkout before Git can initialise submodules.
+          git config --global --add safe.directory "${GITHUB_WORKSPACE}"
           cd "${GITHUB_WORKSPACE}"
           mode='${{ needs.classify-changes.outputs.mode }}'
           if [[ "${mode}" == docs ]]; then
