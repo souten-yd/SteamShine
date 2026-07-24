@@ -30,6 +30,7 @@
   #include "platform/linux/vulkan_encode.h"
 #endif
 #include "process.h"
+#include "steamos_virtual_session.h"
 #include "system_tray.h"
 #include "upnp.h"
 #include "video.h"
