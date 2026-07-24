@@ -15,4 +15,4 @@ The build emits `ldd -v`, the dynamic section, symbol versions, and ELF version 
 
 The starting image is already ABI-compatible, so CI does not downgrade or replace its C library at runtime. Package installation and compilation occur only in the disposable container; they never run on a SteamOS host.
 
-SteamOS installation verifies the detached SHA-256 file and archive paths before atomically switching `~/.local/share/steamshine/current`. A failed install keeps the prior `current` version; rollback is `ln -sfn ~/.local/share/steamshine/versions/<previous> ~/.local/share/steamshine/current` followed by `systemctl --user restart steamshine`.
+SteamOS installation verifies the detached SHA-256 file, archive paths, absence of link entries, and x86_64 artifact metadata before atomically switching `~/.local/share/steamshine/current`. A failed install keeps the prior `current` version; a successful replacement records the prior version for `./steamshine.sh rollback`, followed by `systemctl --user restart steamshine` when the service is enabled.

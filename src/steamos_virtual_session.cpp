@@ -38,6 +38,7 @@ namespace steamos_virtual_session {
       std::mutex mutex;  ///< Serializes virtual-session state transitions.
       state_e current {state_e::Disabled};  ///< Current lifecycle state.
       std::filesystem::path runtime_directory;  ///< Runtime path uniquely owned by this process.
+      std::string pci_bdf;  ///< PCI BDF of the AMD dGPU selected for Gamescope, capture, and encoding.
       std::string render_node;  ///< AMD dGPU render node shared by Gamescope, capture, and encoders.
       bool stream_requested {false};  ///< Whether RTSP accepted the associated stream before capture attached.
 #if defined(__linux__)
@@ -119,6 +120,7 @@ namespace steamos_virtual_session {
       std::error_code error;
       std::filesystem::remove_all(manager.runtime_directory, error);
       manager.runtime_directory.clear();
+      manager.pci_bdf.clear();
       manager.render_node.clear();
       manager.stream_requested = false;
       manager.current = config::steamos_virtual_display.enabled ? state_e::Idle : state_e::Disabled;
@@ -144,6 +146,8 @@ namespace steamos_virtual_session {
      * @brief Describe an AMD DRM render node from its sysfs device directory.
      */
     struct gpu_candidate_t {
+      std::string pci_bdf;  ///< Canonical PCI BDF independent of DRM node numbering.
+      std::string card_node;  ///< DRM card node corresponding to the selected render node.
       std::string render_node;  ///< DRM render node path.
       std::string gamescope_device;  ///< PCI vendor/device string accepted by Gamescope.
       std::uint64_t vram_bytes {};  ///< Dedicated VRAM reported by amdgpu.
@@ -163,8 +167,26 @@ namespace steamos_virtual_session {
         return std::nullopt;
       }
       gpu_candidate_t candidate;
+      std::error_code canonical_error;
+      candidate.pci_bdf = std::filesystem::canonical(sys_device, canonical_error).filename().string();
+      if (canonical_error || candidate.pci_bdf.empty()) {
+        return std::nullopt;
+      }
       candidate.render_node = render_node.string();
       candidate.gamescope_device = vendor.substr(2) + ":" + device.substr(2);
+      std::error_code iterator_error;
+      for (const auto &entry : std::filesystem::directory_iterator {"/sys/class/drm", iterator_error}) {
+        const auto name {entry.path().filename().string()};
+        if (name.rfind("card", 0) != 0 || name.find('-') != std::string::npos) {
+          continue;
+        }
+        std::error_code card_error;
+        const auto card_device {std::filesystem::canonical(entry.path() / "device", card_error)};
+        if (!card_error && card_device.filename() == candidate.pci_bdf) {
+          candidate.card_node = (std::filesystem::path {"/dev/dri"} / name).string();
+          break;
+        }
+      }
       try {
         candidate.vram_bytes = std::stoull(read_attribute(sys_device / "mem_info_vram_total"));
       } catch (const std::exception &) {
@@ -188,7 +210,7 @@ namespace steamos_virtual_session {
         }
 #ifdef SUNSHINE_TESTS
         // Unit tests use a synthetic Gamescope PCI identifier because CI has no DRM GPU.
-        return gpu_candidate_t {"", requested, 0};
+        return gpu_candidate_t {"test-pci-bdf", "", "", requested, 0};
 #else
         error = "Configure the SteamOS GPU as a PCI BDF or DRM render node";
         return std::nullopt;
@@ -236,6 +258,42 @@ namespace steamos_virtual_session {
         return std::nullopt;
       }
       return selected;
+    }
+
+    /**
+     * @brief Verify that Gamescope's vendor/device selector identifies one GPU.
+     *
+     * Gamescope advertises `--prefer-vk-device` as a vendor/device selector,
+     * not a PCI-BDF selector.  A second AMD adapter with the same identifier
+     * would make a requested BDF ambiguous, so the virtual stream must fail
+     * rather than potentially rendering on a different GPU.
+     *
+     * @param selected GPU selected from configuration.
+     * @param error Receives a user-facing selector failure.
+     * @return True when the selector maps to at most one AMD render node.
+     */
+    bool gamescope_selector_is_unambiguous(const gpu_candidate_t &selected, std::string &error) {
+#ifdef SUNSHINE_TESTS
+      if (selected.render_node.empty()) {
+        return true;
+      }
+#endif
+      std::size_t matching_devices {};
+      std::error_code iterator_error;
+      for (const auto &entry : std::filesystem::directory_iterator {"/dev/dri", iterator_error}) {
+        if (entry.path().filename().string().rfind("renderD", 0) != 0) {
+          continue;
+        }
+        const auto candidate {amd_gpu_from_render_node(entry.path())};
+        if (candidate && candidate->gamescope_device == selected.gamescope_device) {
+          ++matching_devices;
+        }
+      }
+      if (matching_devices > 1) {
+        error = "Gamescope cannot unambiguously select the requested AMD PCI BDF because multiple GPUs share its vendor/device identifier";
+        return false;
+      }
+      return true;
     }
 
     /**
@@ -397,6 +455,10 @@ namespace steamos_virtual_session {
       manager.current = state_e::Failed;
       return false;
     }
+    if (!gamescope_selector_is_unambiguous(*gpu, error)) {
+      manager.current = state_e::Failed;
+      return false;
+    }
     const auto capture_gpu {select_amd_dgpu(config::steamos_virtual_display.capture_gpu.empty() ? config::steamos_virtual_display.game_gpu : config::steamos_virtual_display.capture_gpu, error)};
     if (!capture_gpu) {
       manager.current = state_e::Failed;
@@ -432,6 +494,7 @@ namespace steamos_virtual_session {
       return false;
     }
     manager.runtime_directory = base / ("session-" + std::to_string(::getpid()) + "-" + std::to_string(launch_session.id));
+    manager.pci_bdf = gpu->pci_bdf;
     manager.render_node = gpu->render_node;
     std::error_code ec;
     std::filesystem::create_directories(manager.runtime_directory, ec);
@@ -495,7 +558,7 @@ namespace steamos_virtual_session {
       }
       if (owned_wayland_socket_exists(socket)) {
         manager.current = state_e::WaitingForCapture;
-        BOOST_LOG(info) << "SteamOS virtual display socket ready: " << width << 'x' << height << '@' << fps;
+        BOOST_LOG(info) << "SteamOS virtual display socket ready: " << width << 'x' << height << '@' << fps << " on AMD PCI " << manager.pci_bdf << " (" << manager.render_node << ')';
         return true;
       }
       std::this_thread::sleep_for(std::chrono::milliseconds {50});

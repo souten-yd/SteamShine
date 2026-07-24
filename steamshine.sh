@@ -16,6 +16,9 @@ CHANNEL="stable" PR_NUMBER="" RELEASE_TAG="" ARTIFACT_PATH=""
 say() { "${QUIET}" || printf '%s\n' "$*"; }
 die() { printf 'steamshine: %s\n' "$*" >&2; exit "${2:-1}"; }
 run() { if "${DRY_RUN}"; then printf '[dry-run]'; printf ' %q' "$@"; printf '\n'; else "$@"; fi; }
+json_value() { local key="$1" file="$2"; sed -nE "s/.*\"${key}\"[[:space:]]*:[[:space:]]*\"([^\"]*)\".*/\1/p" "${file}" | head -n1; }
+version_at_least() { [[ "$(printf '%s\n%s\n' "$2" "$1" | sort -V | head -n1)" == "$2" ]]; }
+path_within() { local candidate="$1" parent="$2" canonical_candidate canonical_parent; canonical_candidate="$(realpath -m -- "${candidate}")"; canonical_parent="$(realpath -m -- "${parent}")"; [[ "${canonical_candidate}" == "${canonical_parent}" || "${canonical_candidate}" == "${canonical_parent}/"* ]]; }
 usage() { cat <<'EOF'
 Usage: ./steamshine.sh <command> [options]
 Commands: menu check compatibility-check install build configure start stop restart status logs diagnose update repair uninstall bootstrap rollback hardware-test
@@ -124,31 +127,88 @@ fetch_artifact() {
   run gh run download "${run_id}" --repo souten-yd/SteamShine --dir "${cache}"
   ARTIFACT_PATH="$(find "${cache}" -type f -name 'steamshine-steamos-*.tar.zst' -print -quit)"
 }
+validate_artifact() {
+  local artifact="$1" entry
+  [[ -f "${artifact}" ]] || die 'A local .tar.zst artifact is required.' "$EXIT_DEPENDENCY"
+  # The delivery archive has no reason to contain links. Rejecting both link
+  # types avoids a symlink or hard-link escape between validation and extraction.
+  if tar --zstd -tvf "${artifact}" | grep -Eq '^[lh]'; then
+    die 'Archive symlinks and hard links are rejected.' "$EXIT_DEPENDENCY"
+  fi
+  while IFS= read -r entry; do
+    [[ -n "${entry}" ]] || continue
+    [[ "${entry}" != /* && "${entry}" != ../* && "${entry}" != */../* && "${entry}" != .. ]] || die 'Unsafe archive path rejected.' "$EXIT_DEPENDENCY"
+  done < <(tar --zstd -tf "${artifact}")
+}
 install_artifact() {
   if "${DRY_RUN}"; then say "[dry-run] verify and install artifact ${ARTIFACT_PATH:-for channel ${CHANNEL}} below ${PREFIX}"; return; fi
   fetch_artifact
-  [[ -f "${ARTIFACT_PATH}" ]] || die 'A local .tar.zst artifact is required.' "$EXIT_DEPENDENCY"
   [[ "$(uname -m)" == x86_64 ]] || die 'This artifact supports x86_64 only.' "$EXIT_UNSUPPORTED"
-  local checksum="${ARTIFACT_PATH}.sha256" target="${PREFIX}/share/steamshine" versions="${PREFIX}/share/steamshine/versions" extract
+  local checksum="${ARTIFACT_PATH}.sha256" target="${PREFIX}/share/steamshine" versions="${PREFIX}/share/steamshine/versions" extract version previous=""
   [[ -f "${checksum}" ]] || die "Missing checksum: ${checksum}" "$EXIT_DEPENDENCY"
   (cd -- "$(dirname -- "${checksum}")" && sha256sum -c "$(basename -- "${checksum}")") || die 'Artifact checksum mismatch.' "$EXIT_DEPENDENCY"
-  tar --zstd -tf "${ARTIFACT_PATH}" | grep -Eq '(^/|(^|/)\.\.(/|$))' && die 'Unsafe archive path rejected.' "$EXIT_DEPENDENCY"
+  validate_artifact "${ARTIFACT_PATH}"
   mkdir -p "${HOME}/.cache/steamshine"; extract="$(mktemp -d "${HOME}/.cache/steamshine/extract.XXXXXX")"
   if ! tar --zstd -C "${extract}" -xf "${ARTIFACT_PATH}"; then rm -rf -- "${extract}"; die 'Artifact extraction failed.' "$EXIT_DEPENDENCY"; fi
-  if [[ ! -x "${extract}/bin/steamshine" || ! -f "${extract}/BUILD_INFO.json" ]]; then rm -rf -- "${extract}"; die 'Artifact layout is invalid.' "$EXIT_DEPENDENCY"; fi
-  run mkdir -p "${versions}" "${PREFIX}/bin"; local version; version="$(sha256sum "${ARTIFACT_PATH}" | awk '{print $1}')"
-  run mv "${extract}" "${versions}/${version}"; run ln -sfn "${versions}/${version}" "${target}/current"; run ln -sfn "${target}/current/bin/steamshine" "${PREFIX}/bin/steamshine"
+  if [[ ! -x "${extract}/bin/steamshine" || ! -f "${extract}/BUILD_INFO.json" || ! -f "${extract}/STEAMOS_BASELINE.json" ]]; then rm -rf -- "${extract}"; die 'Artifact layout is invalid.' "$EXIT_DEPENDENCY"; fi
+  [[ "$(json_value target_architecture "${extract}/BUILD_INFO.json")" == x86_64 ]] || { rm -rf -- "${extract}"; die 'Artifact architecture is not x86_64.' "$EXIT_UNSUPPORTED"; }
+  run mkdir -p "${versions}" "${PREFIX}/bin"; version="$(sha256sum "${ARTIFACT_PATH}" | awk '{print $1}')"
+  if [[ -L "${target}/current" ]]; then previous="$(readlink -f -- "${target}/current" || true)"; fi
+  if [[ -e "${versions}/${version}" ]]; then
+    rm -rf -- "${extract}"
+    say 'Already installed'
+  else
+    run mv "${extract}" "${versions}/${version}"
+  fi
+  if [[ -n "${previous}" && "${previous}" != "${versions}/${version}" ]] && path_within "${previous}" "${versions}"; then
+    if "${DRY_RUN}"; then
+      say "[dry-run] record rollback target ${previous}"
+    else
+      printf '%s\n' "${previous}" >"${target}/rollback"
+    fi
+  fi
+  if ! "${DRY_RUN}"; then ln -s "${versions}/${version}" "${target}/current.next"; mv -Tf "${target}/current.next" "${target}/current"; ln -sfn "${target}/current/bin/steamshine" "${PREFIX}/bin/steamshine"; fi
 }
 install() { install_artifact; configure; "${NO_SERVICE}" || install_service; }
-start() { "${NO_SERVICE}" && die 'start requires the user service.' "$EXIT_SERVICE"; systemctl --user is-active --quiet steamshine && { say 'Already running'; return; }; run systemctl --user enable --now steamshine || die 'Service failed to start.' "$EXIT_SERVICE"; }
+virtual_display_enabled() { [[ -r "${CONFIG_FILE}" ]] && grep -Eq '^steamos_virtual_display_enabled[[:space:]]*=[[:space:]]*true[[:space:]]*$' "${CONFIG_FILE}"; }
+start() { "${NO_SERVICE}" && die 'start requires the user service.' "$EXIT_SERVICE"; if virtual_display_enabled; then compatibility_check; fi; systemctl --user is-active --quiet steamshine && { say 'Already running'; return; }; run systemctl --user enable --now steamshine || die 'Service failed to start.' "$EXIT_SERVICE"; }
 stop() { run systemctl --user disable --now steamshine; }
 status() { systemctl --user status steamshine --no-pager; }
 logs() { journalctl --user -u steamshine --no-pager -n 200; }
 diagnose() { check; command -v gamescope >/dev/null && gamescope --version || true; pw-cli info 0 >/dev/null 2>&1 && say 'PipeWire reachable' || say 'PipeWire is not reachable'; }
 compatibility_check() {
   check
-  local collector="${PREFIX}/share/steamshine/current/scripts/collect-steamos-runtime-baseline.sh"
+  local artifact_root="${PREFIX}/share/steamshine/current" baseline="${artifact_root}/STEAMOS_BASELINE.json" collector="${artifact_root}/scripts/collect-steamos-runtime-baseline.sh"
+  [[ -f "${baseline}" ]] || baseline="${ROOT_DIR}/ci/steamos/baselines/steamos-3.8.16-20260716.1.json"
   [[ -x "${collector}" ]] || collector="${ROOT_DIR}/scripts/collect-steamos-runtime-baseline.sh"
+  local expected_version expected_build expected_glibcxx expected_bdf expected_render actual_glibc actual_glibcxx actual_render
+  expected_version="$(json_value version_id "${baseline}")"; expected_build="$(json_value build_id "${baseline}")"; expected_glibcxx="$(json_value max_glibcxx "${baseline}")"
+  expected_bdf="$(json_value pci_bdf "${baseline}")"; expected_render="$(json_value render_node "${baseline}")"
+  load_os_release
+  [[ "${VERSION_ID:-}" == "${expected_version}" ]] || die "SteamOS VERSION_ID ${VERSION_ID:-unknown} is incompatible with artifact baseline ${expected_version}." "$EXIT_UNSUPPORTED"
+  [[ "${BUILD_ID:-}" == "${expected_build}" ]] || die "SteamOS BUILD_ID ${BUILD_ID:-unknown} is incompatible with artifact baseline ${expected_build}." "$EXIT_UNSUPPORTED"
+  actual_glibc="$(ldd --version | awk 'NR == 1 { for (i = NF; i > 0; --i) if ($i ~ /^[0-9]+\.[0-9]+/) { print $i; exit } }')"
+  version_at_least "${actual_glibc}" "$(json_value max_glibc "${baseline}")" || die "Host glibc ${actual_glibc:-unknown} is older than the required ABI baseline." "$EXIT_UNSUPPORTED"
+  actual_glibcxx="$(strings /usr/lib/libstdc++.so.6 2>/dev/null | grep '^GLIBCXX_' | sort -V | tail -1 || true)"
+  version_at_least "${actual_glibcxx#GLIBCXX_}" "${expected_glibcxx}" || die "Host ${actual_glibcxx:-unknown} is older than required GLIBCXX_${expected_glibcxx}." "$EXIT_UNSUPPORTED"
+  command -v gamescope >/dev/null || die 'Gamescope is required for a SteamOS virtual display.' "$EXIT_DEPENDENCY"
+  gamescope --help 2>&1 | grep -q -- '--backend' || die 'Gamescope lacks --backend required for headless operation.' "$EXIT_DEPENDENCY"
+  gamescope --help 2>&1 | grep -q -- '--prefer-vk-device' || die 'Gamescope lacks deterministic Vulkan device selection.' "$EXIT_DEPENDENCY"
+  actual_render="$(readlink -f -- "/dev/dri/by-path/pci-${expected_bdf}-render" 2>/dev/null || true)"
+  [[ "${actual_render}" == "${expected_render}" && -r "${actual_render}" && -w "${actual_render}" ]] || die "Expected AMD render node ${expected_render} for ${expected_bdf} is unavailable." "$EXIT_DEPENDENCY"
+  say 'GPU_DRM_AVAILABLE'
+  say 'VULKAN_RENDER_AVAILABLE'
+  if command -v vulkaninfo >/dev/null && vulkaninfo --summary 2>/dev/null | grep -q 'VK_KHR_video_encode_h264'; then
+    say 'VULKAN_VIDEO_ENCODE_AVAILABLE'
+  else
+    say 'VULKAN_VIDEO_ENCODE_AVAILABLE=unverified; SteamShine will perform the authoritative Vulkan Video encoder probe at stream start.'
+  fi
+  if command -v vainfo >/dev/null; then
+    say 'VAAPI_PROBE_TOOL_AVAILABLE'
+  else
+    say 'VAAPI_PROBE_TOOL_MISSING'
+  fi
+  if [[ -e /usr/lib/dri/radeonsi_drv_video.so ]]; then say 'VAAPI_AMD_DRIVER_AVAILABLE'; else say 'VAAPI_AMD_DRIVER_MISSING'; fi
   "${collector}"
 }
 bootstrap() { install; "${NO_START}" || "${NO_SERVICE}" || start; "${DRY_RUN}" || diagnose; say 'SteamShine is ready'; }
@@ -163,14 +223,25 @@ uninstall() {
   if "${PURGE}"; then run rm -rf -- "${HOME}/.config/steamshine" "${STATE_DIR}"; fi
   if "${REMOVE_DEPENDENCIES}"; then say 'Dependencies are intentionally not removed automatically; inspect installed-packages.txt and remove only packages not used elsewhere.'; fi
 }
-rollback() { die 'No rollback snapshot is available yet; restore the timestamped backup in ~/.config/steamshine/backups manually.'; }
+rollback() {
+  local target="${PREFIX}/share/steamshine" versions="${PREFIX}/share/steamshine/versions" previous
+  [[ -f "${target}/rollback" ]] || die 'No rollback snapshot is available.' "$EXIT_CONFIG"
+  previous="$(<"${target}/rollback")"
+  [[ -d "${previous}" ]] && path_within "${previous}" "${versions}" || die 'Rollback target is unsafe or unavailable.' "$EXIT_CONFIG"
+  if ! "${DRY_RUN}"; then ln -s "${previous}" "${target}/current.next"; mv -Tf "${target}/current.next" "${target}/current"; ln -sfn "${target}/current/bin/steamshine" "${PREFIX}/bin/steamshine"; fi
+  say 'Rolled back SteamShine artifact'
+}
 hardware_test() {
   "${HARDWARE_INTERACTIVE}" || die 'hardware-test requires --interactive because video, audio, and input require operator confirmation.' "$EXIT_USAGE"
   local report_dir="${STATE_DIR}/hardware-tests/$(date +%Y%m%d-%H%M%S)"
   mkdir -p "${report_dir}"
+  compatibility_check >"${report_dir}/compatibility.log" 2>&1 || die "Hardware-test compatibility gate failed; see ${report_dir}/compatibility.log" "$EXIT_DEPENDENCY"
   "${ROOT_DIR}/scripts/diagnose-steamos-virtual-display.sh" >"${report_dir}/diagnose.log" 2>&1 || true
   start
-  STEAMSHINE_HARDWARE_REPORT_DIR="${report_dir}" "${ROOT_DIR}/scripts/test-steamos-virtual-display.sh"
+  if ! STEAMSHINE_HARDWARE_REPORT_DIR="${report_dir}" "${ROOT_DIR}/scripts/test-steamos-virtual-display.sh"; then
+    stop || true
+    die "Hardware-test failed; the SteamShine user service was stopped. See ${report_dir}" "$EXIT_TEST"
+  fi
   say "Hardware-test report: ${report_dir}"
 }
 menu() { while true; do cat <<'EOF'
