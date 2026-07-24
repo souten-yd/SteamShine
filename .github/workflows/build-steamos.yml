@@ -198,7 +198,7 @@ jobs:
             ./steamshine.sh install --artifact "${artifact}" --no-service --non-interactive --yes
           test -x "${smoke_home}/.local/bin/steamshine"
           HOME="${smoke_home}" XDG_RUNTIME_DIR="${smoke_home}/run" \
-            "${smoke_home}/.local/bin/steamshine" --config "${smoke_home}/.config/steamshine/sunshine.conf" version
+            "${smoke_home}/.local/bin/steamshine" "${smoke_home}/.config/steamshine/sunshine.conf" --version
           test -f "${smoke_home}/.local/share/steamshine/current/BUILD_INFO.json"
           test -f "${smoke_home}/.local/share/steamshine/current/STEAMOS_BASELINE.json"
           test -f "${smoke_home}/.local/share/steamshine/current/RUNTIME_DEPENDENCIES.txt"
