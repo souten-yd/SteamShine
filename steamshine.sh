@@ -178,7 +178,9 @@ logs() { journalctl --user -u steamshine --no-pager -n 200; }
 diagnose() { check; command -v gamescope >/dev/null && gamescope --version || true; pw-cli info 0 >/dev/null 2>&1 && say 'PipeWire reachable' || say 'PipeWire is not reachable'; }
 compatibility_check() {
   check
-  local artifact_root="${PREFIX}/share/steamshine/current" baseline="${artifact_root}/STEAMOS_BASELINE.json" collector="${artifact_root}/scripts/collect-steamos-runtime-baseline.sh"
+  local artifact_root="${PREFIX}/share/steamshine/current"
+  local baseline="${artifact_root}/STEAMOS_BASELINE.json"
+  local collector="${artifact_root}/scripts/collect-steamos-runtime-baseline.sh"
   [[ -f "${baseline}" ]] || baseline="${ROOT_DIR}/ci/steamos/baselines/steamos-3.8.16-20260716.1.json"
   [[ -x "${collector}" ]] || collector="${ROOT_DIR}/scripts/collect-steamos-runtime-baseline.sh"
   local expected_version expected_build expected_glibcxx expected_bdf expected_render actual_glibc actual_glibcxx actual_render
