@@ -53,6 +53,7 @@ jobs:
         run: |
           set -euo pipefail
           changed="$(git diff --name-only "${BASE_SHA}" "${GITHUB_SHA}" || true)"
+          git diff --check "${BASE_SHA}" "${GITHUB_SHA}"
           mode=docs
           if [[ "${FORCE_FULL}" == true ]] || grep -qEv '^(docs/|.*\.md$)' <<<"${changed}"; then mode=full; fi
           if [[ "${mode}" == full ]] && grep -qEv '^(steamshine\.sh|scripts/|tests/integration/|\.github/workflows/)' <<<"${changed}"; then mode=full; fi
