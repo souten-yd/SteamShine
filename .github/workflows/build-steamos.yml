@@ -78,7 +78,7 @@ jobs:
         run: |
           set -euo pipefail
           cd "${GITHUB_WORKSPACE}"
-          git diff --check HEAD^ HEAD
+          if grep -nE '[[:blank:]]+$|^(<<<<<<<|=======|>>>>>>>)' steamshine.sh scripts/*.sh tests/integration/test_steamshine_script.sh .github/workflows/build-steamos.yml .github/workflows/build-ci-image.yml; then exit 1; fi
           if [[ '${{ needs.classify-changes.outputs.mode }}' == shell ]]; then
             shellcheck steamshine.sh scripts/*.sh tests/integration/test_steamshine_script.sh
             actionlint .github/workflows/build-steamos.yml .github/workflows/build-ci-image.yml
@@ -107,7 +107,7 @@ jobs:
           clang-format --dry-run --Werror src/steamos_virtual_session.cpp src/steamos_virtual_session.h tests/unit/test_steamos_virtual_session.cpp
           shellcheck steamshine.sh scripts/*.sh tests/integration/test_steamshine_script.sh
           actionlint .github/workflows/build-steamos.yml .github/workflows/build-ci-image.yml
-          git diff --check
+          if grep -nE '[[:blank:]]+$|^(<<<<<<<|=======|>>>>>>>)' src/steamos_virtual_session.cpp src/steamos_virtual_session.h tests/unit/test_steamos_virtual_session.cpp steamshine.sh scripts/*.sh tests/integration/test_steamshine_script.sh .github/workflows/build-steamos.yml .github/workflows/build-ci-image.yml; then exit 1; fi
       - name: Configure clean SteamOS release build
         run: cd "${GITHUB_WORKSPACE}" && cmake -S . -B cmake-build-steamos -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=ON -DBUILD_DOCS=OFF -DSUNSHINE_ENABLE_CUDA=OFF -DSUNSHINE_ASSETS_DIR=share/assets -DSUNSHINE_ASSETS_DIR_DEF=../share/assets
       - name: Build runtime binary
