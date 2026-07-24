@@ -26,6 +26,7 @@ owned_gamescope_processes() {
 collect() {
   {
     echo "== $1 $(date --iso-8601=seconds) =="
+    "${script_dir}/collect-steamos-runtime-baseline.sh" 2>&1 || true
     . /etc/os-release 2>/dev/null && printf 'OS=%s\n' "${PRETTY_NAME:-unknown}"
     uname -a; gamescope --version 2>&1 || true
     gamescope --help 2>&1 | grep -E -- '--backend|headless|--nested-(width|height|refresh)|--expose-wayland|--prefer-vk-device|--hdr-enabled' || true
