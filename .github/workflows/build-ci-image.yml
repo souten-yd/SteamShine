@@ -2,12 +2,6 @@ name: SteamOS CI Image
 
 on:
   workflow_dispatch:
-  pull_request:
-    paths:
-      - '.github/workflows/build-ci-image.yml'
-      - 'ci/steamos/Containerfile'
-      - 'ci/steamos/packages.txt'
-      - 'ci/steamos/mirrorlist'
   push:
     branches: [master]
     paths:
@@ -26,7 +20,6 @@ concurrency:
 
 jobs:
   build-ci-image:
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     outputs:
       digest: ${{ steps.build.outputs.digest }}

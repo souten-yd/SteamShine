@@ -30,6 +30,13 @@ ID plus its artifact name. It verifies the source workflow and checksum, then
 creates a release from that artifact. It intentionally does not configure,
 compile, or package a second binary.
 
+`SteamOS CI Image` is intentionally manual on feature branches and automatic
+only when its inputs reach `master`. This prevents every application pull
+request from rebuilding the environment. When changing `Containerfile`, the
+snapshot mirror, or package set, dispatch that workflow, verify its provenance,
+and update `ci/steamos/image.lock` to its returned digest before relying on it
+from Runtime Build.
+
 ```text
 steamshine-steamos-x86_64-<commit>.tar.zst
 steamshine-steamos-x86_64-<commit>.tar.zst.sha256
