@@ -211,7 +211,9 @@ compatibility_check() {
     say 'VAAPI_PROBE_TOOL_MISSING'
   fi
   local vaapi_driver=false vaapi_path
-  for vaapi_path in /usr/lib/dri/radeonsi_drv_video.so /usr/lib64/dri/radeonsi_drv_video.so /run/host/usr/lib/dri/radeonsi_drv_video.so /run/host/usr/lib64/dri/radeonsi_drv_video.so; do
+  local -a vaapi_roots=(/usr/lib/dri /usr/lib64/dri /run/host/usr/lib/dri /run/host/usr/lib64/dri)
+  if [[ -n "${STEAMSHINE_DRI_ROOTS:-}" ]]; then IFS=: read -r -a vaapi_roots <<<"${STEAMSHINE_DRI_ROOTS}"; fi
+  for vaapi_path in "${vaapi_roots[@]}"/radeonsi_drv_video.so; do
     [[ -f "${vaapi_path}" ]] && { vaapi_driver=true; break; }
   done
   "${vaapi_driver}" && say 'VAAPI_AMD_DRIVER_AVAILABLE' || say 'VAAPI_AMD_DRIVER_MISSING'

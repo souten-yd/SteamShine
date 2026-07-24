@@ -4,6 +4,9 @@
 set -euo pipefail
 
 root_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)"
+test_root="$(mktemp -d)"
+fake_dri="$(mktemp -d)"
+trap 'rm -rf -- "${test_root}" "${fake_dri}"' EXIT
 
 # Only numeric GLIBCXX symbol versions are ABI candidates.  libstdc++ also
 # exposes GLIBCXX_TUNABLES, which must never be selected as a version ceiling.
@@ -12,6 +15,16 @@ if grep -Fq '"max_glibcxx": "GLIBCXX_TUNABLES"' <<<"${runtime_baseline}"; then
   echo 'Runtime baseline selected GLIBCXX_TUNABLES instead of a numeric ABI version.' >&2
   exit 1
 fi
+
+# VA-API is optional, but the compatibility report must identify the AMD driver
+# by its actual radeonsi filename and never mistake an Intel i965 driver for it.
+touch "${fake_dri}/i965_drv_video.so"
+if STEAMSHINE_DRI_ROOTS="${fake_dri}" "${root_dir}/steamshine.sh" compatibility-check 2>&1 | grep -Fq 'VAAPI_AMD_DRIVER_AVAILABLE'; then
+  echo 'An Intel-only VA-API directory was misidentified as AMD radeonsi.' >&2
+  exit 1
+fi
+touch "${fake_dri}/radeonsi_drv_video.so"
+STEAMSHINE_DRI_ROOTS="${fake_dri}" "${root_dir}/steamshine.sh" compatibility-check 2>&1 | grep -Fq 'VAAPI_AMD_DRIVER_AVAILABLE'
 
 "${root_dir}/steamshine.sh" --help >/dev/null
 if "${root_dir}/steamshine.sh" </dev/null >/dev/null 2>&1; then
@@ -25,8 +38,6 @@ fi
 
 # A normal tar archive contains a leading ./ entry.  It is safe and must not be
 # mistaken for a parent-directory traversal by the immutable artifact installer.
-test_root="$(mktemp -d)"
-trap 'rm -rf -- "${test_root}"' EXIT
 mkdir -p "${test_root}/stage/bin" "${test_root}/home/run"
 install -m 755 /bin/true "${test_root}/stage/bin/steamshine"
 printf '{"target_architecture":"x86_64"}\n' >"${test_root}/stage/BUILD_INFO.json"
