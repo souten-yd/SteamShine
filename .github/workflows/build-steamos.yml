@@ -120,7 +120,7 @@ jobs:
     if: needs.classify-changes.outputs.mode != 'full'
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/souten-yd/steamshine-ci@sha256:a27e03ff4e20a31464698788cd4038b38c998ea8cdb22009b4e04cc637ca0728
+      image: ghcr.io/souten-yd/steamshine-ci@sha256:5b86a82f0f54bc94e4b9a747916bba3c54e7955b6bff6e6cf2aa70d2fa602734
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -162,7 +162,7 @@ jobs:
     if: needs.classify-changes.outputs.mode == 'full'
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/souten-yd/steamshine-ci@sha256:a27e03ff4e20a31464698788cd4038b38c998ea8cdb22009b4e04cc637ca0728
+      image: ghcr.io/souten-yd/steamshine-ci@sha256:5b86a82f0f54bc94e4b9a747916bba3c54e7955b6bff6e6cf2aa70d2fa602734
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
