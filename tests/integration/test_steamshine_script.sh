@@ -70,6 +70,49 @@ tar --zstd -C "${test_root}/stage" -cf "${test_root}/steamshine-steamos-x86_64-t
 HOME="${test_root}/home" XDG_RUNTIME_DIR="${test_root}/home/run" \
   "${root_dir}/steamshine.sh" install --artifact "${test_root}/steamshine-steamos-x86_64-test.tar.zst" --no-service --non-interactive --yes
 
+# PR installation must ignore a newer docs-only success run and select the
+# newest successful run that actually contains the immutable delivery archive.
+# It must also not substitute a stale archive found elsewhere in the cache.
+mkdir -p "${test_root}/mock-bin" "${test_root}/pr-home/run"
+cat >"${test_root}/mock-bin/gh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+case "${1:-}" in
+  pr)
+    printf '%s\n' 'feature/virtual-display'
+    ;;
+  run)
+    if [[ "${2:-}" == list ]]; then
+      # 900 is a later docs-only run; 800 is the latest full delivery run.
+      printf '%s\n' 900 800
+    elif [[ "${2:-}" == download ]]; then
+      output_dir=''
+      while (($#)); do
+        if [[ "$1" == --dir ]]; then output_dir="$2"; shift 2; continue; fi
+        shift
+      done
+      mkdir -p "${output_dir}/steamshine-steamos-x86_64-deadbeef"
+      cp "${FIXTURE_ARTIFACT}" "${output_dir}/steamshine-steamos-x86_64-deadbeef/steamshine-steamos-x86_64-deadbeef.tar.zst"
+      sed 's/steamshine-steamos-x86_64-test.tar.zst/steamshine-steamos-x86_64-deadbeef.tar.zst/' "${FIXTURE_ARTIFACT}.sha256" >"${output_dir}/steamshine-steamos-x86_64-deadbeef/steamshine-steamos-x86_64-deadbeef.tar.zst.sha256"
+    fi
+    ;;
+  api)
+    if [[ "$2" == *'/900/artifacts' ]]; then
+      printf '%s\n' 'steamos-ci-timings-docs-only'
+    elif [[ "$2" == *'/800/artifacts' ]]; then
+      printf '%s\n' 'steamshine-steamos-x86_64-deadbeef'
+    fi
+    ;;
+esac
+EOF
+chmod 755 "${test_root}/mock-bin/gh"
+mkdir -p "${test_root}/pr-home/.cache/steamshine/artifacts/stale"
+cp "${test_root}/steamshine-steamos-x86_64-test.tar.zst" "${test_root}/pr-home/.cache/steamshine/artifacts/stale/steamshine-steamos-x86_64-stale.tar.zst"
+FIXTURE_ARTIFACT="${test_root}/steamshine-steamos-x86_64-test.tar.zst" HOME="${test_root}/pr-home" XDG_RUNTIME_DIR="${test_root}/pr-home/run" PATH="${test_root}/mock-bin:${PATH}" \
+  "${root_dir}/steamshine.sh" install --channel pr --pr 6 --no-service --non-interactive --yes
+test -x "${test_root}/pr-home/.local/bin/steamshine"
+test -f "${test_root}/pr-home/.cache/steamshine/artifacts/800/steamshine-steamos-x86_64-deadbeef/steamshine-steamos-x86_64-deadbeef.tar.zst"
+
 # The service passes Sunshine's configuration file as its positional argument.
 # `--config` is not a Sunshine CLI option and would otherwise cause a restart
 # loop before the host begins accepting Moonlight connections.

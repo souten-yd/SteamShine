@@ -120,12 +120,32 @@ EOF
 fetch_artifact() {
   [[ -n "${ARTIFACT_PATH}" ]] && return
   command -v gh >/dev/null || die 'Install gh or download the PR artifact from Actions and pass --artifact <path>.' "$EXIT_DEPENDENCY"
-  local cache="${HOME}/.cache/steamshine/artifacts" run_id
+  local cache="${HOME}/.cache/steamshine/artifacts" run_id="" candidate artifact_name="" artifact_names run_cache
   run mkdir -p "${cache}"
-  if [[ "${CHANNEL}" == pr ]]; then [[ -n "${PR_NUMBER}" ]] || die '--channel pr requires --pr NUMBER.' "$EXIT_USAGE"; run_id="$(gh run list --repo souten-yd/SteamShine --branch "$(gh pr view "${PR_NUMBER}" --json headRefName -q .headRefName)" --workflow build-steamos.yml --limit 1 --json databaseId -q '.[0].databaseId')"; else die 'Use --artifact for local artifacts; release/channel download is not published yet.' "$EXIT_USAGE"; fi
-  [[ -n "${run_id}" && "${run_id}" != null ]] || die 'No completed build-steamos artifact was found for this PR.' "$EXIT_DEPENDENCY"
-  run gh run download "${run_id}" --repo souten-yd/SteamShine --dir "${cache}"
-  ARTIFACT_PATH="$(find "${cache}" -type f -name 'steamshine-steamos-*.tar.zst' -print -quit)"
+  if [[ "${CHANNEL}" != pr ]]; then
+    die 'Use --artifact for local artifacts; release/channel download is not published yet.' "$EXIT_USAGE"
+  fi
+  [[ -n "${PR_NUMBER}" ]] || die '--channel pr requires --pr NUMBER.' "$EXIT_USAGE"
+  # A later docs-only run can succeed without producing a delivery archive.
+  # Select the most recent successful run that actually owns the immutable
+  # SteamOS Artifact, rather than trusting the latest workflow conclusion.
+  while IFS= read -r candidate; do
+    [[ "${candidate}" =~ ^[0-9]+$ ]] || continue
+    if ! artifact_names="$(gh api "repos/souten-yd/SteamShine/actions/runs/${candidate}/artifacts" --jq '.artifacts[] | select(.expired == false) | .name' 2>/dev/null)"; then
+      continue
+    fi
+    artifact_name="$(grep -E '^steamshine-steamos-x86_64-[[:xdigit:]]+$' <<<"${artifact_names}" | head -n1 || true)"
+    if [[ -n "${artifact_name}" ]]; then
+      run_id="${candidate}"
+      break
+    fi
+  done < <(gh run list --repo souten-yd/SteamShine --branch "$(gh pr view "${PR_NUMBER}" --json headRefName -q .headRefName)" --workflow build-steamos.yml --limit 30 --json databaseId,conclusion --jq '.[] | select(.conclusion == "success") | .databaseId')
+  [[ -n "${run_id}" ]] || die 'No successful build-steamos run with a SteamOS delivery artifact was found for this PR.' "$EXIT_DEPENDENCY"
+  run_cache="${cache}/${run_id}"
+  run mkdir -p "${run_cache}"
+  run gh run download "${run_id}" --repo souten-yd/SteamShine --name "${artifact_name}" --dir "${run_cache}"
+  ARTIFACT_PATH="$(find "${run_cache}" -type f -name 'steamshine-steamos-*.tar.zst' -print -quit)"
+  [[ -n "${ARTIFACT_PATH}" ]] || die "Artifact download did not contain ${artifact_name}." "$EXIT_DEPENDENCY"
 }
 validate_artifact() {
   local artifact="$1" entry
