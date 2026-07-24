@@ -8,6 +8,7 @@ report_dir="${STEAMSHINE_HARDWARE_REPORT_DIR:-${state_dir}/hardware-tests/$(date
 mkdir -p "${report_dir}"
 report="${report_dir}/virtual-display.log"
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+steamshine_binary="${STEAMSHINE_BINARY:-${HOME}/.local/bin/steamshine}"
 
 owned_gamescope_processes() {
   local environment pid value
@@ -43,6 +44,15 @@ collect() {
 }
 echo "Disconnect physical displays, start SteamShine, then connect Moonlight ten times. Report: ${report}"
 collect before
+if [[ ! -x "${steamshine_binary}" ]]; then
+  echo "FAIL: installed SteamShine binary is unavailable: ${steamshine_binary}" | tee -a "${report}"
+  exit 1
+fi
+if ! "${steamshine_binary}" vulkan-video-probe 2>&1 | tee -a "${report}"; then
+  echo 'FAIL: Vulkan Video H.264 preflight failed; refusing Moonlight acceptance cycles' | tee -a "${report}"
+  exit 1
+fi
+echo 'Vulkan Video H.264 preflight passed; an actual IDR/bitstream is still recorded by the Moonlight stream acceptance run.' | tee -a "${report}"
 for attempt in $(seq 1 10); do
   echo "Attempt ${attempt}: connect Moonlight now, then press Enter once the stream is established."
   read -r

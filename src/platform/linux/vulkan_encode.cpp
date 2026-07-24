@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <string>
 #include <drm_fourcc.h>
 #include <sys/stat.h>
 #if defined(__FreeBSD__)
@@ -18,6 +19,7 @@
 
 extern "C" {
 #include <libavcodec/avcodec.h>
+#include <libavutil/error.h>
 #include <libavutil/hwcontext.h>
 #include <libavutil/hwcontext_vulkan.h>
 }
@@ -26,6 +28,7 @@ extern "C" {
 #include "src/config.h"
 #include "src/logging.h"
 #include "src/steamos_virtual_session.h"
+#include "src/utility.h"
 #include "src/video_colorspace.h"
 #include "vulkan_encode.h"
 
@@ -1098,6 +1101,51 @@ namespace vk {
       return false;
     }
     av_buffer_unref(&dev);
+    return true;
+  }
+
+  bool probe_h264(std::string &error) {
+    const AVCodec *const codec {avcodec_find_encoder_by_name("h264_vulkan")};
+    if (!codec) {
+      error = "FFmpeg does not provide h264_vulkan";
+      return false;
+    }
+    AVBufferRef *device {nullptr};
+    if (create_vulkan_hwdevice(&device) < 0) {
+      error = "Could not create a Vulkan device on the selected render node";
+      return false;
+    }
+    auto device_guard = util::fail_guard([&device]() {
+      av_buffer_unref(&device);
+    });
+    AVCodecContext *context {avcodec_alloc_context3(codec)};
+    if (!context) {
+      error = "Could not allocate the Vulkan H.264 codec context";
+      return false;
+    }
+    auto context_guard = util::fail_guard([&context]() {
+      avcodec_free_context(&context);
+    });
+    context->width = 1920;
+    context->height = 1080;
+    context->time_base = AVRational {1, 60};
+    context->framerate = AVRational {60, 1};
+    context->pix_fmt = AV_PIX_FMT_VULKAN;
+    context->bit_rate = 20'000'000;
+    context->gop_size = 60;
+    context->max_b_frames = 0;
+    context->hw_device_ctx = av_buffer_ref(device);
+    if (!context->hw_device_ctx) {
+      error = "Could not retain the selected Vulkan device for H.264";
+      return false;
+    }
+    const int result {avcodec_open2(context, codec, nullptr)};
+    if (result < 0) {
+      std::array<char, AV_ERROR_MAX_STRING_SIZE> message {};
+      av_strerror(result, message.data(), message.size());
+      error = "Vulkan H.264 encoder initialization failed: " + std::string {message.data()};
+      return false;
+    }
     return true;
   }
 

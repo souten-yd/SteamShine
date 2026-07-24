@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <string>
 
 #ifdef __APPLE__
   #include <mach-o/dyld.h>
@@ -25,6 +26,9 @@
 #include "logging.h"
 #include "main.h"
 #include "nvhttp.h"
+#if defined(__linux__)
+  #include "platform/linux/vulkan_encode.h"
+#endif
 #include "process.h"
 #include "system_tray.h"
 #include "upnp.h"
@@ -69,6 +73,17 @@ std::map<std::string_view, std::function<int(const char *name, int argc, char **
   {"version"sv, [](const char *name, int argc, char **argv) {
      return args::version();
    }},
+#if defined(__linux__)
+  {"vulkan-video-probe"sv, [](const char *, int, char **) {
+     std::string error;
+     if (!vk::probe_h264(error)) {
+       BOOST_LOG(error) << "Vulkan Video H.264 preflight failed: " << error;
+       return 1;
+     }
+     BOOST_LOG(info) << "Vulkan Video H.264 preflight passed on the selected GPU";
+     return 0;
+   }},
+#endif
 #ifdef _WIN32
   {"restore-nvprefs-undo"sv, [](const char *name, int argc, char **argv) {
      return args::restore_nvprefs_undo();

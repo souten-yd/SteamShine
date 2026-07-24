@@ -20,6 +20,7 @@ on:
       - "src/nvhttp.h"
       - "src/stream.cpp"
       - "src/stream.h"
+      - "src/main.cpp"
       - "src/video.cpp"
       - "src/video.h"
       - "src/process.cpp"
@@ -45,6 +46,7 @@ on:
       - "src/nvhttp.h"
       - "src/stream.cpp"
       - "src/stream.h"
+      - "src/main.cpp"
       - "src/video.cpp"
       - "src/video.h"
       - "src/process.cpp"
@@ -95,10 +97,10 @@ jobs:
       - name: Format and shell checks
         run: |
           clang-format --dry-run --Werror src/steamos_virtual_session.cpp \
-            src/steamos_virtual_session.h src/nvhttp.cpp src/process.cpp src/stream.cpp \
+            src/steamos_virtual_session.h src/main.cpp src/nvhttp.cpp src/process.cpp src/stream.cpp \
             src/video.cpp \
             src/platform/linux/misc.cpp src/platform/linux/wayland.cpp \
-            src/platform/linux/wlgrab.cpp src/platform/linux/vulkan_encode.cpp \
+            src/platform/linux/wlgrab.cpp src/platform/linux/vulkan_encode.cpp src/platform/linux/vulkan_encode.h \
             tests/unit/test_steamos_virtual_session.cpp
           shellcheck steamshine.sh \
             scripts/collect-steamos-runtime-baseline.sh \
@@ -113,6 +115,7 @@ jobs:
           ! grep -nE '[[:blank:]]+$|^(<<<<<<<|=======|>>>>>>>)' \
             src/steamos_virtual_session.cpp \
             src/steamos_virtual_session.h \
+            src/main.cpp \
             src/nvhttp.cpp \
             src/process.cpp \
             src/stream.cpp \
@@ -121,6 +124,7 @@ jobs:
             src/platform/linux/wayland.cpp \
             src/platform/linux/wlgrab.cpp \
             src/platform/linux/vulkan_encode.cpp \
+            src/platform/linux/vulkan_encode.h \
             tests/unit/test_steamos_virtual_session.cpp \
             steamshine.sh \
             scripts/collect-steamos-runtime-baseline.sh \
