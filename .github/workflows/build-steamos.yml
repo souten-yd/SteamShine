@@ -253,7 +253,7 @@ jobs:
           test -x "${smoke_home}/.local/bin/steamshine"
       - uses: actions/upload-artifact@v4
         with:
-          name: steamshine-steamos-x86_64-${{ github.sha }}
+          name: steamshine-steamos-x86_64-${{ github.event.pull_request.head.sha || github.sha }}
           path: dist/
           if-no-files-found: error
 
@@ -271,6 +271,6 @@ jobs:
           jq '[.jobs[] | {name, started_at, completed_at, conclusion, steps: [.steps[] | {name, conclusion, started_at, completed_at, seconds: (if .started_at != null and .completed_at != null then ((.completed_at | fromdateiso8601) - (.started_at | fromdateiso8601)) else null end)}]}]' jobs.json >ci-timings.json
       - uses: actions/upload-artifact@v4
         with:
-          name: steamos-ci-timings-${{ github.sha }}
+          name: steamos-ci-timings-${{ github.event.pull_request.head.sha || github.sha }}
           path: ci-timings.json
           if-no-files-found: error
