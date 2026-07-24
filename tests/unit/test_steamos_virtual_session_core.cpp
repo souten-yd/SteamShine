@@ -2,9 +2,10 @@
  * @file tests/unit/test_steamos_virtual_session_core.cpp
  * @brief Tests for standalone SteamOS virtual-session request helpers.
  */
-#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <src/steamos_virtual_session_core.h>
+#include <string>
+#include <vector>
 
 namespace {
   /**
@@ -29,7 +30,23 @@ namespace {
     std::string error;
     const auto arguments {steamos_virtual_session::gamescope_arguments("--backend headless --nested-width --nested-height --nested-refresh --expose-wayland --scaler --hdr-enabled --prefer-vk-device", 2560, 1440, 120, true, "1002:744c", error)};
     EXPECT_TRUE(error.empty());
-    EXPECT_THAT(arguments, ::testing::ElementsAre("--backend", "headless", "--nested-width", "2560", "--nested-height", "1440", "--nested-refresh", "120", "--expose-wayland", "--scaler", "fit", "--hdr-enabled", "--prefer-vk-device", "1002:744c"));
+    const std::vector<std::string> expected {
+      "--backend",
+      "headless",
+      "--nested-width",
+      "2560",
+      "--nested-height",
+      "1440",
+      "--nested-refresh",
+      "120",
+      "--expose-wayland",
+      "--scaler",
+      "fit",
+      "--hdr-enabled",
+      "--prefer-vk-device",
+      "1002:744c"
+    };
+    EXPECT_EQ(arguments, expected);
   }
 
   /**

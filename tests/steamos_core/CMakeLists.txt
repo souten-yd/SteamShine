@@ -23,5 +23,5 @@ target_compile_options(steamos_virtual_session_core PRIVATE -Wall -Wno-sign-comp
 add_executable(test_steamos_virtual_session_core
     "${CMAKE_CURRENT_LIST_DIR}/../unit/test_steamos_virtual_session_core.cpp"
 )
-target_link_libraries(test_steamos_virtual_session_core PRIVATE steamos_virtual_session_core gmock_main)
+target_link_libraries(test_steamos_virtual_session_core PRIVATE steamos_virtual_session_core gtest_main)
 add_test(NAME SteamOSVirtualSessionCore COMMAND test_steamos_virtual_session_core)
