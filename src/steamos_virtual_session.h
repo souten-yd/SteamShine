@@ -66,6 +66,15 @@ namespace steamos_virtual_session {
   bool capture_backend_required();
 
   /**
+   * @brief Remove stale runtime sessions that are provably owned by SteamShine.
+   *
+   * This is called once during normal service startup. It only considers
+   * directories with a SteamShine ownership marker and processes whose
+   * `XDG_RUNTIME_DIR` exactly matches that directory.
+   */
+  void cleanup_orphan_sessions();
+
+  /**
    * @brief Mark a prepared session as streaming after the RTSP launch is queued.
    */
   void mark_streaming();

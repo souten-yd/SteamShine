@@ -145,6 +145,23 @@ TEST_F(SteamOSVirtualSessionTest, FeatureFlagKeepsWaylandCaptureAvailableBeforeL
   EXPECT_TRUE(steamos_virtual_session::capture_backend_required());
 }
 
+TEST_F(SteamOSVirtualSessionTest, CleansOnlyMarkedOrphanRuntimeDirectories) {
+  const auto base {root / "runtime" / "steamshine"};
+  const auto owned {base / "session-orphan"};
+  const auto foreign {base / "session-foreign"};
+  std::filesystem::create_directories(owned);
+  std::filesystem::create_directories(foreign);
+  {
+    std::ofstream marker {owned / "steamshine-owner"};
+    marker << "steamshine-steamos-virtual-session-v1\n";
+  }
+
+  steamos_virtual_session::cleanup_orphan_sessions();
+
+  EXPECT_FALSE(std::filesystem::exists(owned));
+  EXPECT_TRUE(std::filesystem::exists(foreign));
+}
+
 TEST_F(SteamOSVirtualSessionTest, GamescopeArgumentsUseAdvertisedHeadlessBackendAndFitPolicy) {
   std::string error;
   const auto arguments {steamos_virtual_session::gamescope_arguments("--backend headless --nested-width --nested-height --nested-refresh --expose-wayland --scaler --hdr-enabled --prefer-vk-device", 2560, 1440, 120, true, "1002:744c", error)};

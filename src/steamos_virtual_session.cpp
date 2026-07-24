@@ -15,8 +15,10 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
+#include <exception>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <mutex>
 #include <optional>
 #include <string_view>
@@ -46,6 +48,9 @@ namespace steamos_virtual_session {
 #endif
     } manager;
 
+    constexpr std::string_view owner_marker_name {"steamshine-owner"};
+    constexpr std::string_view owner_marker_contents {"steamshine-steamos-virtual-session-v1\n"};
+
     /**
      * @brief Clamp a requested dimension or FPS to a safe Gamescope range.
      *
@@ -71,6 +76,61 @@ namespace steamos_virtual_session {
     }
 
 #if defined(__linux__)
+    /**
+     * @brief Find processes whose runtime environment exactly matches a session directory.
+     *
+     * @param runtime_directory Marker-owned session directory.
+     * @return Process IDs that inherited the owned virtual-session runtime path.
+     */
+    std::vector<pid_t> processes_using_runtime_directory(const std::filesystem::path &runtime_directory) {
+      std::vector<pid_t> processes;
+      const std::string needle {"XDG_RUNTIME_DIR=" + runtime_directory.string() + '\0'};
+      std::error_code error;
+      for (const auto &entry : std::filesystem::directory_iterator {"/proc", error}) {
+        if (error) {
+          break;
+        }
+        const auto name {entry.path().filename().string()};
+        if (name.empty() || !std::all_of(name.begin(), name.end(), [](unsigned char character) { return std::isdigit(character); })) {
+          continue;
+        }
+        std::ifstream environment {entry.path() / "environ", std::ios::binary};
+        if (!environment) {
+          continue;
+        }
+        const std::string contents {std::istreambuf_iterator<char> {environment}, {}};
+        if (contents.find(needle) == std::string::npos) {
+          continue;
+        }
+        try {
+          processes.emplace_back(static_cast<pid_t>(std::stol(name)));
+        } catch (const std::exception &) {
+        }
+      }
+      return processes;
+    }
+
+    /**
+     * @brief Stop processes proven to use an orphaned owned runtime directory.
+     *
+     * @param runtime_directory Marker-owned runtime directory.
+     * @param timeout Maximum graceful wait before force termination.
+     */
+    void stop_processes_using_runtime_directory(const std::filesystem::path &runtime_directory, const std::chrono::seconds timeout) {
+      auto processes {processes_using_runtime_directory(runtime_directory)};
+      for (const auto process : processes) {
+        ::kill(process, SIGTERM);
+      }
+      const auto deadline {std::chrono::steady_clock::now() + timeout};
+      while (!processes.empty() && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds {50});
+        processes = processes_using_runtime_directory(runtime_directory);
+      }
+      for (const auto process : processes) {
+        ::kill(process, SIGKILL);
+      }
+    }
+
     /**
      * @brief Check whether an owned process group still has a live member.
      *
@@ -511,6 +571,16 @@ namespace steamos_virtual_session {
       return false;
     }
     const auto socket {manager.runtime_directory / "wayland-0"};
+    {
+      std::ofstream marker {manager.runtime_directory / owner_marker_name.data(), std::ios::binary | std::ios::trunc};
+      marker << owner_marker_contents;
+      if (!marker) {
+        std::filesystem::remove_all(manager.runtime_directory, ec);
+        error = "Failed to mark owned virtual-session runtime directory";
+        manager.current = state_e::Failed;
+        return false;
+      }
+    }
     manager.current = state_e::Starting;
     const pid_t child {::fork()};
     if (child == 0) {
@@ -576,6 +646,29 @@ namespace steamos_virtual_session {
 
   bool capture_backend_required() {
     return config::steamos_virtual_display.enabled;
+  }
+
+  void cleanup_orphan_sessions() {
+#if defined(__linux__)
+    if (!config::steamos_virtual_display.enabled || !config::steamos_virtual_display.cleanup_orphan_sessions) {
+      return;
+    }
+    const auto base {runtime_base()};
+    std::error_code error;
+    for (const auto &entry : std::filesystem::directory_iterator {base, error}) {
+      if (error || !entry.is_directory(error) || entry.is_symlink(error) || !entry.path().filename().string().starts_with("session-")) {
+        continue;
+      }
+      std::ifstream marker {entry.path() / owner_marker_name.data(), std::ios::binary};
+      const std::string contents {std::istreambuf_iterator<char> {marker}, {}};
+      if (contents != owner_marker_contents) {
+        continue;
+      }
+      BOOST_LOG(warning) << "Cleaning orphaned SteamOS virtual session runtime: " << entry.path();
+      stop_processes_using_runtime_directory(entry.path(), std::chrono::seconds {config::steamos_virtual_display.shutdown_timeout_seconds});
+      std::filesystem::remove_all(entry.path(), error);
+    }
+#endif
   }
 
   void mark_streaming() {
