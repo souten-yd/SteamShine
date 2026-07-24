@@ -204,6 +204,7 @@ jobs:
             third-party/FFmpeg/Vulkan-Headers
           git -C third-party/lizardbyte-common submodule update --init --depth 1 -- \
             third-party/googletest
+          git -C third-party/moonlight-common-c submodule update --init --recursive --depth 1
       - name: Focused formatting and shell checks
         run: |
           cd "${GITHUB_WORKSPACE}"
