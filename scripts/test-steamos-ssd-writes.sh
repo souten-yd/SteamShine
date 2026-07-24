@@ -23,11 +23,24 @@ read_counters() {
     "$(IFS=,; echo "${pids[*]:-}")" "$(sum_proc_field write_bytes "${pids[@]}")" \
     "$(sum_proc_field cancelled_write_bytes "${pids[@]}")" "$(sum_proc_field syscw "${pids[@]}")" "$(report_size)"
 }
+counter_value() {
+  local key="$1" counters="$2"
+  awk -v key="${key}" '{ for (i = 1; i <= NF; ++i) { split($i, pair, "="); if (pair[1] == key) { print pair[2]; exit } } }' <<<"${counters}"
+}
+counter_delta() {
+  local key="$1" before="$2" after="$3"
+  printf '%s\n' "$(( $(counter_value "${key}" "${after}") - $(counter_value "${key}" "${before}") ))"
+}
 before="$(read_counters)"
 sleep "${seconds}"
 after="$(read_counters)"
 {
   echo "before ${before}"
   echo "after ${after}"
+  printf 'delta write_bytes=%s cancelled_write_bytes=%s syscw=%s report_bytes=%s\n' \
+    "$(counter_delta write_bytes "${before}" "${after}")" \
+    "$(counter_delta cancelled_write_bytes "${before}" "${after}")" \
+    "$(counter_delta syscw "${before}" "${after}")" \
+    "$(counter_delta report_bytes "${before}" "${after}")"
   echo 'Expected during streaming: no high-frequency writes attributable to management or telemetry.'
 } | tee "${report}"

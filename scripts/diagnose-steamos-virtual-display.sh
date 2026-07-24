@@ -18,7 +18,11 @@ vulkaninfo --summary 2>&1 || true
 # never from a streaming thread or normal service startup.
 if command -v rocminfo >/dev/null 2>&1; then rocminfo 2>&1 || true; else echo 'rocminfo=not-installed'; fi
 if command -v rocm-smi >/dev/null 2>&1; then rocm-smi 2>&1 || true; else echo 'rocm-smi=not-installed'; fi
-pw-cli info 0 2>&1 || true; pw-cli list-objects Node 2>&1 || true
+if command -v pw-dump >/dev/null 2>&1; then
+  pw-dump 2>&1 || echo 'PIPEWIRE_PROBE_FAILED'
+else
+  echo 'PIPEWIRE_PROBE_SKIPPED: pw-dump unavailable'
+fi
 find "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}" -maxdepth 1 -type s -name 'wayland-*' -print 2>/dev/null || true
 ps -eo pid,pgid,ppid,cmd | grep -E '[s]teamshine|[g]amescope' || true
 find "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/steamshine" -maxdepth 3 -print 2>/dev/null || true

@@ -684,6 +684,7 @@ namespace steamos_virtual_session {
     manager.stream_requested = true;
     if (manager.current == state_e::Ready) {
       manager.current = state_e::Streaming;
+      BOOST_LOG(info) << "SteamOS virtual display streaming started";
     }
   }
 
@@ -739,6 +740,7 @@ namespace steamos_virtual_session {
 #if defined(__linux__)
     if (manager.process_group > 0) {
       manager.current = state_e::Stopping;
+      BOOST_LOG(info) << "SteamOS virtual display stopping owned Gamescope session";
       stop_owned_process_group(manager.process_group, std::chrono::seconds {config::steamos_virtual_display.shutdown_timeout_seconds});
       manager.process_group = -1;
     }

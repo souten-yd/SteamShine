@@ -10,19 +10,79 @@ report="${report_dir}/virtual-display.log"
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 steamshine_binary="${STEAMSHINE_BINARY:-${HOME}/.local/bin/steamshine}"
 steamshine_config="${STEAMSHINE_CONFIG:-${HOME}/.config/steamshine/sunshine.conf}"
+test_started="$(date --iso-8601=seconds)"
+completed_attempts=0
+
+write_summary() {
+  local result="$1" capture_event=false streaming_event=false cleanup_event=false
+  grep -Rqs 'SteamOS virtual display capture attached' "${report_dir}"/service-*.log 2>/dev/null && capture_event=true
+  grep -Rqs 'SteamOS virtual display streaming started' "${report_dir}"/service-*.log 2>/dev/null && streaming_event=true
+  grep -Rqs 'SteamOS virtual display stopping owned Gamescope session' "${report_dir}"/service-*.log 2>/dev/null && cleanup_event=true
+  cat >"${report_dir}/hardware-report.json" <<EOF
+{
+  "started_at": "${test_started}",
+  "completed_at": "$(date --iso-8601=seconds)",
+  "result": "${result}",
+  "connect_disconnect_cycles": ${completed_attempts},
+  "capture_attached_evidence": ${capture_event},
+  "streaming_started_evidence": ${streaming_event},
+  "cleanup_started_evidence": ${cleanup_event},
+  "encoded_packet_count": null,
+  "idr_frame_count": null,
+  "note": "Packet and IDR counters are not yet exported by the streaming backend; null is intentional."
+}
+EOF
+}
+trap 'result=$?; write_summary "$( ((result == 0)) && printf pass || printf fail )"' EXIT
+
+owned_session_directories() {
+  local directory marker
+  for directory in "${runtime_dir}"/session-*; do
+    [[ -d "${directory}" && ! -L "${directory}" ]] || continue
+    marker="${directory}/steamshine-owner"
+    [[ -f "${marker}" && ! -L "${marker}" ]] || continue
+    [[ "$(<"${marker}")" == 'steamshine-steamos-virtual-session-v1' ]] || continue
+    printf '%s\n' "${directory}"
+  done
+}
 
 owned_gamescope_processes() {
-  local environment pid value
-  while IFS= read -r pid; do
-    [[ -r "/proc/${pid}/environ" ]] || continue
+  local environment pid value proc_root
+  proc_root="${PROC_ROOT:-/proc}"
+  for pid in "${proc_root}"/[0-9]*; do
+    pid="${pid##*/}"
+    [[ -r "${proc_root}/${pid}/environ" ]] || continue
     while IFS= read -r -d '' environment; do
       value="${environment#XDG_RUNTIME_DIR=}"
       if [[ "${environment}" == XDG_RUNTIME_DIR=* && "${value}" == "${runtime_dir}"/session-* ]]; then
         printf '%s\n' "${pid}"
         break
       fi
-    done <"/proc/${pid}/environ"
-  done < <(pgrep -x gamescope || true)
+    done <"${proc_root}/${pid}/environ"
+  done
+}
+
+owned_gamescope_report() {
+  local pid pgid command
+  while IFS= read -r pid; do
+    pgid="$(ps -o pgid= -p "${pid}" 2>/dev/null | tr -d ' ' || true)"
+    command="$(tr '\0' ' ' <"${PROC_ROOT:-/proc}/${pid}/cmdline" 2>/dev/null || true)"
+    printf 'owned_gamescope_pid=%s pgid=%s command=%s\n' "${pid}" "${pgid:-unknown}" "${command:-unknown}"
+  done < <(owned_gamescope_processes)
+}
+
+collect_service_evidence() {
+  local label="$1" journal="${report_dir}/service-${label}.log"
+  if ! command -v journalctl >/dev/null 2>&1; then
+    echo 'SERVICE_EVIDENCE_SKIPPED: journalctl unavailable'
+    return 0
+  fi
+  journalctl --user --unit=steamshine --since "${test_started}" --no-pager >"${journal}" 2>&1 || {
+    echo 'DIAGNOSTIC_WARN: unable to collect SteamShine user-service journal'
+    return 0
+  }
+  printf 'service_journal=%s\n' "${journal}"
+  grep -E 'SteamOS virtual display (capture attached|streaming started|stopping owned Gamescope session)' "${journal}" || true
 }
 
 collect() {
@@ -38,9 +98,17 @@ collect() {
     if command -v rocminfo >/dev/null 2>&1; then rocminfo 2>&1 || true; fi
     if command -v rocm-smi >/dev/null 2>&1; then rocm-smi 2>&1 || true; fi
     if command -v amd-smi >/dev/null 2>&1; then amd-smi metric -g 2>&1 || true; fi
-    pw-cli list-objects Node 2>&1 || true; find "${XDG_RUNTIME_DIR}" -maxdepth 1 -type s -name 'wayland-*' -print 2>/dev/null || true
+    if command -v pw-dump >/dev/null 2>&1; then
+      pw-dump >"${report_dir}/pipewire-$1.json" 2>"${report_dir}/pipewire-$1.stderr" || echo 'DIAGNOSTIC_WARN: pw-dump failed'
+      printf 'pipewire_dump=%s\n' "${report_dir}/pipewire-$1.json"
+    else
+      echo 'PIPEWIRE_PROBE_SKIPPED: pw-dump unavailable'
+    fi
+    find "${XDG_RUNTIME_DIR}" -maxdepth 1 -type s -name 'wayland-*' -print 2>/dev/null || true
     pgrep -a steamshine || true; pgrep -a gamescope || true; ps -eo pid,pgid,ppid,cmd | grep -E '[s]teamshine|[g]amescope' || true
-    printf 'owned_gamescope_pids='; owned_gamescope_processes | paste -sd, - || true
+    printf 'owned_session_directories='; owned_session_directories | paste -sd, - || true
+    owned_gamescope_report
+    collect_service_evidence "$1"
     find "${runtime_dir}" -maxdepth 3 -print 2>/dev/null || true
   } | tee -a "${report}"
 }
@@ -72,7 +140,8 @@ for attempt in $(seq 1 10); do
   read -r
   collect "disconnected-${attempt}"
   if owned_gamescope_processes | grep -q .; then echo "FAIL: owned Gamescope remains" | tee -a "${report}"; exit 1; fi
-  if find "${runtime_dir}" -mindepth 1 -name 'session-*' -print -quit | grep -q .; then echo "FAIL: owned runtime session remains" | tee -a "${report}"; exit 1; fi
+  if owned_session_directories | grep -q .; then echo "FAIL: owned runtime session remains" | tee -a "${report}"; exit 1; fi
+  completed_attempts="${attempt}"
 done
 for capability in video audio keyboard mouse gamepad; do
   read -r -p "Did ${capability} work during the acceptance cycles? [y/N] " answer
