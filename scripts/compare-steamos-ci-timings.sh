@@ -25,7 +25,9 @@ def load(paths):
     values = {}
     for path in paths:
         with open(path, encoding='utf-8') as report:
-            for job in json.load(report).get('jobs', []):
+            document = json.load(report)
+            jobs = document if isinstance(document, list) else document.get('jobs', [])
+            for job in jobs:
                 if not job.get('started_at') or not job.get('completed_at'):
                     continue
                 for step in job.get('steps', []):

@@ -18,6 +18,17 @@ grep -Fq '"tasks": 2' "${test_root}/ninja-timings.json"
 grep -Fq '"milliseconds": 300' "${test_root}/ninja-timings.json"
 grep -Fq '"milliseconds": 50' "${test_root}/ninja-timings.json"
 
+# Workflow timing uploads are JSON arrays. Verify the comparison command uses
+# that actual artifact shape rather than a hypothetical wrapper object.
+cat >"${test_root}/timing-baseline.json" <<'EOF'
+[{"name":"full-validation","started_at":"2026-01-01T00:00:00Z","completed_at":"2026-01-01T00:00:02Z","steps":[{"name":"Build runtime binary","seconds":10}]}]
+EOF
+cat >"${test_root}/timing-candidate.json" <<'EOF'
+[{"name":"full-validation","started_at":"2026-01-02T00:00:00Z","completed_at":"2026-01-02T00:00:03Z","steps":[{"name":"Build runtime binary","seconds":8}]}]
+EOF
+bash "${root_dir}/scripts/compare-steamos-ci-timings.sh" "${test_root}/timing-baseline.json" -- "${test_root}/timing-candidate.json" >"${test_root}/timing-comparison.tsv"
+grep -Fq $'Build runtime binary\t10.00\t8.00\t-2.00\t-20.0%' "${test_root}/timing-comparison.tsv"
+
 # Only numeric GLIBCXX symbol versions are ABI candidates.  libstdc++ also
 # exposes GLIBCXX_TUNABLES, which must never be selected as a version ceiling.
 runtime_baseline="$("${root_dir}/scripts/collect-steamos-runtime-baseline.sh")"
