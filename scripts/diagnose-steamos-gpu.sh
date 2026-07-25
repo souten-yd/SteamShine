@@ -46,15 +46,16 @@ for render_node in /dev/dri/renderD*; do
   open_errno=0
   test -r "${render_node}" && readable=true
   test -w "${render_node}" && writable=true
-  if ! exec {render_fd}<>"${render_node}"; then
-    open_errno=$?
-  else
+  if exec {render_fd}<>"${render_node}"; then
     exec {render_fd}>&-
+  else
+    open_errno=$?
   fi
-  printf 'render_node=%s\ncard_node=%s\npci_bdf=%s\ndriver=%s\nvendor=%s\ndevice_id=%s\nvram_bytes=%s\nreadable=%s\nwritable=%s\nopen_errno=%s\n' \
+  open_error="$(python3 -c 'import os, sys; print(os.strerror(int(sys.argv[1])))' "${open_errno}" 2>/dev/null || true)"
+  printf 'render_node=%s\ncard_node=%s\npci_bdf=%s\ndriver=%s\nvendor=%s\ndevice_id=%s\nvram_bytes=%s\nreadable=%s\nwritable=%s\nopen_errno=%s\nopen_error=%s\n' \
     "${render_node}" "${card_node}" "${device_realpath##*/}" "${driver}" \
     "$(read_attribute "${device_path}/vendor")" "$(read_attribute "${device_path}/device")" \
-    "$(read_attribute "${device_path}/mem_info_vram_total")" "${readable}" "${writable}" "${open_errno}"
+    "$(read_attribute "${device_path}/mem_info_vram_total")" "${readable}" "${writable}" "${open_errno}" "${open_error}"
   udevadm info --query=property --name="${render_node}" 2>/dev/null |
     grep -E '^(DEVNAME|DEVPATH|ID_VENDOR|ID_MODEL|PCI_ID|ID_PATH|DRIVER|MAJOR|MINOR)=' || true
   printf '\n'
@@ -76,7 +77,7 @@ systemd-run --user --wait --pipe /bin/bash -lc '
     readable=false; writable=false; open_errno=0
     test -r "${node}" && readable=true
     test -w "${node}" && writable=true
-    if ! exec {fd}<>"${node}"; then open_errno=$?; else exec {fd}>&-; fi
+    if exec {fd}<>"${node}"; then exec {fd}>&-; else open_errno=$?; fi
     printf "%s readable=%s writable=%s open_errno=%s\\n" "${node}" "${readable}" "${writable}" "${open_errno}"
   done
 ' || true
