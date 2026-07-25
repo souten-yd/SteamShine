@@ -23,6 +23,20 @@ The existing Wayland DMA-BUF backend now opens the owned socket by file descript
 
 The dedicated PipeWire-node provider has not been implemented; the current virtual path uses the existing Wayland DMA-BUF capture backend, which is the low-copy display source exposed by Gamescope. PipeWire node ownership/disappearance tests and monitorless Moonlight acceptance remain hardware-gated. GitHub Actions run 30115053738 exercised focused format/ShellCheck, configure, build, targeted GTest (including capture-loss cleanup and Gamescope PID recording), installer smoke, runtime linkage, ABI ceiling, packaging, checksum, and Artifact upload for `steamshine-steamos-x86_64-4e902e0fabbdd88928d2d07ac301a0fd1a2cce9a`. On the SteamOS 3.8.16 RX 9070 XT host, the final Artifact installed in user space, initialized its packaged assets, started its user service, and passed the Vulkan H.264 encoder-open probe. A direct headless Gamescope probe also confirmed that this Gamescope version owns `gamescope-0`, so SteamShine clears inherited desktop display variables and waits for that private socket. It did not yet stream a live Moonlight frame. Use `./steamshine.sh hardware-test --interactive` on the target system.
 
+### Force-mode hardware harness
+
+`scripts/test-steamos-force-hardware.sh` is an explicit, temporary test
+harness. It requires `STEAMSHINE_FORCE_HARDWARE_TEST=1`, copies rather than
+modifies the configured Sunshine file, appends force-mode settings only to that
+copy, and starts the binary with the copy without changing the installed user
+service unit. The EXIT/INT/TERM trap terminates the temporary process, removes
+only the `mktemp`-created runtime directory, and restores the original user
+service when it was active before the test. Reports are written beneath
+`~/.local/state/steamshine/force-mode-report` by default and redact common
+credential keys. The operator must record actual Moonlight video, audio, and
+input outcomes separately; pressing Enter is intentionally not treated as
+streaming acceptance.
+
 ## Configuration
 
 The added keys are `steamos_virtual_display_enabled`, `steamos_virtual_display_mode`, `steamos_gamescope_path`, `steamos_runtime_directory`, GPU preference keys, startup/shutdown timeout keys, default display values, and `steamos_cleanup_orphan_sessions`. A blank GPU preference selects the AMD render node with the largest dedicated VRAM (requiring at least 1 GiB) and refuses the usual UMA iGPU path. PCI BDF, card node, and render-node selectors are resolved through sysfs. Because Gamescope advertises a vendor/device selector rather than a PCI-BDF selector, SteamShine rejects a launch if two AMD render nodes share the requested identifier. The active virtual session feeds its render node into existing VA-API and Vulkan Video device resolution; capture and encoder overrides must resolve to the same node. The SteamShine dashboard exposes the current policy, lifecycle state, private socket, Gamescope PID, render node, and capture/encode counters without exposing credentials or session tokens.
