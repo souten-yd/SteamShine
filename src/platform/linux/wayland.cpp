@@ -98,6 +98,10 @@ namespace wl {
       BOOST_LOG(info) << "[wayland] Connected to owned SteamOS virtual display"sv;
       return 0;
     }
+    if (steamos_virtual_session::capture_socket_required()) {
+      BOOST_LOG(error) << "[wayland] Owned SteamOS virtual display socket is unavailable; refusing desktop Wayland fallback"sv;
+      return -1;
+    }
     std::string env_display_name;
     if (!display_name) {
       if (lizardbyte::common::get_env("WAYLAND_DISPLAY", env_display_name)) {

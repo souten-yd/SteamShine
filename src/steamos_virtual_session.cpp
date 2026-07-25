@@ -792,6 +792,12 @@ namespace steamos_virtual_session {
     return true;
   }
 
+  bool capture_socket_required() {
+    std::scoped_lock lock {manager.mutex};
+    return !manager.runtime_directory.empty() &&
+           (manager.current == state_e::WaitingForCapture || manager.current == state_e::Ready || manager.current == state_e::Streaming || manager.current == state_e::Failed);
+  }
+
   bool encoder_render_node(std::string &render_node) {
     std::scoped_lock lock {manager.mutex};
     if (manager.render_node.empty() || (manager.current != state_e::WaitingForCapture && manager.current != state_e::Ready && manager.current != state_e::Streaming)) {

@@ -141,6 +141,17 @@ namespace steamos_virtual_session {
   bool capture_socket(std::string &socket_path);
 
   /**
+   * @brief Report whether capture must use the owned Wayland socket.
+   *
+   * A prepared virtual session must fail closed when its private socket is
+   * unavailable.  This prevents a lost or invalid Gamescope socket from
+   * silently reconnecting capture to a desktop Wayland display.
+   *
+   * @return True when desktop-Wayland capture fallback is forbidden.
+   */
+  bool capture_socket_required();
+
+  /**
    * @brief Return the active session's AMD render node for capture and encoding.
    *
    * @param render_node Receives the selected `/dev/dri/renderD*` path.

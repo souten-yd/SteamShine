@@ -271,6 +271,10 @@ TEST_F(SteamOSVirtualSessionTest, FakeGamescopeReadinessAndCleanup) {
   std::string socket_path;
   EXPECT_TRUE(steamos_virtual_session::capture_socket(socket_path));
   EXPECT_TRUE(std::filesystem::is_socket(socket_path));
+  EXPECT_TRUE(steamos_virtual_session::capture_socket_required());
+  std::filesystem::remove(socket_path);
+  EXPECT_FALSE(steamos_virtual_session::capture_socket(socket_path));
+  EXPECT_TRUE(steamos_virtual_session::capture_socket_required());
   steamos_virtual_session::mark_capture_ready();
   EXPECT_EQ(steamos_virtual_session::state(), steamos_virtual_session::state_e::Ready);
   steamos_virtual_session::stop();
