@@ -380,6 +380,19 @@ namespace gamescope_pipewire {
      * @brief Keep virtual-display dimensions rather than querying desktop Wayland outputs.
      */
     void verify_and_update_display_parameters() override {}
+
+    /**
+     * @brief Fail the owned virtual session when its verified PipeWire node disappears.
+     *
+     * @param out_status Receives the terminal capture status.
+     * @return True because the generic PipeWire reconnect path must not select a desktop source.
+     */
+    bool check_stream_dead(platf::capture_e &out_status) override {
+      BOOST_LOG(error) << "PIPEWIRE_NODE_DISAPPEARED source=gamescope_pipewire";
+      steamos_virtual_session::mark_capture_lost();
+      out_status = platf::capture_e::error;
+      return true;
+    }
   };
 }  // namespace gamescope_pipewire
 
