@@ -669,6 +669,53 @@ namespace steamos_virtual_session {
       .required;
   }
 
+  std::string_view to_string(const state_e state) {
+    switch (state) {
+      case state_e::Disabled:
+        return "Disabled";
+      case state_e::Idle:
+        return "Idle";
+      case state_e::Starting:
+        return "Starting";
+      case state_e::WaitingForDisplay:
+        return "WaitingForDisplay";
+      case state_e::WaitingForCapture:
+        return "WaitingForCapture";
+      case state_e::Ready:
+        return "Ready";
+      case state_e::Streaming:
+        return "Streaming";
+      case state_e::Stopping:
+        return "Stopping";
+      case state_e::Failed:
+        return "Failed";
+      case state_e::Recovering:
+        return "Recovering";
+    }
+    return "Disabled";
+  }
+
+  status_snapshot_t status_snapshot() {
+    std::scoped_lock lock {manager.mutex};
+    status_snapshot_t snapshot;
+    snapshot.state = manager.current;
+    snapshot.runtime_directory = manager.runtime_directory.string();
+    snapshot.pci_bdf = manager.pci_bdf;
+    snapshot.render_node = manager.render_node;
+    const auto socket {manager.runtime_directory / "gamescope-0"};
+    if (!manager.runtime_directory.empty() && owned_wayland_socket_exists(socket)) {
+      snapshot.socket_path = socket.string();
+    }
+#if defined(__linux__)
+    snapshot.gamescope_pid = manager.process_group;
+#endif
+    snapshot.captured_frames = manager.captured_frames.load(std::memory_order_relaxed);
+    snapshot.encoded_packets = manager.encoded_packets.load(std::memory_order_relaxed);
+    snapshot.encoded_bytes = manager.encoded_bytes.load(std::memory_order_relaxed);
+    snapshot.idr_packets = manager.idr_packets.load(std::memory_order_relaxed);
+    return snapshot;
+  }
+
   void cleanup_orphan_sessions() {
 #if defined(__linux__)
     if (!config::steamos_virtual_display.enabled || !config::steamos_virtual_display.cleanup_orphan_sessions) {

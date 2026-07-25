@@ -7,7 +7,9 @@
 #include "steamos_virtual_session_core.h"
 
 #include <cstddef>
+#include <cstdint>
 #include <string>
+#include <string_view>
 
 namespace rtsp_stream {
   struct launch_session_t;
@@ -29,6 +31,37 @@ namespace steamos_virtual_session {
     Failed,  ///< Startup or readiness failed.
     Recovering,  ///< Cleanup is returning the manager to Idle.
   };
+
+  /**
+   * @brief Read-only diagnostics for the active owned virtual session.
+   */
+  struct status_snapshot_t {
+    state_e state {state_e::Disabled};  ///< Current lifecycle state.
+    std::string runtime_directory;  ///< Owned runtime directory, when active.
+    std::string socket_path;  ///< Private Gamescope Wayland socket, when ready.
+    std::string pci_bdf;  ///< Selected AMD PCI BDF, when available.
+    std::string render_node;  ///< Selected AMD render node, when available.
+    int gamescope_pid {-1};  ///< Owned Gamescope leader PID, when available.
+    uint64_t captured_frames {0};  ///< Frames acquired from the owned DMA-BUF path.
+    uint64_t encoded_packets {0};  ///< Encoded packets emitted by the session.
+    uint64_t encoded_bytes {0};  ///< Encoded payload bytes emitted by the session.
+    uint64_t idr_packets {0};  ///< IDR packets emitted by the session.
+  };
+
+  /**
+   * @brief Return a stable state label suitable for diagnostics and Web UI output.
+   *
+   * @param state Lifecycle state to serialize.
+   * @return Canonical state label.
+   */
+  std::string_view to_string(state_e state);
+
+  /**
+   * @brief Capture a thread-safe view of the current owned-session diagnostics.
+   *
+   * @return Snapshot that does not expose credentials or session cookies.
+   */
+  status_snapshot_t status_snapshot();
 
   /**
    * @brief Start an owned headless Gamescope session for a GameStream launch.

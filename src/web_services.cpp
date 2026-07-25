@@ -217,6 +217,7 @@ namespace web {
   nlohmann::json StatusSnapshotService::snapshot() const {
     std::string render_node;
     const bool render_node_ready = steamos_virtual_session::encoder_render_node(render_node);
+    const auto virtual_session {steamos_virtual_session::status_snapshot()};
     return {
       {"active_streams", rtsp_stream::session_count()},
       {"application_running", proc::proc.running() > 0},
@@ -228,6 +229,15 @@ namespace web {
       {"encoder_gpu", config::steamos_virtual_display.encoder_gpu},
       {"render_node", render_node_ready ? render_node : ""},
       {"encoder", config::video.encoder},
+      {"virtual_display_state", std::string {steamos_virtual_session::to_string(virtual_session.state)}},
+      {"virtual_display_socket", virtual_session.socket_path},
+      {"virtual_display_runtime", virtual_session.runtime_directory},
+      {"gamescope_pid", virtual_session.gamescope_pid},
+      {"pci_bdf", virtual_session.pci_bdf},
+      {"captured_frames", virtual_session.captured_frames},
+      {"encoded_packets", virtual_session.encoded_packets},
+      {"encoded_bytes", virtual_session.encoded_bytes},
+      {"idr_packets", virtual_session.idr_packets},
     };
   }
 
