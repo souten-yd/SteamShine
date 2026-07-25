@@ -43,6 +43,9 @@ namespace steamos_virtual_session {
       std::filesystem::path runtime_directory;  ///< Runtime path uniquely owned by this process.
       std::string pipewire_runtime;  ///< Host PipeWire runtime retained for owned children.
       std::string pipewire_remote;  ///< Host PipeWire remote retained for owned children.
+      std::optional<uint32_t> pipewire_node_id;  ///< Verified current-core Gamescope PipeWire node ID.
+      std::optional<uint64_t> pipewire_object_serial;  ///< Verified stable Gamescope PipeWire object serial.
+      int pipewire_producer_pid {-1};  ///< Verified Gamescope process producing the PipeWire node.
       std::string pulse_runtime;  ///< Host PulseAudio compatibility runtime retained for applications.
       int width {0};  ///< Requested virtual-display width in pixels.
       int height {0};  ///< Requested virtual-display height in pixels.
@@ -219,6 +222,9 @@ namespace steamos_virtual_session {
       manager.runtime_directory.clear();
       manager.pipewire_runtime.clear();
       manager.pipewire_remote.clear();
+      manager.pipewire_node_id.reset();
+      manager.pipewire_object_serial.reset();
+      manager.pipewire_producer_pid = -1;
       manager.pulse_runtime.clear();
       manager.width = 0;
       manager.height = 0;
@@ -718,6 +724,9 @@ namespace steamos_virtual_session {
     manager.render_node = gpu->render_node;
     manager.pipewire_runtime = pipewire_runtime.string();
     manager.pipewire_remote = pipewire_remote;
+    manager.pipewire_node_id.reset();
+    manager.pipewire_object_serial.reset();
+    manager.pipewire_producer_pid = -1;
     manager.pulse_runtime = (runtime_root / "pulse").string();
     manager.width = request.width;
     manager.height = request.height;
@@ -889,6 +898,9 @@ namespace steamos_virtual_session {
     snapshot.render_node = manager.render_node;
     snapshot.pipewire_runtime = manager.pipewire_runtime;
     snapshot.pipewire_remote = manager.pipewire_remote;
+    snapshot.pipewire_node_id = manager.pipewire_node_id;
+    snapshot.pipewire_object_serial = manager.pipewire_object_serial;
+    snapshot.pipewire_producer_pid = manager.pipewire_producer_pid;
     snapshot.width = manager.width;
     snapshot.height = manager.height;
     snapshot.fps = manager.fps;
@@ -1016,6 +1028,23 @@ namespace steamos_virtual_session {
     (void) remote_name;
     (void) gamescope_pid;
     return false;
+#endif
+  }
+
+  void mark_gamescope_pipewire_node(const uint32_t node_id, const uint64_t object_serial, const int producer_pid) {
+    std::scoped_lock lock {manager.mutex};
+#if defined(__linux__)
+    if (node_id == 0 || object_serial == 0 || producer_pid <= 0 || producer_pid != manager.process_group ||
+        (manager.current != state_e::WaitingForCapture && manager.current != state_e::Ready && manager.current != state_e::Streaming)) {
+      return;
+    }
+    manager.pipewire_node_id = node_id;
+    manager.pipewire_object_serial = object_serial;
+    manager.pipewire_producer_pid = producer_pid;
+#else
+    (void) node_id;
+    (void) object_serial;
+    (void) producer_pid;
 #endif
   }
 

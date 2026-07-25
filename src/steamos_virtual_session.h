@@ -8,6 +8,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -43,6 +44,9 @@ namespace steamos_virtual_session {
     std::string render_node;  ///< Selected AMD render node, when available.
     std::string pipewire_runtime;  ///< Host PipeWire runtime directory, when available.
     std::string pipewire_remote;  ///< Host PipeWire remote name, when available.
+    std::optional<uint32_t> pipewire_node_id;  ///< Verified volatile PipeWire node ID, when attached.
+    std::optional<uint64_t> pipewire_object_serial;  ///< Verified stable PipeWire object serial, when attached.
+    int pipewire_producer_pid {-1};  ///< Verified Gamescope producer PID, when attached.
     int width {0};  ///< Requested virtual-display width in pixels.
     int height {0};  ///< Requested virtual-display height in pixels.
     int fps {0};  ///< Requested virtual-display refresh rate.
@@ -176,6 +180,15 @@ namespace steamos_virtual_session {
    * @return True only while an owned session can use its host PipeWire endpoint.
    */
   bool gamescope_pipewire_endpoint(std::string &runtime_directory, std::string &remote_name, int &gamescope_pid);
+
+  /**
+   * @brief Record the identity of the verified owned Gamescope PipeWire node.
+   *
+   * @param node_id Volatile node ID on the current PipeWire core.
+   * @param object_serial Stable PipeWire object serial for the node.
+   * @param producer_pid Verified Gamescope producer process ID.
+   */
+  void mark_gamescope_pipewire_node(uint32_t node_id, uint64_t object_serial, int producer_pid);
 
   /**
    * @brief Check whether SteamShine currently owns a virtual Gamescope session.

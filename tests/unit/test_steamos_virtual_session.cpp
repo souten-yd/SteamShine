@@ -297,6 +297,11 @@ TEST_F(SteamOSVirtualSessionTest, SeparatesPrivateWaylandAndHostPipeWireRuntimes
   EXPECT_EQ(snapshot.width, 1920);
   EXPECT_EQ(snapshot.height, 1080);
   EXPECT_EQ(snapshot.fps, 60);
+  steamos_virtual_session::mark_gamescope_pipewire_node(123, 456, gamescope_pid);
+  const auto node_snapshot {steamos_virtual_session::status_snapshot()};
+  EXPECT_EQ(node_snapshot.pipewire_node_id, 123U);
+  EXPECT_EQ(node_snapshot.pipewire_object_serial, 456U);
+  EXPECT_EQ(node_snapshot.pipewire_producer_pid, gamescope_pid);
 }
 
 /**

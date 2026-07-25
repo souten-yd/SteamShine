@@ -372,6 +372,7 @@ namespace gamescope_pipewire {
       out_pipewire_fd = stream_connection->release();
       out_pipewire_node = node.id;
       out_pipewire_objectserial = node.object_serial;
+      steamos_virtual_session::mark_gamescope_pipewire_node(node.id, node.object_serial, node.producer_pid);
       BOOST_LOG(info) << "CAPTURE_SOURCE source=gamescope_pipewire PIPEWIRE_NODE id=" << node.id << " PIPEWIRE_SERIAL serial=" << node.object_serial << " PRODUCER_PID=" << node.producer_pid << " DRM_RENDER_NODE=" << session.render_node;
       return 0;
     }
