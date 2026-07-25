@@ -231,24 +231,56 @@ namespace steamos_virtual_session {
     };
 
     /**
+     * @brief Record DRM render-node access observations for a selector diagnostic.
+     */
+    struct render_node_access_t {
+      bool exists {false};  ///< Whether the node was visible to the service process.
+      bool character_device {false};  ///< Whether the node has DRM character-device type.
+      bool readable {false};  ///< Whether the effective user may read the node.
+      bool writable {false};  ///< Whether the effective user may write the node.
+      bool open_ok {false};  ///< Whether opening the node with read/write access succeeded.
+      int open_errno {0};  ///< Error reported by the failed open call, or zero on success.
+    };
+
+    /**
+     * @brief Inspect a DRM node using the same process credentials as the service.
+     *
+     * @param render_node Candidate DRM node path.
+     * @return Existence, type, permission, and open observations.
+     */
+    render_node_access_t inspect_render_node(const std::filesystem::path &render_node) {
+      render_node_access_t result;
+#if defined(__linux__)
+      std::error_code error;
+      const auto node_status {std::filesystem::status(render_node, error)};
+      result.exists = !error && std::filesystem::exists(node_status);
+      result.character_device = !error && std::filesystem::is_character_file(node_status);
+      result.readable = ::access(render_node.c_str(), R_OK) == 0;
+      result.writable = ::access(render_node.c_str(), W_OK) == 0;
+      if (!result.character_device) {
+        return result;
+      }
+      const int descriptor {::open(render_node.c_str(), O_RDWR | O_CLOEXEC)};
+      if (descriptor < 0) {
+        result.open_errno = errno;
+        return result;
+      }
+      result.open_ok = true;
+      ::close(descriptor);
+#else
+      (void) render_node;
+#endif
+      return result;
+    }
+
+    /**
      * @brief Verify that a DRM render node is a usable character device.
      *
      * @param render_node Candidate render node.
      * @return True only when the current service user can open the node read/write.
      */
     bool accessible_render_node(const std::filesystem::path &render_node) {
-#if defined(__linux__)
-      std::error_code error;
-      if (!std::filesystem::is_character_file(std::filesystem::status(render_node, error)) || error) {
-        return false;
-      }
-      const int descriptor {::open(render_node.c_str(), O_RDWR | O_CLOEXEC)};
-      if (descriptor < 0) {
-        return false;
-      }
-      ::close(descriptor);
-#endif
-      return true;
+      return inspect_render_node(render_node).open_ok;
     }
 
     /**
@@ -261,7 +293,9 @@ namespace steamos_virtual_session {
       const auto sys_device {std::filesystem::path {"/sys/class/drm"} / render_node.filename() / "device"};
       const auto vendor {read_attribute(sys_device / "vendor")};
       const auto device {read_attribute(sys_device / "device")};
-      if (vendor != "0x1002" || device.size() != 6 || !accessible_render_node(render_node)) {
+      std::error_code driver_error;
+      const auto driver {std::filesystem::canonical(sys_device / "driver", driver_error).filename().string()};
+      if (vendor != "0x1002" || device.size() != 6 || driver_error || driver != "amdgpu" || !accessible_render_node(render_node)) {
         return std::nullopt;
       }
       gpu_candidate_t candidate;
@@ -355,9 +389,21 @@ namespace steamos_virtual_session {
             }
           }
         }
+        const auto access {inspect_render_node(explicit_node)};
+        const auto sys_device {std::filesystem::path {"/sys/class/drm"} / explicit_node.filename() / "device"};
+        std::error_code driver_error;
+        const auto driver {std::filesystem::canonical(sys_device / "driver", driver_error).filename().string()};
         BOOST_LOG(warning) << "GPU_SELECTOR configured_value=" << selector << " normalized_input=" << explicit_node
-                           << " exists=" << std::filesystem::exists(explicit_node)
-                           << " accessible=" << accessible_render_node(explicit_node)
+                           << " resolved_render_node=" << explicit_node << " resolved_card_node="
+                           << (explicit_node.filename().string().rfind("card", 0) == 0 ? explicit_node.string() : "")
+                           << " resolved_pci_bdf=" << std::filesystem::canonical(sys_device, driver_error).filename().string()
+                           << " driver=" << (driver_error ? "unresolved" : driver)
+                           << " vendor_id=" << read_attribute(sys_device / "vendor")
+                           << " device_id=" << read_attribute(sys_device / "device")
+                           << " exists=" << access.exists << " is_char_device=" << access.character_device
+                           << " readable=" << access.readable << " writable=" << access.writable
+                           << " open_ok=" << access.open_ok << " open_errno=" << access.open_errno
+                           << " current_uid=" << ::getuid()
                            << " failure_reason=not_accessible_amd_render_node";
         error = "Configured SteamOS game GPU is not an accessible AMD DRM render node";
         return std::nullopt;

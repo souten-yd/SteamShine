@@ -247,6 +247,18 @@ TEST_F(SteamOSVirtualSessionTest, TrimsGpuSelectorWhitespace) {
   EXPECT_TRUE(error.empty());
 }
 
+/**
+ * @brief Verify an invalid DRM node remains a specific, fail-closed GPU error.
+ */
+TEST_F(SteamOSVirtualSessionTest, RejectsNonexistentExplicitRenderNode) {
+  config::steamos_virtual_display.game_gpu = "/dev/dri/renderD999";
+  rtsp_stream::launch_session_t launch {};
+  std::string error;
+
+  EXPECT_FALSE(steamos_virtual_session::prepare(launch, error));
+  EXPECT_EQ(error, "Configured SteamOS game GPU is not an accessible AMD DRM render node");
+}
+
 TEST_F(SteamOSVirtualSessionTest, FakeGamescopeReadinessAndCleanup) {
   rtsp_stream::launch_session_t launch {};
   launch.id = 42;
