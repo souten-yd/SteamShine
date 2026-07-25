@@ -174,3 +174,20 @@ TEST(WebServicesTest, PersistsVirtualDisplayPolicyForRestart) {
   config::sunshine.config_file = original_config_file;
   fs::remove(temporary_config);
 }
+
+/**
+ * @brief Verify the authenticated status payload always includes PipeWire diagnostics.
+ */
+TEST(WebServicesTest, StatusSnapshotIncludesPipeWireDiagnostics) {
+  web::StatusSnapshotService status;
+  const auto snapshot = status.snapshot();
+
+  EXPECT_TRUE(snapshot.contains("pipewire_runtime"));
+  EXPECT_TRUE(snapshot.contains("pipewire_remote"));
+  EXPECT_TRUE(snapshot.contains("pipewire_node_id"));
+  EXPECT_TRUE(snapshot.contains("pipewire_object_serial"));
+  EXPECT_TRUE(snapshot.contains("pipewire_producer_pid"));
+  EXPECT_EQ(snapshot.at("pipewire_node_id"), 0);
+  EXPECT_EQ(snapshot.at("pipewire_object_serial"), 0);
+  EXPECT_EQ(snapshot.at("pipewire_producer_pid"), -1);
+}
