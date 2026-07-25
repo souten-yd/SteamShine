@@ -14,6 +14,7 @@
 #include <cctype>
 #include <cerrno>
 #include <chrono>
+#include <cstring>
 #include <cstdint>
 #include <cstdlib>
 #include <exception>
@@ -30,7 +31,10 @@
   #include <fcntl.h>
   #include <poll.h>
   #include <signal.h>
+  #include <sys/socket.h>
+  #include <sys/stat.h>
   #include <sys/types.h>
+  #include <sys/un.h>
   #include <sys/wait.h>
   #include <unistd.h>
 #endif
@@ -560,6 +564,99 @@ namespace steamos_virtual_session {
       return true;
     }
 
+    /**
+     * @brief Validate a host PipeWire runtime without confusing it with private Wayland state.
+     *
+     * @param runtime Candidate host user runtime directory.
+     * @param private_base SteamShine private runtime base which must not host PipeWire.
+     * @param error Receives a concise launch failure reason.
+     * @return Canonical host runtime when ownership and location checks succeed.
+     */
+    std::optional<std::filesystem::path> validate_host_pipewire_runtime(const std::filesystem::path &runtime, const std::filesystem::path &private_base, std::string &error) {
+      if (runtime.empty()) {
+        error = "Host PipeWire runtime is not configured";
+        return std::nullopt;
+      }
+      struct stat configured_runtime_stat {};
+      if (::lstat(runtime.c_str(), &configured_runtime_stat) != 0) {
+        error = "Host PipeWire runtime does not exist";
+        return std::nullopt;
+      }
+      if (S_ISLNK(configured_runtime_stat.st_mode)) {
+        error = "Host PipeWire runtime must not be a symbolic link";
+        return std::nullopt;
+      }
+      std::error_code filesystem_error;
+      const auto canonical_runtime {std::filesystem::canonical(runtime, filesystem_error)};
+      if (filesystem_error || !std::filesystem::exists(canonical_runtime)) {
+        error = "Host PipeWire runtime does not exist";
+        return std::nullopt;
+      }
+      struct stat runtime_stat {};
+      if (::lstat(canonical_runtime.c_str(), &runtime_stat) != 0 || !S_ISDIR(runtime_stat.st_mode)) {
+        error = "Host PipeWire runtime is not a directory";
+        return std::nullopt;
+      }
+      if (runtime_stat.st_uid != ::getuid()) {
+        error = "Host PipeWire runtime is owned by another user";
+        return std::nullopt;
+      }
+      if (path_is_within_runtime_root(canonical_runtime, private_base)) {
+        error = "Host PipeWire runtime must not be inside the private Wayland runtime";
+        return std::nullopt;
+      }
+      return canonical_runtime;
+    }
+
+    /**
+     * @brief Verify that the host PipeWire socket is owned by the service user and connectable.
+     *
+     * @param runtime Canonical host user runtime directory.
+     * @param remote PipeWire remote socket name.
+     * @param failure Receives a concise launch failure reason.
+     * @return True when a fresh UNIX socket connection succeeds.
+     */
+    bool verify_host_pipewire_socket(const std::filesystem::path &runtime, const std::string_view remote, std::string &failure) {
+      const auto socket_path {runtime / remote};
+      struct stat socket_stat {};
+      if (::lstat(socket_path.c_str(), &socket_stat) != 0) {
+        failure = "Host PipeWire socket does not exist";
+        return false;
+      }
+      if (!S_ISSOCK(socket_stat.st_mode)) {
+        failure = "Host PipeWire path is not a UNIX socket";
+        return false;
+      }
+      if (socket_stat.st_uid != ::getuid()) {
+        failure = "Host PipeWire socket is owned by another user";
+        return false;
+      }
+      if (socket_path.string().size() >= sizeof(sockaddr_un::sun_path)) {
+        failure = "Host PipeWire socket path is too long";
+        return false;
+      }
+      const int socket_fd {::socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0)};
+      if (socket_fd < 0) {
+        failure = "Host PipeWire socket connection failed";
+        BOOST_LOG(error) << "SESSION_EVENT pipewire_socket_connect_failed runtime=" << runtime << " remote=" << remote << " socket=" << socket_path << " errno=" << errno << " uid=" << ::getuid() << " socket_uid=" << socket_stat.st_uid;
+        return false;
+      }
+      sockaddr_un address {};
+      address.sun_family = AF_UNIX;
+      std::strncpy(address.sun_path, socket_path.c_str(), sizeof(address.sun_path) - 1);
+      const auto address_length {static_cast<socklen_t>(offsetof(sockaddr_un, sun_path) + std::strlen(address.sun_path) + 1)};
+      if (::connect(socket_fd, reinterpret_cast<const sockaddr *>(&address), address_length) != 0) {
+        const int connect_error {errno};
+        ::close(socket_fd);
+        failure = "Host PipeWire socket connection failed";
+        BOOST_LOG(error) << "SESSION_EVENT pipewire_socket_connect_failed runtime=" << runtime << " remote=" << remote << " socket=" << socket_path << " errno=" << connect_error << " message=" << std::strerror(connect_error) << " uid=" << ::getuid() << " socket_uid=" << socket_stat.st_uid;
+        return false;
+      }
+      ::close(socket_fd);
+      BOOST_LOG(info) << "SESSION_EVENT pipewire_endpoint_resolved host_runtime=" << runtime << " pipewire_socket=" << socket_path << " pipewire_remote=" << remote << " socket_uid=" << socket_stat.st_uid;
+      return true;
+    }
+
 #if defined(__linux__)
     /**
      * @brief Check the installed Gamescope help text before using version-specific options.
@@ -707,9 +804,8 @@ namespace steamos_virtual_session {
       manager.current = state_e::Failed;
       return false;
     }
-    const auto pipewire_runtime {host_pipewire_runtime(runtime_root)};
-    if (!path_is_within_runtime_root(pipewire_runtime, runtime_root) || !std::filesystem::is_directory(pipewire_runtime)) {
-      error = "SteamOS host PipeWire runtime is unavailable or outside XDG_RUNTIME_DIR";
+    const auto pipewire_runtime {validate_host_pipewire_runtime(host_pipewire_runtime(runtime_root), base, error)};
+    if (!pipewire_runtime) {
       manager.current = state_e::Failed;
       return false;
     }
@@ -719,15 +815,19 @@ namespace steamos_virtual_session {
       manager.current = state_e::Failed;
       return false;
     }
+    if (!verify_host_pipewire_socket(*pipewire_runtime, pipewire_remote, error)) {
+      manager.current = state_e::Failed;
+      return false;
+    }
     manager.runtime_directory = base / ("session-" + std::to_string(::getpid()) + "-" + std::to_string(launch_session.id));
     manager.pci_bdf = gpu->pci_bdf;
     manager.render_node = gpu->render_node;
-    manager.pipewire_runtime = pipewire_runtime.string();
+    manager.pipewire_runtime = pipewire_runtime->string();
     manager.pipewire_remote = pipewire_remote;
     manager.pipewire_node_id.reset();
     manager.pipewire_object_serial.reset();
     manager.pipewire_producer_pid = -1;
-    manager.pulse_runtime = (runtime_root / "pulse").string();
+    manager.pulse_runtime = (*pipewire_runtime / "pulse").string();
     manager.width = request.width;
     manager.height = request.height;
     manager.fps = request.fps;
@@ -767,7 +867,7 @@ namespace steamos_virtual_session {
       ::setpgid(0, 0);
       const auto path {config::steamos_virtual_display.gamescope_path};
       const auto runtime {manager.runtime_directory.string()};
-      const auto pipewire_runtime_value {pipewire_runtime.string()};
+      const auto pipewire_runtime_value {pipewire_runtime->string()};
       ::setenv("XDG_RUNTIME_DIR", runtime.c_str(), 1);
       ::setenv("PIPEWIRE_RUNTIME_DIR", pipewire_runtime_value.c_str(), 1);
       ::setenv("PIPEWIRE_REMOTE", pipewire_remote.c_str(), 1);

@@ -5,12 +5,15 @@
 #if defined(__linux__)
   #include <cerrno>
   #include <chrono>
+  #include <cstring>
   #include <cstdlib>
   #include <filesystem>
   #include <fstream>
   #include <gtest/gtest.h>
   #include <iterator>
   #include <signal.h>
+  #include <sys/socket.h>
+  #include <sys/un.h>
   #include <src/config.h>
   #include <src/rtsp.h>
   #include <src/steamos_virtual_session.h>
@@ -108,6 +111,22 @@ namespace {
     bool had_xdg_runtime_directory {false};  ///< Whether XDG runtime was set before test setup.
     std::string saved_xdg_session_type;  ///< Desktop session type restored after each test.
     bool had_xdg_session_type {false};  ///< Whether XDG_SESSION_TYPE was set before test setup.
+    std::vector<int> pipewire_sockets;  ///< Test-owned host PipeWire UNIX sockets.
+
+    /**
+     * @brief Create a connectable host PipeWire socket below the test runtime.
+     */
+    void create_pipewire_socket(const std::string_view remote = "pipewire-0") {
+      const auto socket_path {root / "runtime" / remote};
+      const int pipewire_socket {::socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0)};
+      ASSERT_GE(pipewire_socket, 0);
+      sockaddr_un address {};
+      address.sun_family = AF_UNIX;
+      std::strncpy(address.sun_path, socket_path.c_str(), sizeof(address.sun_path) - 1);
+      ASSERT_EQ(::bind(pipewire_socket, reinterpret_cast<const sockaddr *>(&address), offsetof(sockaddr_un, sun_path) + std::strlen(address.sun_path) + 1), 0);
+      ASSERT_EQ(::listen(pipewire_socket, 1), 0);
+      pipewire_sockets.emplace_back(pipewire_socket);
+    }
 
     /**
      * @brief Set up a fake Gamescope and a test-only runtime base.
@@ -124,6 +143,7 @@ namespace {
         had_xdg_session_type = true;
       }
       ASSERT_EQ(::setenv("XDG_RUNTIME_DIR", (root / "runtime").c_str(), 1), 0);
+      create_pipewire_socket();
       config::steamos_virtual_display.enabled = true;
       config::steamos_virtual_display.gamescope_path = make_fake_gamescope(root).string();
       config::steamos_virtual_display.game_gpu = "1002:9999";
@@ -137,6 +157,10 @@ namespace {
      */
     void TearDown() override {
       steamos_virtual_session::stop();
+      for (const int pipewire_socket : pipewire_sockets) {
+        ::close(pipewire_socket);
+      }
+      pipewire_sockets.clear();
       config::steamos_virtual_display = saved;
       if (had_xdg_runtime_directory) {
         (void) ::setenv("XDG_RUNTIME_DIR", saved_xdg_runtime_directory.c_str(), 1);
@@ -266,6 +290,7 @@ TEST_F(SteamOSVirtualSessionTest, SeparatesPrivateWaylandAndHostPipeWireRuntimes
   const auto host_runtime {root / "runtime"};
   config::steamos_virtual_display.pipewire_runtime = host_runtime.string();
   config::steamos_virtual_display.pipewire_remote = "pipewire-test";
+  create_pipewire_socket("pipewire-test");
   rtsp_stream::launch_session_t launch {};
   launch.id = 77;
   launch.width = 1920;
@@ -314,6 +339,51 @@ TEST_F(SteamOSVirtualSessionTest, RejectsHostPipeWireRuntimeOutsideLoginRuntime)
 
   EXPECT_FALSE(steamos_virtual_session::prepare(launch, error));
   EXPECT_NE(error.find("PipeWire runtime"), std::string::npos);
+}
+
+/**
+ * @brief Verify the PipeWire parent runtime cannot be confused with private Wayland state.
+ */
+TEST_F(SteamOSVirtualSessionTest, RejectsHostPipeWireRuntimeInsidePrivateRuntime) {
+  std::filesystem::create_directories(config::steamos_virtual_display.runtime_directory);
+  config::steamos_virtual_display.pipewire_runtime = config::steamos_virtual_display.runtime_directory;
+  rtsp_stream::launch_session_t launch {};
+  std::string error;
+
+  EXPECT_FALSE(steamos_virtual_session::prepare(launch, error));
+  EXPECT_EQ(error, "Host PipeWire runtime must not be inside the private Wayland runtime");
+}
+
+/**
+ * @brief Verify a configured host runtime cannot escape through a symbolic link.
+ */
+TEST_F(SteamOSVirtualSessionTest, RejectsSymbolicLinkHostPipeWireRuntime) {
+  const auto runtime_link {root / "runtime-link"};
+  std::error_code filesystem_error;
+  std::filesystem::create_directory_symlink(root / "runtime", runtime_link, filesystem_error);
+  ASSERT_FALSE(filesystem_error) << filesystem_error.message();
+  config::steamos_virtual_display.pipewire_runtime = runtime_link.string();
+  rtsp_stream::launch_session_t launch {};
+  std::string error;
+
+  EXPECT_FALSE(steamos_virtual_session::prepare(launch, error));
+  EXPECT_EQ(error, "Host PipeWire runtime must not be a symbolic link");
+}
+
+/**
+ * @brief Verify a regular file cannot impersonate the configured PipeWire socket.
+ */
+TEST_F(SteamOSVirtualSessionTest, RejectsRegularFileInsteadOfPipeWireSocket) {
+  const auto fake_socket {root / "runtime" / "not-a-socket"};
+  std::ofstream output {fake_socket};
+  output << "not a socket";
+  output.close();
+  config::steamos_virtual_display.pipewire_remote = fake_socket.filename().string();
+  rtsp_stream::launch_session_t launch {};
+  std::string error;
+
+  EXPECT_FALSE(steamos_virtual_session::prepare(launch, error));
+  EXPECT_EQ(error, "Host PipeWire path is not a UNIX socket");
 }
 
 /**

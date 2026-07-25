@@ -11,12 +11,34 @@ set -Eeuo pipefail
 runtime_dir="${STEAMSHINE_PIPEWIRE_RUNTIME:-${XDG_RUNTIME_DIR:?XDG_RUNTIME_DIR is required}}"
 remote_name="${STEAMSHINE_PIPEWIRE_REMOTE:-${PIPEWIRE_REMOTE:-pipewire-0}}"
 socket_path="${runtime_dir}/${remote_name}"
+service_name="steamshine.service"
 
 section() { printf '\n=== %s ===\n' "$1"; }
 
 section 'Host PipeWire endpoint'
 printf 'runtime=%s\nremote=%s\nsocket=%s\n' "${runtime_dir}" "${remote_name}" "${socket_path}"
-stat "${socket_path}" 2>&1 || true
+printf 'canonical_runtime=%s\n' "$(realpath -e "${runtime_dir}" 2>/dev/null || printf 'unavailable')"
+stat -c 'path=%n type=%F uid=%u gid=%g mode=%a' "${runtime_dir}" "${socket_path}" 2>&1 || true
+
+section 'SteamShine service environment'
+systemctl --user show "${service_name}" -p MainPID -p ExecStart -p Environment -p FragmentPath 2>&1 || true
+service_pid="$(systemctl --user show "${service_name}" -p MainPID --value 2>/dev/null || true)"
+if [[ "${service_pid}" =~ ^[0-9]+$ ]] && [[ "${service_pid}" -gt 0 ]] && [[ -r "/proc/${service_pid}/environ" ]]; then
+  printf 'service_pid=%s\n' "${service_pid}"
+  tr '\0' '\n' <"/proc/${service_pid}/environ" |
+    grep -E '^(XDG_RUNTIME_DIR|PIPEWIRE_RUNTIME_DIR|PIPEWIRE_REMOTE|PULSE_RUNTIME_PATH)=' || true
+fi
+
+section 'Host PipeWire connection'
+if PIPEWIRE_RUNTIME_DIR="${runtime_dir}" PIPEWIRE_REMOTE="${remote_name}" pw-cli info 0 >/dev/null 2>&1; then
+  printf '%s\n' 'pipewire_socket_connected=true'
+else
+  connection_status=$?
+  printf 'pipewire_socket_connected=false exit_status=%s\n' "${connection_status}"
+fi
+
+section 'Private Wayland runtimes'
+find "${runtime_dir}/steamshine" -mindepth 1 -maxdepth 1 -type d -name 'session-*' -printf 'private_runtime=%p\n' 2>/dev/null || true
 
 section 'Owned Gamescope processes'
 pgrep -a gamescope 2>&1 || true
