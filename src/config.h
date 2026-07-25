@@ -388,6 +388,10 @@ namespace config {
     std::string log_file;  ///< Path to the configured log file.
     bool notify_pre_releases;  ///< Notify users about pre-release updates.
     bool system_tray;  ///< Enable the system tray integration.
+    bool steamshine_web_ui_enabled;  ///< Enable the SteamShine Web UI route and facade.
+    bool steamshine_web_ui_default;  ///< Use SteamShine instead of upstream Sunshine at the root Web UI route.
+    bool upstream_web_ui_enabled;  ///< Keep the upstream Sunshine Web UI available during migration.
+    bool upstream_web_ui_visible;  ///< Expose the upstream Sunshine Web UI at its compatibility route.
     std::vector<prep_cmd_t> prep_cmds;  ///< Preparation commands executed around application launch.
 
     // List of allowed origins for CSRF protection (e.g., "https://example.com,https://app.example.com")

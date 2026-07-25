@@ -15,7 +15,7 @@
           <span class="input-group-text">
             <hash :size="18" class="icon"></hash>
           </span>
-          <input type="text" pattern="\d*" :placeholder="`${$t('navbar.pin')}`" autofocus id="pin-input" class="form-control" required />
+          <input type="text" inputmode="numeric" pattern="[0-9]{4}" minlength="4" maxlength="4" :placeholder="`${$t('navbar.pin')}`" autofocus id="pin-input" class="form-control" required />
         </div>
         <div class="input-group my-4">
           <span class="input-group-text">
@@ -61,7 +61,7 @@
         let name = document.querySelector("#name-input").value;
         document.querySelector("#status").innerHTML = "";
         let b = JSON.stringify({pin: pin, name: name});
-        apiFetch("./api/pin", {
+        apiFetch("/api/pin", {
           method: "POST",
           headers: {
             'Content-Type': 'application/json'

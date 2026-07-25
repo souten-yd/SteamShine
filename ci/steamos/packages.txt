@@ -13,6 +13,7 @@ python
 python-jinja
 nodejs
 npm
+chromium
 clang
 curl
 shellcheck

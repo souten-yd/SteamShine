@@ -285,6 +285,22 @@ editing the `conf` file in a text editor. Use the examples as reference.
     </tr>
 </table>
 
+### steamshine_web_ui_enabled
+
+<table><tr><td>Description</td><td colspan="2">Enable the SteamShine Web UI and its shared API.</td></tr><tr><td>Default</td><td colspan="2">@code{} enabled @endcode</td></tr><tr><td>Example</td><td colspan="2">@code{} steamshine_web_ui_enabled = enabled @endcode</td></tr></table>
+
+### steamshine_web_ui_default
+
+<table><tr><td>Description</td><td colspan="2">Serve SteamShine at the root Web UI route while retaining the upstream compatibility route.</td></tr><tr><td>Default</td><td colspan="2">@code{} disabled @endcode</td></tr><tr><td>Example</td><td colspan="2">@code{} steamshine_web_ui_default = disabled @endcode</td></tr></table>
+
+### upstream_web_ui_enabled
+
+<table><tr><td>Description</td><td colspan="2">Keep the upstream Sunshine Web UI available for migration and recovery.</td></tr><tr><td>Default</td><td colspan="2">@code{} enabled @endcode</td></tr><tr><td>Example</td><td colspan="2">@code{} upstream_web_ui_enabled = enabled @endcode</td></tr></table>
+
+### upstream_web_ui_visible
+
+<table><tr><td>Description</td><td colspan="2">Expose the upstream Sunshine compatibility route while it is enabled.</td></tr><tr><td>Default</td><td colspan="2">@code{} enabled @endcode</td></tr><tr><td>Example</td><td colspan="2">@code{} upstream_web_ui_visible = enabled @endcode</td></tr></table>
+
 ## Input
 
 ### controller

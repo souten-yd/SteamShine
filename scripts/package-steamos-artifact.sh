@@ -6,6 +6,11 @@ output_dir="${2:?output directory is required}"
 root_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 binary="${build_dir}/sunshine"
 [[ -x "${binary}" ]] || { echo "Missing built Sunshine binary: ${binary}" >&2; exit 1; }
+web_assets="${build_dir}/assets/web"
+steamshine_assets="${build_dir}/assets/steamshine"
+[[ -d "${web_assets}" ]] || { echo "Missing generated Web UI assets: ${web_assets}" >&2; exit 1; }
+[[ -d "${steamshine_assets}" ]] || { echo "Missing generated SteamShine Web UI assets: ${steamshine_assets}" >&2; exit 1; }
+"${root_dir}/scripts/validate-web-assets.py" "${web_assets}" --steamshine-root "${steamshine_assets}"
 commit="$(git -C "${root_dir}" rev-parse HEAD)"
 branch="${GITHUB_HEAD_REF:-${GITHUB_REF_NAME:-local}}"
 archive="steamshine-steamos-x86_64-${commit}.tar.zst"
@@ -13,7 +18,14 @@ stage="$(mktemp -d)"
 trap 'rm -rf -- "${stage}"' EXIT
 mkdir -p "${stage}/bin" "${stage}/lib" "${stage}/share/assets" "${stage}/scripts" "${stage}/systemd-user" "${output_dir}"
 install -m 755 "${binary}" "${stage}/bin/steamshine"
-cp -a "${root_dir}/src_assets/common/assets/." "${stage}/share/assets/"
+# Do not package raw Vite/EJS source. The server must receive only the
+# generated Web UI output built for this binary.
+find "${root_dir}/src_assets/common/assets" -mindepth 1 -maxdepth 1 ! -name web ! -name steamshine -exec cp -a {} "${stage}/share/assets/" \;
+install -d "${stage}/share/assets/web"
+cp -a "${web_assets}/." "${stage}/share/assets/web/"
+install -d "${stage}/share/assets/steamshine"
+cp -a "${steamshine_assets}/." "${stage}/share/assets/steamshine/"
+"${root_dir}/scripts/validate-web-assets.py" "${stage}/share/assets/web" --steamshine-root "${stage}/share/assets/steamshine" --report "${stage}/web-static-report.json"
 cp -a "${root_dir}/src_assets/linux/assets/." "${stage}/share/assets/"
 miniupnpc_library="$(ldconfig -p | awk '/libminiupnpc\.so\.21/ { print $NF; exit }')"
 [[ -n "${miniupnpc_library}" && -f "${miniupnpc_library}" ]] || { echo "Missing libminiupnpc.so.21 required by SteamShine" >&2; exit 1; }
@@ -25,7 +37,9 @@ install -m 755 \
   "${root_dir}/scripts/test-steamos-virtual-display.sh" \
   "${root_dir}/scripts/test-steamos-reconnect.sh" \
   "${root_dir}/scripts/test-steamos-latency.sh" \
+  "${root_dir}/scripts/test-steamos-web-hardware.sh" \
   "${root_dir}/scripts/test-steamos-ssd-writes.sh" \
+  "${root_dir}/scripts/test-steamos-web-http.sh" \
   "${stage}/scripts/"
 install -m 644 "${root_dir}/LICENSE" "${stage}/LICENSE"
 install -m 644 "${root_dir}/ci/steamos/baselines/steamos-3.8.16-20260716.1.json" "${stage}/STEAMOS_BASELINE.json"
@@ -41,3 +55,17 @@ cat >"${stage}/BUILD_INFO.json" <<EOF
 EOF
 tar --zstd -C "${stage}" -cf "${output_dir}/${archive}" .
 (cd "${output_dir}" && sha256sum "${archive}" >"${archive}.sha256")
+artifact_sha256="$(awk '{print $1}' "${output_dir}/${archive}.sha256")"
+cp "${stage}/web-static-report.json" "${output_dir}/web-static-report.json"
+python3 - "${output_dir}/web-static-report.json" "${commit}" "${artifact_sha256}" <<'PY'
+"""Add immutable package provenance to the delivered static-asset report."""
+import json
+import sys
+from pathlib import Path
+
+report = Path(sys.argv[1])
+payload = json.loads(report.read_text(encoding="utf-8"))
+payload["commit_sha"] = sys.argv[2]
+payload["artifact_sha256"] = sys.argv[3]
+report.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+PY

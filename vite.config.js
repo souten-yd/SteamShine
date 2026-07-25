@@ -49,7 +49,7 @@ export default defineConfig({
             vue: 'vue/dist/vue.esm-bundler.js'
         }
     },
-    base: './',
+    base: '/',
     plugins: [
         vue(),
         ViteEjsPlugin({ header }),
@@ -64,6 +64,7 @@ export default defineConfig({
     root: resolve(assetsSrcPath),
     build: {
         outDir: resolve(assetsDstPath),
+        manifest: true,
         rollupOptions: {
             input: {
                 apps: resolve(assetsSrcPath, 'apps.html'),

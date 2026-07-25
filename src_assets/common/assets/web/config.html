@@ -216,6 +216,10 @@
               "global_prep_cmd": [],
               "notify_pre_releases": "disabled",
               "system_tray": "enabled",
+              "steamshine_web_ui_enabled": "enabled",
+              "steamshine_web_ui_default": "disabled",
+              "upstream_web_ui_enabled": "enabled",
+              "upstream_web_ui_visible": "enabled",
             },
           },
           {
@@ -418,7 +422,7 @@
       }
     },
     created() {
-      fetch("./api/config")
+      fetch("/api/config")
         .then((r) => r.json())
         .then((r) => {
           this.config = r;
@@ -515,7 +519,7 @@
           });
         });
 
-        return apiFetch("./api/config", {
+        return apiFetch("/api/config", {
           method: "POST",
           headers: {
             'Content-Type': 'application/json'
@@ -541,7 +545,7 @@
             setTimeout(() => {
               this.saved = this.restarted = false;
             }, 5000);
-            apiFetch("./api/restart", {
+            apiFetch("/api/restart", {
               method: "POST",
               headers: {
                 "Content-Type": "application/json"

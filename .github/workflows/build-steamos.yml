@@ -13,11 +13,19 @@ on:
       - 'src/stream.*'
       - 'src/process.*'
       - 'src/config.*'
+      - 'src/confighttp.*'
+      - 'src/web_services.*'
+      - 'src_assets/common/assets/**'
+      - 'tests/web/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'vite.config.js'
       - 'tests/unit/test_steamos_virtual_session.cpp'
       - 'tests/unit/test_steamos_virtual_session_core.cpp'
       - 'tests/steamos_core/CMakeLists.txt'
       - 'tests/steamos_lifecycle/**'
       - 'tests/integration/test_steamshine_script.sh'
+      - 'tests/integration/test_web_asset_validation.sh'
       - 'tests/fixtures/steamos/**'
       - 'scripts/**'
       - 'steamshine.sh'
@@ -37,11 +45,19 @@ on:
       - 'src/stream.*'
       - 'src/process.*'
       - 'src/config.*'
+      - 'src/confighttp.*'
+      - 'src/web_services.*'
+      - 'src_assets/common/assets/**'
+      - 'tests/web/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'vite.config.js'
       - 'tests/unit/test_steamos_virtual_session.cpp'
       - 'tests/unit/test_steamos_virtual_session_core.cpp'
       - 'tests/steamos_core/CMakeLists.txt'
       - 'tests/steamos_lifecycle/**'
       - 'tests/integration/test_steamshine_script.sh'
+      - 'tests/integration/test_web_asset_validation.sh'
       - 'tests/fixtures/steamos/**'
       - 'scripts/**'
       - 'steamshine.sh'
@@ -100,9 +116,9 @@ jobs:
             case "${path}" in
               docs/*|*.md) categories[docs]=1 ;;
               packaging/linux/*|scripts/package-steamos-artifact.sh) categories[packaging]=1 ;;
-              steamshine.sh|scripts/*.sh|tests/integration/test_steamshine_script.sh|tests/fixtures/steamos/*) categories[shell]=1 ;;
+              steamshine.sh|scripts/*.sh|tests/integration/test_steamshine_script.sh|tests/integration/test_web_asset_validation.sh|tests/fixtures/steamos/*) categories[shell]=1 ;;
               src/steamos_virtual_session_core.*|tests/unit/test_steamos_virtual_session_core.cpp) categories[cpp-core]=1 ;;
-              src/platform/linux/*|src/stream.*|src/process.*|src/nvhttp.*|src/config.*|src/steamos_virtual_session.*) categories[capture-encode]=1 ;;
+              src/platform/linux/*|src/stream.*|src/process.*|src/nvhttp.*|src/config.*|src/confighttp.*|src/web_services.*|src_assets/common/assets/*|tests/web/*|package.json|package-lock.json|vite.config.js) categories[web]=1 ;;
               CMakeLists.txt|cmake/*|tests/CMakeLists.txt|.github/workflows/*|ci/steamos/*) categories[build-system]=1 ;;
               *) categories[unclassified]=1 ;;
             esac
@@ -147,9 +163,10 @@ jobs:
             git diff --check HEAD^ HEAD
           fi
           if [[ "${mode}" == shell ]]; then
-            shellcheck steamshine.sh scripts/*.sh tests/fixtures/steamos/fixture.sh tests/integration/test_steamshine_script.sh
+            shellcheck steamshine.sh scripts/*.sh tests/fixtures/steamos/fixture.sh tests/integration/test_steamshine_script.sh tests/integration/test_web_asset_validation.sh
             actionlint .github/workflows/build-steamos.yml .github/workflows/build-ci-image.yml
             tests/integration/test_steamshine_script.sh
+            tests/integration/test_web_asset_validation.sh
           fi
           if [[ "${mode}" == cpp-core ]]; then
             cmake -S tests/steamos_core -B cmake-build-steamos-fast -G Ninja -DCMAKE_BUILD_TYPE=Release
@@ -212,10 +229,12 @@ jobs:
       - name: Focused formatting and shell checks
         run: |
           cd "${GITHUB_WORKSPACE}"
-          clang-format --dry-run --Werror src/steamos_virtual_session.cpp src/steamos_virtual_session.h src/steamos_virtual_session_core.cpp src/steamos_virtual_session_core.h tests/unit/test_steamos_virtual_session.cpp tests/unit/test_steamos_virtual_session_core.cpp tests/steamos_lifecycle/stubs.cpp
-          shellcheck steamshine.sh scripts/*.sh tests/fixtures/steamos/fixture.sh tests/integration/test_steamshine_script.sh
+          clang-format --dry-run --Werror src/steamos_virtual_session.cpp src/steamos_virtual_session.h src/steamos_virtual_session_core.cpp src/steamos_virtual_session_core.h tests/unit/test_steamos_virtual_session.cpp tests/unit/test_steamos_virtual_session_core.cpp tests/steamos_lifecycle/stubs.cpp src/confighttp.cpp src/web_services.cpp src/web_services.h tests/unit/test_web_services.cpp
+          shellcheck steamshine.sh scripts/*.sh tests/fixtures/steamos/fixture.sh tests/integration/test_steamshine_script.sh tests/integration/test_web_asset_validation.sh
+          python3 -m py_compile scripts/build-steamshine-web-assets.py scripts/validate-web-assets.py
+          node --check tests/web/upstream-browser-e2e.mjs
           actionlint .github/workflows/build-steamos.yml .github/workflows/build-ci-image.yml
-          if grep -nE '[[:blank:]]+$|^(<<<<<<<|=======|>>>>>>>)' src/steamos_virtual_session.cpp src/steamos_virtual_session.h src/steamos_virtual_session_core.cpp src/steamos_virtual_session_core.h tests/unit/test_steamos_virtual_session.cpp tests/unit/test_steamos_virtual_session_core.cpp tests/steamos_lifecycle/stubs.cpp steamshine.sh scripts/*.sh tests/fixtures/steamos/fixture.sh tests/integration/test_steamshine_script.sh .github/workflows/build-steamos.yml .github/workflows/build-ci-image.yml; then exit 1; fi
+          if grep -nE '[[:blank:]]+$|^(<<<<<<<|=======|>>>>>>>)' src/steamos_virtual_session.cpp src/steamos_virtual_session.h src/steamos_virtual_session_core.cpp src/steamos_virtual_session_core.h tests/unit/test_steamos_virtual_session.cpp tests/unit/test_steamos_virtual_session_core.cpp tests/steamos_lifecycle/stubs.cpp steamshine.sh scripts/*.sh tests/fixtures/steamos/fixture.sh tests/integration/test_steamshine_script.sh tests/integration/test_web_asset_validation.sh .github/workflows/build-steamos.yml .github/workflows/build-ci-image.yml; then exit 1; fi
       - name: Configure clean SteamOS release build
         run: cd "${GITHUB_WORKSPACE}" && cmake -S . -B cmake-build-steamos -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=ON -DBUILD_DOCS=OFF -DSUNSHINE_ENABLE_CUDA=OFF -DFETCHCONTENT_SOURCE_DIR_BOOST=/opt/steamshine-deps/boost-1.89.0 -DFFMPEG_PREPARED_BINARIES=/opt/steamshine-deps/ffmpeg -DSUNSHINE_ASSETS_DIR=share/assets -DSUNSHINE_ASSETS_DIR_DEF=../share/assets
       - name: Build runtime binary
@@ -231,7 +250,10 @@ jobs:
           cmake -S tests/steamos_lifecycle -B cmake-build-steamos-lifecycle -G Ninja -DCMAKE_BUILD_TYPE=Release
           cmake --build cmake-build-steamos-lifecycle --target test_steamos_virtual_session_lifecycle --parallel 2
           cmake-build-steamos-lifecycle/test_steamos_virtual_session_lifecycle --gtest_color=yes
+          cmake --build cmake-build-steamos --target test_sunshine --parallel 2
+          cmake-build-steamos/tests/test_sunshine --gtest_filter=WebServicesTest.* --gtest_color=yes
           tests/integration/test_steamshine_script.sh
+          tests/integration/test_web_asset_validation.sh
       - name: Verify runtime linkage and ABI ceiling
         run: |
           cd "${GITHUB_WORKSPACE}"
@@ -248,9 +270,13 @@ jobs:
           scripts/package-steamos-artifact.sh cmake-build-steamos dist
           artifact="$(find dist -name 'steamshine-steamos-*.tar.zst' -print -quit)"
           (cd "$(dirname "${artifact}")" && sha256sum -c "$(basename "${artifact}").sha256")
+          export STEAMSHINE_ARTIFACT_SHA256="$(sha256sum "${artifact}" | awk '{print $1}')"
+          export STEAMSHINE_COMMIT_SHA="${GITHUB_SHA}"
           smoke_home="$(mktemp -d)"; mkdir -p "${smoke_home}/run"
           HOME="${smoke_home}" XDG_RUNTIME_DIR="${smoke_home}/run" ./steamshine.sh install --artifact "${artifact}" --no-service --non-interactive --yes
           test -x "${smoke_home}/.local/bin/steamshine"
+          "${smoke_home}/.local/share/steamshine/current/scripts/test-steamos-web-http.sh" "${smoke_home}/.local/bin/steamshine" dist
+          STEAMSHINE_BINARY="${smoke_home}/.local/bin/steamshine" STEAMSHINE_BROWSER_REPORT_DIR=dist PLAYWRIGHT_CHROMIUM_EXECUTABLE=/usr/bin/chromium node tests/web/upstream-browser-e2e.mjs
       - uses: actions/upload-artifact@v4
         with:
           name: steamshine-steamos-x86_64-${{ github.event.pull_request.head.sha || github.sha }}

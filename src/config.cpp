@@ -881,6 +881,10 @@ namespace config {
     platf::appdata().string() + "/sunshine.log",  // log file
     false,  // notify_pre_releases
     true,  // system_tray
+    true,  // steamshine_web_ui_enabled
+    false,  // steamshine_web_ui_default
+    true,  // upstream_web_ui_enabled
+    true,  // upstream_web_ui_visible
     {},  // prep commands
   };
 
@@ -1821,6 +1825,21 @@ namespace config {
 
     bool_f(vars, "notify_pre_releases", sunshine.notify_pre_releases);
     bool_f(vars, "system_tray", sunshine.system_tray);
+    bool_f(vars, "steamshine_web_ui_enabled", sunshine.steamshine_web_ui_enabled);
+    bool_f(vars, "steamshine_web_ui_default", sunshine.steamshine_web_ui_default);
+    bool_f(vars, "upstream_web_ui_enabled", sunshine.upstream_web_ui_enabled);
+    bool_f(vars, "upstream_web_ui_visible", sunshine.upstream_web_ui_visible);
+    if (!sunshine.steamshine_web_ui_enabled && !sunshine.upstream_web_ui_enabled) {
+      BOOST_LOG(warning) << "Both Web UIs were disabled; retaining the upstream Sunshine Web UI for recovery"sv;
+      sunshine.upstream_web_ui_enabled = true;
+    }
+    if (sunshine.steamshine_web_ui_default && !sunshine.steamshine_web_ui_enabled) {
+      BOOST_LOG(warning) << "SteamShine cannot be the default Web UI while it is disabled"sv;
+      sunshine.steamshine_web_ui_default = false;
+    }
+    if (!sunshine.upstream_web_ui_enabled) {
+      sunshine.upstream_web_ui_visible = false;
+    }
 
     int port = sunshine.port;
     int_between_f(vars, "port"s, port, {1024 + nvhttp::PORT_HTTPS, 65535 - rtsp_stream::RTSP_SETUP_PORT});

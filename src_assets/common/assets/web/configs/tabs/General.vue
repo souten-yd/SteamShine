@@ -148,6 +148,32 @@ function removeCmd(index) {
               v-model="config.system_tray"
               default="true"
     ></Checkbox>
+
+    <!-- SteamShine Web UI migration controls -->
+    <Checkbox class="mb-3"
+              id="steamshine_web_ui_enabled"
+              locale-prefix="config"
+              v-model="config.steamshine_web_ui_enabled"
+              default="true"
+    ></Checkbox>
+    <Checkbox class="mb-3"
+              id="steamshine_web_ui_default"
+              locale-prefix="config"
+              v-model="config.steamshine_web_ui_default"
+              default="false"
+    ></Checkbox>
+    <Checkbox class="mb-3"
+              id="upstream_web_ui_enabled"
+              locale-prefix="config"
+              v-model="config.upstream_web_ui_enabled"
+              default="true"
+    ></Checkbox>
+    <Checkbox class="mb-3"
+              id="upstream_web_ui_visible"
+              locale-prefix="config"
+              v-model="config.upstream_web_ui_visible"
+              default="true"
+    ></Checkbox>
   </div>
 </template>
 

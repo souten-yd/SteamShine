@@ -412,7 +412,7 @@
       },
       methods: {
         refreshLogs() {
-          fetch("./api/logs",)
+          fetch("/api/logs",)
             .then((r) => r.text())
             .then((r) => {
               this.logs = r;
@@ -420,7 +420,7 @@
         },
         closeApp() {
           this.closeAppPressed = true;
-          apiFetch("./api/apps/close", {
+          apiFetch("/api/apps/close", {
             method: "POST",
             headers: {
                 "Content-Type": "application/json"
@@ -436,7 +436,7 @@
         },
         unpairAll() {
           this.unpairAllPressed = true;
-          apiFetch("./api/clients/unpair-all", {
+          apiFetch("/api/clients/unpair-all", {
             method: "POST",
             headers: {
                 "Content-Type": "application/json"
@@ -453,7 +453,7 @@
             });
         },
         unpairSingle(uuid) {
-          apiFetch("./api/clients/unpair", {
+          apiFetch("/api/clients/unpair", {
             method: "POST",
             headers: {
               'Content-Type': 'application/json'
@@ -465,7 +465,7 @@
           });
         },
         toggleClient(uuid, enabled) {
-          fetch("./api/clients/update", {
+          fetch("/api/clients/update", {
             method: "POST",
             headers: {
               'Content-Type': 'application/json'
@@ -476,7 +476,7 @@
           });
         },
         refreshClients() {
-          fetch("./api/clients/list")
+          fetch("/api/clients/list")
             .then((response) => response.json())
             .then((response) => {
               const clientList = document.querySelector("#client-list");
@@ -514,7 +514,7 @@
           setTimeout(() => {
             this.restartPressed = false;
           }, 5000);
-          apiFetch("./api/restart", {
+          apiFetch("/api/restart", {
             method: "POST",
             headers: {
                 "Content-Type": "application/json"
