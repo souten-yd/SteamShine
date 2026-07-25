@@ -769,6 +769,10 @@ namespace steamos_virtual_session {
       // server.
       ::unsetenv("WAYLAND_DISPLAY");
       ::unsetenv("DISPLAY");
+      // Gamescope owns the nested Wayland session. Do not inherit the desktop
+      // session type because it can make a headless compositor select a host
+      // session backend rather than its private runtime.
+      ::unsetenv("XDG_SESSION_TYPE");
       std::vector<char *> argv;
       argv.reserve(arguments.size() + 5);
       argv.push_back(const_cast<char *>(path.c_str()));

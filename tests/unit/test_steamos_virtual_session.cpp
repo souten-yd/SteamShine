@@ -46,7 +46,7 @@ namespace {
     output << "#!/bin/sh\n";
     output << "if [ \"$1\" = \"--help\" ]; then echo '--backend headless --nested-width --nested-height --nested-refresh --expose-wayland --scaler --hdr-enabled --prefer-vk-device'; exit 0; fi\n";
     output << "printf '%s\\n' \"$@\" > \"$XDG_RUNTIME_DIR/gamescope-arguments\"\n";
-    output << "printf 'runtime=%s\\nremote=%s\\n' \"$PIPEWIRE_RUNTIME_DIR\" \"$PIPEWIRE_REMOTE\" > \"$XDG_RUNTIME_DIR/gamescope-pipewire-environment\"\n";
+    output << "printf 'runtime=%s\\nremote=%s\\nsession_type=%s\\n' \"$PIPEWIRE_RUNTIME_DIR\" \"$PIPEWIRE_REMOTE\" \"${XDG_SESSION_TYPE-unset}\" > \"$XDG_RUNTIME_DIR/gamescope-pipewire-environment\"\n";
     if (mode == "crash-before-ready") {
       output << "exit 42\n";
       output.close();
@@ -106,6 +106,8 @@ namespace {
     std::filesystem::path root {std::filesystem::temp_directory_path() / "steamshine-virtual-session-test"};  ///< Test-owned temporary directory.
     std::string saved_xdg_runtime_directory;  ///< XDG runtime environment restored after each test.
     bool had_xdg_runtime_directory {false};  ///< Whether XDG runtime was set before test setup.
+    std::string saved_xdg_session_type;  ///< Desktop session type restored after each test.
+    bool had_xdg_session_type {false};  ///< Whether XDG_SESSION_TYPE was set before test setup.
 
     /**
      * @brief Set up a fake Gamescope and a test-only runtime base.
@@ -116,6 +118,10 @@ namespace {
       if (const auto *runtime {std::getenv("XDG_RUNTIME_DIR")}) {
         saved_xdg_runtime_directory = runtime;
         had_xdg_runtime_directory = true;
+      }
+      if (const auto *session_type {std::getenv("XDG_SESSION_TYPE")}) {
+        saved_xdg_session_type = session_type;
+        had_xdg_session_type = true;
       }
       ASSERT_EQ(::setenv("XDG_RUNTIME_DIR", (root / "runtime").c_str(), 1), 0);
       config::steamos_virtual_display.enabled = true;
@@ -136,6 +142,11 @@ namespace {
         (void) ::setenv("XDG_RUNTIME_DIR", saved_xdg_runtime_directory.c_str(), 1);
       } else {
         (void) ::unsetenv("XDG_RUNTIME_DIR");
+      }
+      if (had_xdg_session_type) {
+        (void) ::setenv("XDG_SESSION_TYPE", saved_xdg_session_type.c_str(), 1);
+      } else {
+        (void) ::unsetenv("XDG_SESSION_TYPE");
       }
       std::filesystem::remove_all(root);
     }
@@ -441,6 +452,22 @@ TEST_F(SteamOSVirtualSessionTest, WaitsForDelayedWaylandSocket) {
   std::string error;
   EXPECT_TRUE(steamos_virtual_session::prepare(launch, error)) << error;
   EXPECT_EQ(steamos_virtual_session::state(), steamos_virtual_session::state_e::WaitingForCapture);
+}
+
+/**
+ * @brief Verify the owned compositor does not inherit the desktop session type.
+ */
+TEST_F(SteamOSVirtualSessionTest, DoesNotInheritDesktopSessionTypeIntoGamescope) {
+  ASSERT_EQ(::setenv("XDG_SESSION_TYPE", "wayland", 1), 0);
+  rtsp_stream::launch_session_t launch {};
+  launch.id = 13;
+  std::string error;
+  ASSERT_TRUE(steamos_virtual_session::prepare(launch, error)) << error;
+
+  const auto session_runtime {std::filesystem::path {config::steamos_virtual_display.runtime_directory} / ("session-" + std::to_string(::getpid()) + "-13")};
+  std::ifstream environment {session_runtime / "gamescope-pipewire-environment"};
+  const std::string contents {(std::istreambuf_iterator<char> {environment}), std::istreambuf_iterator<char> {}};
+  EXPECT_NE(contents.find("session_type=unset"), std::string::npos);
 }
 
 TEST_F(SteamOSVirtualSessionTest, CleansUpAfterGamescopeEarlyCrash) {
