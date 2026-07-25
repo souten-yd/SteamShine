@@ -258,10 +258,13 @@ else()
     set(PIPEWIRE_FOUND OFF)
 endif()
 if(PIPEWIRE_FOUND)
+    add_compile_definitions(SUNSHINE_BUILD_PIPEWIRE)
     include_directories(SYSTEM ${PIPEWIRE_INCLUDE_DIRS})
     list(APPEND PLATFORM_LIBRARIES ${PIPEWIRE_LIBRARIES})
     list(APPEND PLATFORM_TARGET_FILES
             "${CMAKE_SOURCE_DIR}/src/platform/linux/pipewire.cpp")
+    list(APPEND PLATFORM_TARGET_FILES
+            "${CMAKE_SOURCE_DIR}/src/platform/linux/gamescopegrab.cpp")
 endif()
 
 # XDG portal

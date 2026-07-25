@@ -257,6 +257,9 @@ TEST_F(SteamOSVirtualSessionTest, SeparatesPrivateWaylandAndHostPipeWireRuntimes
   config::steamos_virtual_display.pipewire_remote = "pipewire-test";
   rtsp_stream::launch_session_t launch {};
   launch.id = 77;
+  launch.width = 1920;
+  launch.height = 1080;
+  launch.fps = 60;
   std::string error;
 
   ASSERT_TRUE(steamos_virtual_session::prepare(launch, error)) << error;
@@ -269,9 +272,20 @@ TEST_F(SteamOSVirtualSessionTest, SeparatesPrivateWaylandAndHostPipeWireRuntimes
   std::string wayland_display;
   std::string application_pipewire_runtime;
   std::string application_pipewire_remote;
-  ASSERT_TRUE(steamos_virtual_session::application_environment(runtime_directory, wayland_display, application_pipewire_runtime, application_pipewire_remote));
+  std::string application_pulse_runtime;
+  ASSERT_TRUE(steamos_virtual_session::application_environment(runtime_directory, wayland_display, application_pipewire_runtime, application_pipewire_remote, application_pulse_runtime));
   EXPECT_EQ(application_pipewire_runtime, host_runtime.string());
   EXPECT_EQ(application_pipewire_remote, "pipewire-test");
+  EXPECT_EQ(application_pulse_runtime, (host_runtime / "pulse").string());
+  int gamescope_pid {};
+  ASSERT_TRUE(steamos_virtual_session::gamescope_pipewire_endpoint(application_pipewire_runtime, application_pipewire_remote, gamescope_pid));
+  EXPECT_EQ(application_pipewire_runtime, host_runtime.string());
+  EXPECT_EQ(application_pipewire_remote, "pipewire-test");
+  EXPECT_GT(gamescope_pid, 0);
+  const auto snapshot {steamos_virtual_session::status_snapshot()};
+  EXPECT_EQ(snapshot.width, 1920);
+  EXPECT_EQ(snapshot.height, 1080);
+  EXPECT_EQ(snapshot.fps, 60);
 }
 
 /**
@@ -325,7 +339,8 @@ TEST_F(SteamOSVirtualSessionTest, FakeGamescopeReadinessAndCleanup) {
   std::string wayland_display;
   std::string pipewire_runtime;
   std::string pipewire_remote;
-  EXPECT_TRUE(steamos_virtual_session::application_environment(runtime_directory, wayland_display, pipewire_runtime, pipewire_remote));
+  std::string pulse_runtime;
+  EXPECT_TRUE(steamos_virtual_session::application_environment(runtime_directory, wayland_display, pipewire_runtime, pipewire_remote, pulse_runtime));
   const auto expected_runtime_directory {std::filesystem::path {config::steamos_virtual_display.runtime_directory} / ("session-" + std::to_string(::getpid()) + "-42")};
   EXPECT_EQ(runtime_directory, expected_runtime_directory.string());
   EXPECT_EQ(wayland_display, "gamescope-0");
@@ -448,7 +463,8 @@ TEST_F(SteamOSVirtualSessionTest, ForcedCleanupKillsOwnedChildAfterGamescopeExit
   std::string wayland_display;
   std::string pipewire_runtime;
   std::string pipewire_remote;
-  ASSERT_TRUE(steamos_virtual_session::application_environment(runtime_directory, wayland_display, pipewire_runtime, pipewire_remote));
+  std::string pulse_runtime;
+  ASSERT_TRUE(steamos_virtual_session::application_environment(runtime_directory, wayland_display, pipewire_runtime, pipewire_remote, pulse_runtime));
   std::ifstream input {std::filesystem::path {runtime_directory} / "ignored-child.pid"};
   pid_t child {};
   input >> child;

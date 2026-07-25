@@ -249,6 +249,9 @@ namespace pipewire {
         BOOST_LOG(debug) << "[pipewire] Connect PW context to fd"sv;
         if (fd >= 0) {
           core = pw_context_connect_fd(context, fd, nullptr, 0);
+          // PipeWire consumes a descriptor supplied to pw_context_connect_fd(),
+          // including its failure path. Never close a potentially reused fd.
+          fd = -1;
         } else {
           core = pw_context_connect(context, nullptr, 0);
         }

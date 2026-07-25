@@ -305,6 +305,7 @@ namespace config {
     std::string encoder_gpu;  ///< Preferred encoder GPU PCI BDF or render node.
     std::string pipewire_runtime;  ///< Optional host PipeWire runtime directory kept separate from private Wayland state.
     std::string pipewire_remote;  ///< Optional host PipeWire remote name used by owned Gamescope children.
+    int pipewire_node_timeout_milliseconds {10000};  ///< Maximum wait for an owned Gamescope PipeWire Video/Source node.
     int startup_timeout_seconds {15};  ///< Maximum time spent waiting for virtual-display readiness.
     int shutdown_timeout_seconds {5};  ///< Maximum time spent waiting for owned child shutdown.
     int default_width {1920};  ///< Fallback virtual display width.

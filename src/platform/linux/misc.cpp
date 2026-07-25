@@ -1124,6 +1124,7 @@ namespace platf {
 #ifdef SUNSHINE_BUILD_PORTAL
       PORTAL,  ///< XDG PORTAL
 #endif
+
       MAX_FLAGS  ///< The maximum number of flags
     };
   }  // namespace source
@@ -1193,6 +1194,10 @@ namespace platf {
   }
 #endif
 
+#ifdef SUNSHINE_BUILD_PIPEWIRE
+  std::shared_ptr<display_t> gamescope_pipewire_display(mem_type_e hwdevice_type, const std::string &display_name, const video::config_t &config);
+#endif
+
 #ifdef SUNSHINE_BUILD_KWIN
   bool kwin_available();
   std::vector<std::string> kwin_display_names();
@@ -1208,6 +1213,11 @@ namespace platf {
    * @brief List display names accepted by the selected capture backend.
    */
   std::vector<std::string> display_names(mem_type_e hwdevice_type) {
+#ifdef SUNSHINE_BUILD_PIPEWIRE
+    if (steamos_virtual_session::active()) {
+      return {"Gamescope PipeWire"};
+    }
+#endif
 #ifdef SUNSHINE_BUILD_WAYLAND
     // A virtual session has no desktop output until the Moonlight launch
     // creates its owned Gamescope socket. Keep discovery on Wayland so it
@@ -1269,6 +1279,12 @@ namespace platf {
   }
 
   std::shared_ptr<display_t> display(mem_type_e hwdevice_type, const std::string &display_name, const video::config_t &config) {
+#ifdef SUNSHINE_BUILD_PIPEWIRE
+    if (steamos_virtual_session::active()) {
+      BOOST_LOG(info) << "Screencasting with SteamOS owned Gamescope PipeWire source"sv;
+      return gamescope_pipewire_display(hwdevice_type, display_name, config);
+    }
+#endif
 #ifdef SUNSHINE_BUILD_WAYLAND
     // The owned socket is selected inside wl::display_t::init(). This must
     // precede KMS so monitorless virtual sessions never fall back to a

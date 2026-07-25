@@ -41,6 +41,11 @@ namespace steamos_virtual_session {
     std::string socket_path;  ///< Private Gamescope Wayland socket, when ready.
     std::string pci_bdf;  ///< Selected AMD PCI BDF, when available.
     std::string render_node;  ///< Selected AMD render node, when available.
+    std::string pipewire_runtime;  ///< Host PipeWire runtime directory, when available.
+    std::string pipewire_remote;  ///< Host PipeWire remote name, when available.
+    int width {0};  ///< Requested virtual-display width in pixels.
+    int height {0};  ///< Requested virtual-display height in pixels.
+    int fps {0};  ///< Requested virtual-display refresh rate.
     int gamescope_pid {-1};  ///< Owned Gamescope leader PID, when available.
     uint64_t captured_frames {0};  ///< Frames acquired from the owned DMA-BUF path.
     uint64_t encoded_packets {0};  ///< Encoded packets emitted by the session.
@@ -127,9 +132,10 @@ namespace steamos_virtual_session {
    * @param wayland_display Receives the session-owned Wayland display name.
    * @param pipewire_runtime Receives the host PipeWire runtime directory.
    * @param pipewire_remote Receives the host PipeWire remote name.
+   * @param pulse_runtime Receives the host PulseAudio compatibility runtime directory.
    * @return True when an application may safely connect to the virtual display.
    */
-  bool application_environment(std::string &runtime_directory, std::string &wayland_display, std::string &pipewire_runtime, std::string &pipewire_remote);
+  bool application_environment(std::string &runtime_directory, std::string &wayland_display, std::string &pipewire_runtime, std::string &pipewire_remote, std::string &pulse_runtime);
 
   /**
    * @brief Return the absolute path to the owned Wayland socket for capture.
@@ -160,6 +166,16 @@ namespace steamos_virtual_session {
    * @return True when the active virtual session selected an AMD dGPU render node.
    */
   bool encoder_render_node(std::string &render_node);
+
+  /**
+   * @brief Return the verified host PipeWire endpoint and owned Gamescope PID.
+   *
+   * @param runtime_directory Receives the host PipeWire runtime directory.
+   * @param remote_name Receives the host PipeWire remote name.
+   * @param gamescope_pid Receives the owned Gamescope process-group leader.
+   * @return True only while an owned session can use its host PipeWire endpoint.
+   */
+  bool gamescope_pipewire_endpoint(std::string &runtime_directory, std::string &remote_name, int &gamescope_pid);
 
   /**
    * @brief Check whether SteamShine currently owns a virtual Gamescope session.
