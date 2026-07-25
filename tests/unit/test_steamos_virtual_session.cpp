@@ -265,6 +265,13 @@ TEST_F(SteamOSVirtualSessionTest, SeparatesPrivateWaylandAndHostPipeWireRuntimes
   const std::string contents {(std::istreambuf_iterator<char> {environment}), std::istreambuf_iterator<char> {}};
   EXPECT_NE(contents.find("runtime=" + host_runtime.string()), std::string::npos);
   EXPECT_NE(contents.find("remote=pipewire-test"), std::string::npos);
+  std::string runtime_directory;
+  std::string wayland_display;
+  std::string application_pipewire_runtime;
+  std::string application_pipewire_remote;
+  ASSERT_TRUE(steamos_virtual_session::application_environment(runtime_directory, wayland_display, application_pipewire_runtime, application_pipewire_remote));
+  EXPECT_EQ(application_pipewire_runtime, host_runtime.string());
+  EXPECT_EQ(application_pipewire_remote, "pipewire-test");
 }
 
 /**
@@ -277,6 +284,18 @@ TEST_F(SteamOSVirtualSessionTest, RejectsHostPipeWireRuntimeOutsideLoginRuntime)
 
   EXPECT_FALSE(steamos_virtual_session::prepare(launch, error));
   EXPECT_NE(error.find("PipeWire runtime"), std::string::npos);
+}
+
+/**
+ * @brief Verify PipeWire remotes cannot escape the selected host runtime.
+ */
+TEST_F(SteamOSVirtualSessionTest, RejectsPipeWireRemotePath) {
+  config::steamos_virtual_display.pipewire_remote = "../pipewire-0";
+  rtsp_stream::launch_session_t launch {};
+  std::string error;
+
+  EXPECT_FALSE(steamos_virtual_session::prepare(launch, error));
+  EXPECT_NE(error.find("PipeWire remote"), std::string::npos);
 }
 
 /**
@@ -304,7 +323,9 @@ TEST_F(SteamOSVirtualSessionTest, FakeGamescopeReadinessAndCleanup) {
   EXPECT_TRUE(std::filesystem::exists(config::steamos_virtual_display.runtime_directory));
   std::string runtime_directory;
   std::string wayland_display;
-  EXPECT_TRUE(steamos_virtual_session::application_environment(runtime_directory, wayland_display));
+  std::string pipewire_runtime;
+  std::string pipewire_remote;
+  EXPECT_TRUE(steamos_virtual_session::application_environment(runtime_directory, wayland_display, pipewire_runtime, pipewire_remote));
   const auto expected_runtime_directory {std::filesystem::path {config::steamos_virtual_display.runtime_directory} / ("session-" + std::to_string(::getpid()) + "-42")};
   EXPECT_EQ(runtime_directory, expected_runtime_directory.string());
   EXPECT_EQ(wayland_display, "gamescope-0");
@@ -425,7 +446,9 @@ TEST_F(SteamOSVirtualSessionTest, ForcedCleanupKillsOwnedChildAfterGamescopeExit
   ASSERT_TRUE(steamos_virtual_session::prepare(launch, error)) << error;
   std::string runtime_directory;
   std::string wayland_display;
-  ASSERT_TRUE(steamos_virtual_session::application_environment(runtime_directory, wayland_display));
+  std::string pipewire_runtime;
+  std::string pipewire_remote;
+  ASSERT_TRUE(steamos_virtual_session::application_environment(runtime_directory, wayland_display, pipewire_runtime, pipewire_remote));
   std::ifstream input {std::filesystem::path {runtime_directory} / "ignored-child.pid"};
   pid_t child {};
   input >> child;

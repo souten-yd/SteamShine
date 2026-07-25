@@ -113,9 +113,10 @@ records session ID, Gamescope PID, node ID, object serial, media class,
 PipeWire runtime/remote, and render node.  It never records pairing PINs,
 cookies, passwords, or credentials.
 
-`scripts/diagnose-gamescope-pipewire.sh` will collect the host PipeWire socket,
+`scripts/diagnose-gamescope-pipewire.sh` collects the host PipeWire socket,
 node properties, Gamescope process environment, private runtime state, and
-optional `pw-dump`/`pw-cli` evidence.  It does not persist per-frame data.
+`pw-cli` evidence. Set `STEAMSHINE_GAMESCOPE_PIPEWIRE_DUMP=1` to include the
+full optional `pw-dump` evidence. It does not persist per-frame data.
 
 ## Delivery plan
 

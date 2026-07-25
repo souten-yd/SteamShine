@@ -125,9 +125,11 @@ namespace steamos_virtual_session {
    *
    * @param runtime_directory Receives the session-owned XDG runtime directory.
    * @param wayland_display Receives the session-owned Wayland display name.
+   * @param pipewire_runtime Receives the host PipeWire runtime directory.
+   * @param pipewire_remote Receives the host PipeWire remote name.
    * @return True when an application may safely connect to the virtual display.
    */
-  bool application_environment(std::string &runtime_directory, std::string &wayland_display);
+  bool application_environment(std::string &runtime_directory, std::string &wayland_display, std::string &pipewire_runtime, std::string &pipewire_remote);
 
   /**
    * @brief Return the absolute path to the owned Wayland socket for capture.

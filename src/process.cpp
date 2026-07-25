@@ -193,9 +193,13 @@ namespace proc {
 
     std::string virtual_runtime_directory;
     std::string virtual_wayland_display;
-    if (steamos_virtual_session::application_environment(virtual_runtime_directory, virtual_wayland_display)) {
+    std::string virtual_pipewire_runtime;
+    std::string virtual_pipewire_remote;
+    if (steamos_virtual_session::application_environment(virtual_runtime_directory, virtual_wayland_display, virtual_pipewire_runtime, virtual_pipewire_remote)) {
       _env["XDG_RUNTIME_DIR"] = virtual_runtime_directory;
       _env["WAYLAND_DISPLAY"] = virtual_wayland_display;
+      _env["PIPEWIRE_RUNTIME_DIR"] = virtual_pipewire_runtime;
+      _env["PIPEWIRE_REMOTE"] = virtual_pipewire_remote;
     }
 
     if (!_app.output.empty() && _app.output != "null"sv) {

@@ -28,8 +28,13 @@ done
 section 'PipeWire nodes'
 pw-cli ls Node 2>&1 || true
 
-section 'PipeWire registry dump'
-pw-dump 2>&1 || true
+if [[ "${STEAMSHINE_GAMESCOPE_PIPEWIRE_DUMP:-}" == "1" ]]; then
+  section 'PipeWire registry dump'
+  pw-dump 2>&1 || true
+else
+  section 'PipeWire registry dump'
+  printf '%s\n' 'Set STEAMSHINE_GAMESCOPE_PIPEWIRE_DUMP=1 to include the full pw-dump output.'
+fi
 
 section 'Recent SteamShine and Gamescope evidence'
 journalctl --user -u steamshine.service --since '-15 min' --no-pager 2>/dev/null |

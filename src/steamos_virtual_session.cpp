@@ -41,6 +41,8 @@ namespace steamos_virtual_session {
       std::mutex mutex;  ///< Serializes virtual-session state transitions.
       state_e current {state_e::Disabled};  ///< Current lifecycle state.
       std::filesystem::path runtime_directory;  ///< Runtime path uniquely owned by this process.
+      std::string pipewire_runtime;  ///< Host PipeWire runtime retained for owned children.
+      std::string pipewire_remote;  ///< Host PipeWire remote retained for owned children.
       std::string pci_bdf;  ///< PCI BDF of the AMD dGPU selected for Gamescope, capture, and encoding.
       std::string render_node;  ///< AMD dGPU render node shared by Gamescope, capture, and encoders.
       bool stream_requested {false};  ///< Whether RTSP accepted the associated stream before capture attached.
@@ -66,6 +68,31 @@ namespace steamos_virtual_session {
      */
     std::filesystem::path host_pipewire_runtime(const std::filesystem::path &runtime_root) {
       return config::steamos_virtual_display.pipewire_runtime.empty() ? runtime_root : std::filesystem::path {config::steamos_virtual_display.pipewire_runtime};
+    }
+
+    /**
+     * @brief Resolve the host PipeWire remote without accepting a path.
+     *
+     * @return Configured, inherited, or default PipeWire remote name.
+     */
+    std::string host_pipewire_remote() {
+      if (!config::steamos_virtual_display.pipewire_remote.empty()) {
+        return config::steamos_virtual_display.pipewire_remote;
+      }
+      if (const auto *remote {std::getenv("PIPEWIRE_REMOTE")}; remote && *remote) {
+        return remote;
+      }
+      return "pipewire-0";
+    }
+
+    /**
+     * @brief Check that a PipeWire remote is a socket name relative to its runtime.
+     *
+     * @param remote PipeWire remote to validate.
+     * @return True when @p remote is a non-empty single path component.
+     */
+    bool is_valid_pipewire_remote(const std::string_view remote) {
+      return !remote.empty() && remote != "." && remote != ".." && remote.find('/') == std::string_view::npos && remote.find('\0') == std::string_view::npos;
     }
 
     /**
@@ -186,6 +213,8 @@ namespace steamos_virtual_session {
       std::error_code error;
       std::filesystem::remove_all(manager.runtime_directory, error);
       manager.runtime_directory.clear();
+      manager.pipewire_runtime.clear();
+      manager.pipewire_remote.clear();
       manager.pci_bdf.clear();
       manager.render_node.clear();
       manager.stream_requested = false;
@@ -670,9 +699,17 @@ namespace steamos_virtual_session {
       manager.current = state_e::Failed;
       return false;
     }
+    const auto pipewire_remote {host_pipewire_remote()};
+    if (!is_valid_pipewire_remote(pipewire_remote)) {
+      error = "SteamOS host PipeWire remote must be a socket name";
+      manager.current = state_e::Failed;
+      return false;
+    }
     manager.runtime_directory = base / ("session-" + std::to_string(::getpid()) + "-" + std::to_string(launch_session.id));
     manager.pci_bdf = gpu->pci_bdf;
     manager.render_node = gpu->render_node;
+    manager.pipewire_runtime = pipewire_runtime.string();
+    manager.pipewire_remote = pipewire_remote;
     manager.packet_tracking.store(false, std::memory_order_release);
     manager.encoded_packets.store(0, std::memory_order_relaxed);
     manager.encoded_bytes.store(0, std::memory_order_relaxed);
@@ -712,7 +749,7 @@ namespace steamos_virtual_session {
       const auto pipewire_runtime_value {pipewire_runtime.string()};
       ::setenv("XDG_RUNTIME_DIR", runtime.c_str(), 1);
       ::setenv("PIPEWIRE_RUNTIME_DIR", pipewire_runtime_value.c_str(), 1);
-      ::setenv("PIPEWIRE_REMOTE", config::steamos_virtual_display.pipewire_remote.c_str(), 1);
+      ::setenv("PIPEWIRE_REMOTE", pipewire_remote.c_str(), 1);
       // A headless Gamescope owns its Wayland server.  Inheriting the desktop
       // display name makes Gamescope try to connect to a non-existent parent
       // socket below this private runtime directory before it starts that
@@ -903,13 +940,15 @@ namespace steamos_virtual_session {
     }
   }
 
-  bool application_environment(std::string &runtime_directory, std::string &wayland_display) {
+  bool application_environment(std::string &runtime_directory, std::string &wayland_display, std::string &pipewire_runtime, std::string &pipewire_remote) {
     std::scoped_lock lock {manager.mutex};
     if (manager.runtime_directory.empty() || (manager.current != state_e::WaitingForCapture && manager.current != state_e::Ready && manager.current != state_e::Streaming)) {
       return false;
     }
     runtime_directory = manager.runtime_directory.string();
     wayland_display = "gamescope-0";
+    pipewire_runtime = manager.pipewire_runtime;
+    pipewire_remote = manager.pipewire_remote;
     return true;
   }
 
