@@ -14,6 +14,7 @@
 
 // local includes
 #include "nvenc/nvenc_config.h"
+#include "steamos_virtual_session_core.h"
 
 namespace config {
   // Valid range for the packetsize limit
@@ -296,7 +297,7 @@ namespace config {
    */
   struct steamos_virtual_display_t {
     bool enabled {false};  ///< Enable the opt-in SteamOS virtual display provider.
-    std::string mode {"auto"};  ///< Virtual display policy; currently only auto is supported.
+    steamos_virtual_session::virtual_display_mode_e mode {steamos_virtual_session::virtual_display_mode_e::auto_detect};  ///< Virtual display policy parsed once during configuration loading.
     std::string gamescope_path {"gamescope"};  ///< Gamescope executable used for owned sessions.
     std::string runtime_directory;  ///< Base directory for owned runtime state.
     std::string game_gpu;  ///< Preferred game render GPU PCI BDF or render node.

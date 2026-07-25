@@ -23,6 +23,50 @@ namespace steamos_virtual_session {
     }
   }  // namespace
 
+  std::optional<virtual_display_mode_e> parse_virtual_display_mode(const std::string_view value) {
+    if (value == "off") {
+      return virtual_display_mode_e::off;
+    }
+    if (value == "auto") {
+      return virtual_display_mode_e::auto_detect;
+    }
+    if (value == "force") {
+      return virtual_display_mode_e::force;
+    }
+    return std::nullopt;
+  }
+
+  std::string_view to_string(const virtual_display_mode_e mode) {
+    switch (mode) {
+      case virtual_display_mode_e::off:
+        return "off";
+      case virtual_display_mode_e::auto_detect:
+        return "auto";
+      case virtual_display_mode_e::force:
+        return "force";
+    }
+    return "auto";
+  }
+
+  virtual_display_decision_t decide_virtual_display(const virtual_display_decision_input_t &input) {
+    if (!input.feature_enabled) {
+      return {false, "feature_disabled"};
+    }
+    if (input.mode == virtual_display_mode_e::off) {
+      return {false, "mode_off"};
+    }
+    if (input.mode == virtual_display_mode_e::force) {
+      return {true, input.host_supported ? "config_force" : "config_force_host_unsupported"};
+    }
+    if (input.existing_owned_session) {
+      return {true, "owned_session_active"};
+    }
+    if (input.capturable_output_present) {
+      return {false, "capturable_output_present"};
+    }
+    return {true, input.host_supported ? "no_capturable_output" : "no_capturable_output_host_unsupported"};
+  }
+
   display_request_t normalize_display_request(const int requested_width, const int requested_height, const int requested_fps, const int default_width, const int default_height, const int default_fps) {
     return {
       normalize_value(requested_width, default_width, 640, 7680),

@@ -152,6 +152,20 @@ TEST_F(SteamOSVirtualSessionTest, FeatureFlagDisabledPreservesNormalLaunch) {
   EXPECT_FALSE(steamos_virtual_session::active());
 }
 
+/**
+ * @brief Verify the off policy preserves the normal launch path even when enabled.
+ */
+TEST_F(SteamOSVirtualSessionTest, OffModePreservesNormalLaunch) {
+  config::steamos_virtual_display.mode = steamos_virtual_session::virtual_display_mode_e::off;
+  rtsp_stream::launch_session_t launch {};
+  std::string error;
+
+  EXPECT_TRUE(steamos_virtual_session::prepare(launch, error));
+  EXPECT_TRUE(error.empty());
+  EXPECT_EQ(steamos_virtual_session::state(), steamos_virtual_session::state_e::Disabled);
+  EXPECT_FALSE(steamos_virtual_session::capture_backend_required());
+}
+
 TEST_F(SteamOSVirtualSessionTest, FeatureFlagKeepsWaylandCaptureAvailableBeforeLaunch) {
   EXPECT_TRUE(steamos_virtual_session::capture_backend_required());
 }

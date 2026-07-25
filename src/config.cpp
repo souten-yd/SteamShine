@@ -9,6 +9,7 @@
 #include <fstream>
 #include <functional>
 #include <iostream>
+#include <stdexcept>
 #include <thread>
 #include <unordered_map>
 #include <utility>
@@ -1694,7 +1695,18 @@ namespace config {
     double_between_f(vars, "minimum_fps_target", video.minimum_fps_target, {0.0, 1000.0});
 
     bool_f(vars, "steamos_virtual_display_enabled", steamos_virtual_display.enabled);
-    string_restricted_f(vars, "steamos_virtual_display_mode", steamos_virtual_display.mode, {"auto"sv});
+    {
+      std::string mode_value;
+      string_f(vars, "steamos_virtual_display_mode", mode_value);
+      if (!mode_value.empty()) {
+        const auto mode {steamos_virtual_session::parse_virtual_display_mode(mode_value)};
+        if (!mode) {
+          BOOST_LOG(error) << "config: invalid steamos_virtual_display_mode value: " << mode_value << "; expected off, auto, or force";
+          throw std::invalid_argument {"invalid steamos_virtual_display_mode"};
+        }
+        steamos_virtual_display.mode = *mode;
+      }
+    }
     string_f(vars, "steamos_gamescope_path", steamos_virtual_display.gamescope_path);
     path_f(vars, "steamos_runtime_directory", steamos_virtual_display.runtime_directory);
     string_f(vars, "steamos_game_gpu", steamos_virtual_display.game_gpu);
@@ -2014,6 +2026,8 @@ namespace config {
     } catch (const std::filesystem::filesystem_error &err) {
       BOOST_LOG(fatal) << "Failed to apply config: "sv << err.what();
     } catch (const boost::filesystem::filesystem_error &err) {
+      BOOST_LOG(fatal) << "Failed to apply config: "sv << err.what();
+    } catch (const std::exception &err) {
       BOOST_LOG(fatal) << "Failed to apply config: "sv << err.what();
     }
 

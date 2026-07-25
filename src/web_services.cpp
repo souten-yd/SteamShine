@@ -210,7 +210,7 @@ namespace web {
       {"address_family", config::sunshine.address_family},
       {"system_tray", config::sunshine.system_tray},
       {"steamos_virtual_display_enabled", config::steamos_virtual_display.enabled},
-      {"steamos_virtual_display_mode", config::steamos_virtual_display.mode},
+      {"steamos_virtual_display_mode", std::string {steamos_virtual_session::to_string(config::steamos_virtual_display.mode)}},
     };
   }
 
@@ -222,7 +222,7 @@ namespace web {
       {"application_running", proc::proc.running() > 0},
       {"gamescope_active", steamos_virtual_session::active()},
       {"virtual_display_enabled", config::steamos_virtual_display.enabled},
-      {"virtual_display_mode", config::steamos_virtual_display.mode},
+      {"virtual_display_mode", std::string {steamos_virtual_session::to_string(config::steamos_virtual_display.mode)}},
       {"game_gpu", config::steamos_virtual_display.game_gpu},
       {"capture_gpu", config::steamos_virtual_display.capture_gpu},
       {"encoder_gpu", config::steamos_virtual_display.encoder_gpu},

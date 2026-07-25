@@ -462,10 +462,20 @@ namespace steamos_virtual_session {
 
   bool prepare(const rtsp_stream::launch_session_t &launch_session, std::string &error) {
     std::scoped_lock lock {manager.mutex};
-    if (!config::steamos_virtual_display.enabled) {
+    const auto decision {decide_virtual_display({
+      config::steamos_virtual_display.enabled,
+      config::steamos_virtual_display.mode,
+      false,
+      false,
+      false,
+      false,
+      true,
+    })};
+    if (!decision.required) {
       manager.current = state_e::Disabled;
       return true;
     }
+    BOOST_LOG(info) << "SESSION_EVENT mode_decided mode=" << to_string(config::steamos_virtual_display.mode) << " reason=" << decision.reason;
 #if !defined(__linux__)
     error = "SteamOS virtual display is only available on Linux";
     manager.current = state_e::Disabled;
@@ -647,7 +657,16 @@ namespace steamos_virtual_session {
   }
 
   bool capture_backend_required() {
-    return config::steamos_virtual_display.enabled;
+    return decide_virtual_display({
+                                    config::steamos_virtual_display.enabled,
+                                    config::steamos_virtual_display.mode,
+                                    false,
+                                    false,
+                                    false,
+                                    false,
+                                    true,
+                                  })
+      .required;
   }
 
   void cleanup_orphan_sessions() {

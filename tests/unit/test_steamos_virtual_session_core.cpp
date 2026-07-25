@@ -24,6 +24,34 @@ namespace {
   }
 
   /**
+   * @brief Verify only canonical virtual-display policy values are accepted.
+   */
+  TEST(SteamOSVirtualSessionCore, ParsesVirtualDisplayModes) {
+    EXPECT_EQ(steamos_virtual_session::parse_virtual_display_mode("off"), steamos_virtual_session::virtual_display_mode_e::off);
+    EXPECT_EQ(steamos_virtual_session::parse_virtual_display_mode("auto"), steamos_virtual_session::virtual_display_mode_e::auto_detect);
+    EXPECT_EQ(steamos_virtual_session::parse_virtual_display_mode("force"), steamos_virtual_session::virtual_display_mode_e::force);
+    EXPECT_FALSE(steamos_virtual_session::parse_virtual_display_mode("").has_value());
+    EXPECT_FALSE(steamos_virtual_session::parse_virtual_display_mode("FORCE").has_value());
+    EXPECT_FALSE(steamos_virtual_session::parse_virtual_display_mode("invalid").has_value());
+  }
+
+  /**
+   * @brief Verify force never falls back because a physical desktop exists.
+   */
+  TEST(SteamOSVirtualSessionCore, DecidesVirtualDisplayPolicy) {
+    using steamos_virtual_session::decide_virtual_display;
+    using steamos_virtual_session::virtual_display_decision_input_t;
+    using steamos_virtual_session::virtual_display_mode_e;
+
+    EXPECT_FALSE(decide_virtual_display({false, virtual_display_mode_e::force, true, true, true, false, true}).required);
+    EXPECT_FALSE(decide_virtual_display({true, virtual_display_mode_e::off, false, false, false, false, true}).required);
+    EXPECT_TRUE(decide_virtual_display({true, virtual_display_mode_e::force, true, true, true, false, true}).required);
+    EXPECT_TRUE(decide_virtual_display({true, virtual_display_mode_e::force, false, false, true, false, true}).required);
+    EXPECT_TRUE(decide_virtual_display({true, virtual_display_mode_e::auto_detect, false, false, false, false, true}).required);
+    EXPECT_FALSE(decide_virtual_display({true, virtual_display_mode_e::auto_detect, true, true, true, false, true}).required);
+  }
+
+  /**
    * @brief Verify command generation only uses Gamescope-advertised options.
    */
   TEST(SteamOSVirtualSessionCore, BuildsHeadlessGamescopeCommand) {
