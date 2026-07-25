@@ -98,7 +98,7 @@ upstream_after_steamshine_failure="$(curl --insecure --silent --show-error --out
 steamshine_page_file="${work_dir}/steamshine.html"
 steamshine_status="$(curl --insecure --silent --show-error --output "${steamshine_page_file}" --write-out '%{http_code}' "${base_url}/steamshine/dashboard")"
 [[ "${steamshine_status}" == 200 ]] || { echo "Expected /steamshine/dashboard to return HTTP 200, got ${steamshine_status}." >&2; exit 1; }
-for steamshine_route in /steamshine/setup /steamshine/login /steamshine/pairing /steamshine/clients /steamshine/logs; do
+for steamshine_route in /steamshine/setup /steamshine/login /steamshine/config /steamshine/pairing /steamshine/clients /steamshine/logs; do
   steamshine_route_status="$(curl --insecure --silent --show-error --output /dev/null --write-out '%{http_code}' "${base_url}${steamshine_route}")"
   [[ "${steamshine_route_status}" == 200 ]] || { echo "Expected SteamShine route ${steamshine_route} to return HTTP 200, got ${steamshine_route_status}." >&2; exit 1; }
 done

@@ -276,6 +276,15 @@ namespace web {
      * @return JSON snapshot without paths or secrets.
      */
     nlohmann::json snapshot() const;
+
+    /**
+     * @brief Persist the virtual-display policy for use after the next restart.
+     *
+     * @param enabled Whether SteamShine virtual-display management is enabled.
+     * @param mode Requested canonical mode: off, auto, or force.
+     * @return Non-secret result describing validation or persistence outcome.
+     */
+    service_result_t save_virtual_display(bool enabled, std::string_view mode) const;
   };
 
   /**

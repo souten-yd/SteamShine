@@ -208,6 +208,15 @@ try {
     method: 'POST', headers: { 'Content-Type': 'application/json', 'X-SteamShine-CSRF-Token': 'invalid' }, body: JSON.stringify({ pin: '1234', name: 'test-client' }),
   })).status);
   const csrfValue = await steamshinePage.evaluate(async () => (await fetch('/api/steamshine/v1/session')).json().then((value) => value.csrf_token));
+  await steamshinePage.goto(`${baseUrl}/steamshine/config`, { waitUntil: 'networkidle' });
+  await steamshinePage.getByRole('heading', { name: 'Virtual Display' }).waitFor({ timeout: 5000 });
+  await steamshinePage.getByText('Force always creates and streams from a SteamShine-owned headless Gamescope display').waitFor({ timeout: 5000 });
+  securityResults.virtual_display_config_status = await steamshinePage.evaluate(async (csrf) => (await fetch('/api/steamshine/v1/config/virtual-display', {
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-SteamShine-CSRF-Token': csrf }, body: JSON.stringify({ enabled: true, mode: 'force' }),
+  })).status, csrfValue);
+  if (securityResults.virtual_display_config_status !== 200) {
+    throw new Error(`SteamShine virtual display configuration returned ${securityResults.virtual_display_config_status}.`);
+  }
   const cspResponse = await steamshinePage.request.get(`${baseUrl}/steamshine/dashboard`);
   securityResults.csp_header = cspResponse.headers()['content-security-policy'] || '';
   if (!securityResults.csp_header.includes("default-src 'self'")) {

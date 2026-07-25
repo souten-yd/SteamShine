@@ -46,7 +46,7 @@ async function json(response) {
  */
 function shell(content, authenticated = false) {
   const navigation = authenticated ? `<nav>
-    <a class="link secondary" href="/steamshine/dashboard">Dashboard</a><a class="link secondary" href="/steamshine/pairing">Pairing</a><a class="link secondary" href="/steamshine/clients">Clients</a><a class="link secondary" href="/steamshine/logs">Logs</a><button id="logout" class="secondary">Log out</button>
+    <a class="link secondary" href="/steamshine/dashboard">Dashboard</a><a class="link secondary" href="/steamshine/config">Display</a><a class="link secondary" href="/steamshine/pairing">Pairing</a><a class="link secondary" href="/steamshine/clients">Clients</a><a class="link secondary" href="/steamshine/logs">Logs</a><button id="logout" class="secondary">Log out</button>
   </nav>` : '';
   app.innerHTML = `<div class="shell"><header><div class="mark" aria-hidden="true">S</div><div><h1>SteamShine</h1><p>Sunshine control for SteamOS</p></div></header>${navigation}${content}<footer><a class="link secondary" href="/sunshine/">Open the Sunshine Web UI</a></footer></div>`;
   document.querySelector('#logout')?.addEventListener('click', logout);
@@ -75,10 +75,19 @@ async function renderAuthenticated(session) {
   csrfToken = session.csrf_token;
   const page = location.pathname.split('/').filter(Boolean).pop() || 'dashboard';
   if (page === 'pairing') return renderPairing();
+  if (page === 'config') return renderVirtualDisplayConfig();
   if (page === 'clients') return renderClients();
   if (page === 'logs') return renderLogs();
   const status = await json(await api('/status'));
   shell(`<section><h2>Welcome, ${escapeHtml(session.username)}</h2><div class="grid"><div class="card"><div>Active streams</div><div class="metric">${escapeHtml(status.active_streams)}</div></div><div class="card"><div>Application</div><div class="metric">${status.application_running ? 'Running' : 'Idle'}</div></div><div class="card"><div>Gamescope</div><div class="metric">${status.gamescope_active ? 'Active' : 'Idle'}</div></div><div class="card"><div>Virtual display mode</div><div class="metric">${status.virtual_display_enabled ? escapeHtml(status.virtual_display_mode) : 'Disabled'}</div></div><div class="card"><div>Virtual display state</div><div class="metric">${escapeHtml(status.virtual_display_state || 'Disabled')}</div></div><div class="card"><div>Private socket</div><div class="metric">${escapeHtml(status.virtual_display_socket || 'Unavailable')}</div></div><div class="card"><div>Gamescope PID</div><div class="metric">${escapeHtml(status.gamescope_pid > 0 ? status.gamescope_pid : 'Unavailable')}</div></div><div class="card"><div>Render node</div><div class="metric">${escapeHtml(status.render_node || status.game_gpu || 'Auto')}</div></div><div class="card"><div>Capture frames</div><div class="metric">${escapeHtml(status.captured_frames || 0)}</div></div><div class="card"><div>Encoded packets</div><div class="metric">${escapeHtml(status.encoded_packets || 0)}</div></div><div class="card"><div>Encoder</div><div class="metric">${escapeHtml(status.encoder || 'Auto')}</div></div></div></section>`, true);
+}
+
+/** @brief Render the restart-required SteamOS virtual-display policy form. */
+async function renderVirtualDisplayConfig() {
+  const config = await json(await api('/config/virtual-display'));
+  const enabled = config.steamos_virtual_display_enabled === 'enabled';
+  shell(`<section><h2>Virtual Display</h2><p>Choose how SteamShine obtains the streamed display.</p><form id="virtual-display-config"><label><input name="enabled" type="checkbox" ${enabled ? 'checked' : ''}> Enable SteamOS virtual display</label><label>Virtual Display Mode<select name="mode"><option value="off" ${config.steamos_virtual_display_mode === 'off' ? 'selected' : ''}>Off</option><option value="auto" ${config.steamos_virtual_display_mode === 'auto' ? 'selected' : ''}>Auto</option><option value="force" ${config.steamos_virtual_display_mode === 'force' ? 'selected' : ''}>Force</option></select></label><p>Force always creates and streams from a SteamShine-owned headless Gamescope display, even when a physical display or desktop Wayland session is available.</p><button>Save policy</button><div class="notice"></div></form></section>`, true);
+  document.querySelector('#virtual-display-config').onsubmit = async (event) => { event.preventDefault(); const form = event.currentTarget; try { const result = await json(await api('/config/virtual-display', { method: 'POST', body: JSON.stringify({ enabled: form.elements.enabled.checked, mode: form.elements.mode.value }) })); form.querySelector('.notice').textContent = result.message; form.querySelector('.notice').className = 'notice ok'; } catch (error) { form.querySelector('.notice').textContent = error.message; } };
 }
 
 /** @brief Render the Moonlight pairing page. */

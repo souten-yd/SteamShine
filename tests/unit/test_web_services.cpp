@@ -8,12 +8,14 @@
 
 // standard includes
 #include <chrono>
+#include <filesystem>
 #include <map>
 #include <memory>
 
 // local imports
 #include <src/config.h>
 #include <src/crypto.h>
+#include <src/file_handler.h>
 #include <src/utility.h>
 #include <src/web_services.h>
 
@@ -141,4 +143,34 @@ TEST(WebServicesTest, SharesPairingAndClientState) {
   EXPECT_TRUE(clients.revoke("test-client").success);
   EXPECT_TRUE(clients.list().empty());
   EXPECT_FALSE(clients.revoke("test-client").success);
+}
+
+/**
+ * @brief Verify the SteamShine-only policy writer validates modes and preserves unrelated configuration.
+ */
+TEST(WebServicesTest, PersistsVirtualDisplayPolicyForRestart) {
+  namespace fs = std::filesystem;
+  const auto original_config_file = config::sunshine.config_file;
+  const auto temporary_config = fs::temp_directory_path() / "steamshine-web-services-virtual-display.conf";
+  ASSERT_EQ(file_handler::write_file(temporary_config.string().c_str(), "port = 47989\ncustom_option = preserved\n"), 0);
+  config::sunshine.config_file = temporary_config.string();
+
+  web::ConfigurationService configuration;
+  const auto invalid = configuration.save_virtual_display(true, "FORCE");
+  EXPECT_FALSE(invalid.success);
+  EXPECT_EQ(invalid.code, "invalid_virtual_display_mode");
+
+  const auto saved = configuration.save_virtual_display(true, "force");
+  EXPECT_TRUE(saved.success);
+  EXPECT_EQ(saved.code, "restart_required");
+  const auto persisted = file_handler::read_file(temporary_config.string().c_str());
+  EXPECT_NE(persisted.find("custom_option = preserved"), std::string::npos);
+  EXPECT_NE(persisted.find("steamos_virtual_display_enabled = enabled"), std::string::npos);
+  EXPECT_NE(persisted.find("steamos_virtual_display_mode = force"), std::string::npos);
+  const auto snapshot = configuration.snapshot();
+  EXPECT_EQ(snapshot.at("steamos_virtual_display_enabled"), "enabled");
+  EXPECT_EQ(snapshot.at("steamos_virtual_display_mode"), "force");
+
+  config::sunshine.config_file = original_config_file;
+  fs::remove(temporary_config);
 }

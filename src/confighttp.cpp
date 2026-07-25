@@ -60,6 +60,7 @@ namespace confighttp {
   const web::ClientService client_service {};  ///< Shared Web paired-client operations.
   const web::StatusSnapshotService status_snapshot_service {};  ///< Shared Web status operations.
   const web::DiagnosticService diagnostic_service {};  ///< Shared Web diagnostic operations.
+  const web::ConfigurationService configuration_service {};  ///< Shared Web configuration operations.
 
   /**
    * @brief HTTPS server type used for Sunshine's configuration UI.
@@ -1704,6 +1705,37 @@ namespace confighttp {
   }
 
   /**
+   * @brief Return the persisted SteamOS virtual-display policy to SteamShine.
+   *
+   * @param response HTTPS response to populate.
+   * @param request Authenticated HTTPS request.
+   */
+  void steamshine_virtual_display_config(const resp_https_t &response, const req_https_t &request) {
+    if (require_steamshine_session(response, request).empty()) {
+      return;
+    }
+    send_steamshine_response(response, configuration_service.snapshot());
+  }
+
+  /**
+   * @brief Save the selected SteamOS virtual-display policy for the next restart.
+   *
+   * @param response HTTPS response to populate.
+   * @param request CSRF-protected HTTPS request carrying enabled and mode fields.
+   */
+  void steamshine_save_virtual_display_config(const resp_https_t &response, const req_https_t &request) {
+    if (require_steamshine_mutation(response, request).empty()) {
+      return;
+    }
+    nlohmann::json input;
+    if (!read_steamshine_json(response, request, input)) {
+      return;
+    }
+    const auto result = configuration_service.save_virtual_display(input.value("enabled", false), input.value("mode", ""));
+    send_steamshine_response(response, {{"status", result.success}, {"code", result.code}, {"message", result.message}});
+  }
+
+  /**
    * @brief Submit a Moonlight pairing PIN through the shared pairing service.
    *
    * @param response The HTTP response object.
@@ -2206,7 +2238,7 @@ namespace confighttp {
     server.resource["^/pin/?$"]["GET"] = page_handler("pin.html");
     server.resource["^/troubleshooting/?$"]["GET"] = page_handler("troubleshooting.html");
     server.resource["^/welcome/?$"]["GET"] = page_handler("welcome.html", false, true);
-    server.resource["^/steamshine/?(?:setup|login|dashboard|pairing|clients|logs)?/?$"]["GET"] = getSteamshinePage;
+    server.resource["^/steamshine/?(?:setup|login|dashboard|config|pairing|clients|logs)?/?$"]["GET"] = getSteamshinePage;
 
     // rest api
     server.resource["^/api/browse$"]["GET"] = browseDirectory;
@@ -2238,6 +2270,8 @@ namespace confighttp {
     server.resource["^/api/steamshine/v1/auth/login$"]["POST"] = steamshine_handler(steamshine_login);
     server.resource["^/api/steamshine/v1/auth/logout$"]["POST"] = steamshine_handler(steamshine_logout);
     server.resource["^/api/steamshine/v1/status$"]["GET"] = steamshine_handler(steamshine_status);
+    server.resource["^/api/steamshine/v1/config/virtual-display$"]["GET"] = steamshine_handler(steamshine_virtual_display_config);
+    server.resource["^/api/steamshine/v1/config/virtual-display$"]["POST"] = steamshine_handler(steamshine_save_virtual_display_config);
     server.resource["^/api/steamshine/v1/session$"]["GET"] = steamshine_handler(steamshine_session);
     server.resource["^/api/steamshine/v1/pairing/pin$"]["POST"] = steamshine_handler(steamshine_pairing_pin);
     server.resource["^/api/steamshine/v1/clients$"]["GET"] = steamshine_handler(steamshine_clients);

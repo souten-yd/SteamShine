@@ -37,6 +37,18 @@ credential keys. The operator must record actual Moonlight video, audio, and
 input outcomes separately; pressing Enter is intentionally not treated as
 streaming acceptance.
 
+### Web configuration
+
+Both Web interfaces expose the persisted `off`, `auto`, and `force` policy.
+The Sunshine configuration UI has a **SteamOS Virtual Display** tab. The
+SteamShine dashboard's **Display** page uses its authenticated, CSRF-protected
+facade endpoint and validates the same canonical values before writing the
+next-restart policy. Saving does not alter a live session; the interface makes
+the restart requirement explicit. The current dashboard status continues to
+show the running policy, owned private socket, Gamescope PID, and capture and
+encoder counters so a persisted-but-not-yet-restarted policy is not mistaken
+for a live one.
+
 ## Configuration
 
 The added keys are `steamos_virtual_display_enabled`, `steamos_virtual_display_mode`, `steamos_gamescope_path`, `steamos_runtime_directory`, GPU preference keys, startup/shutdown timeout keys, default display values, and `steamos_cleanup_orphan_sessions`. A blank GPU preference selects the AMD render node with the largest dedicated VRAM (requiring at least 1 GiB) and refuses the usual UMA iGPU path. PCI BDF, card node, and render-node selectors are resolved through sysfs. Because Gamescope advertises a vendor/device selector rather than a PCI-BDF selector, SteamShine rejects a launch if two AMD render nodes share the requested identifier. The active virtual session feeds its render node into existing VA-API and Vulkan Video device resolution; capture and encoder overrides must resolve to the same node. The SteamShine dashboard exposes the current policy, lifecycle state, private socket, Gamescope PID, render node, and capture/encode counters without exposing credentials or session tokens.

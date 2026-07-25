@@ -131,6 +131,12 @@
         :platform="platform">
       </advanced>
 
+      <!-- SteamOS virtual display policy tab -->
+      <steamos-virtual-display
+        v-if="currentTab === 'steamos-display'"
+        :config="config">
+      </steamos-virtual-display>
+
       <container-encoders
         :current-tab="currentTab"
         :config="config"
@@ -154,6 +160,7 @@
   import Network from './configs/tabs/Network.vue'
   import Files from './configs/tabs/Files.vue'
   import Advanced from './configs/tabs/Advanced.vue'
+  import SteamOSVirtualDisplay from './configs/tabs/SteamOSVirtualDisplay.vue'
   import AudioVideo from './configs/tabs/AudioVideo.vue'
   import ContainerEncoders from './configs/tabs/ContainerEncoders.vue'
   import {$tp, usePlatformI18n} from './platform-i18n'
@@ -181,6 +188,7 @@
       Network,
       Files,
       Advanced,
+      SteamOSVirtualDisplay,
       // They will be accessible via audio-video, container-encoders only.
       AudioVideo,
       ContainerEncoders,
@@ -308,6 +316,14 @@
               "av1_mode": 0,
               "capture": "",
               "encoder": "",
+            },
+          },
+          {
+            id: "steamos-display",
+            name: "SteamOS Virtual Display",
+            options: {
+              "steamos_virtual_display_enabled": "disabled",
+              "steamos_virtual_display_mode": "auto",
             },
           },
           {
@@ -480,6 +496,7 @@
           'network': 'NetworkIcon',
           'files': 'FileCog',
           'advanced': 'Sliders',
+          'steamos-display': 'Gpu',
           'nv': 'Gpu',
           'amd': 'Gpu',
           'qsv': 'Gpu',
