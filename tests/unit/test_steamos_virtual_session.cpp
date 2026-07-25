@@ -5,19 +5,19 @@
 #if defined(__linux__)
   #include <cerrno>
   #include <chrono>
-  #include <cstring>
   #include <cstdlib>
+  #include <cstring>
   #include <filesystem>
   #include <fstream>
   #include <gtest/gtest.h>
   #include <iterator>
   #include <signal.h>
-  #include <sys/socket.h>
-  #include <sys/un.h>
   #include <src/config.h>
   #include <src/rtsp.h>
   #include <src/steamos_virtual_session.h>
   #include <string_view>
+  #include <sys/socket.h>
+  #include <sys/un.h>
   #include <thread>
   #include <unistd.h>
 

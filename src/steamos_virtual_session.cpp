@@ -14,9 +14,9 @@
 #include <cctype>
 #include <cerrno>
 #include <chrono>
-#include <cstring>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <exception>
 #include <filesystem>
 #include <fstream>
