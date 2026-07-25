@@ -46,6 +46,7 @@ namespace {
     output << "#!/bin/sh\n";
     output << "if [ \"$1\" = \"--help\" ]; then echo '--backend headless --nested-width --nested-height --nested-refresh --expose-wayland --scaler --hdr-enabled --prefer-vk-device'; exit 0; fi\n";
     output << "printf '%s\\n' \"$@\" > \"$XDG_RUNTIME_DIR/gamescope-arguments\"\n";
+    output << "printf 'runtime=%s\\nremote=%s\\n' \"$PIPEWIRE_RUNTIME_DIR\" \"$PIPEWIRE_REMOTE\" > \"$XDG_RUNTIME_DIR/gamescope-pipewire-environment\"\n";
     if (mode == "crash-before-ready") {
       output << "exit 42\n";
       output.close();
@@ -245,6 +246,37 @@ TEST_F(SteamOSVirtualSessionTest, TrimsGpuSelectorWhitespace) {
 
   EXPECT_TRUE(steamos_virtual_session::prepare(launch, error));
   EXPECT_TRUE(error.empty());
+}
+
+/**
+ * @brief Verify owned Gamescope retains the host PipeWire endpoint.
+ */
+TEST_F(SteamOSVirtualSessionTest, SeparatesPrivateWaylandAndHostPipeWireRuntimes) {
+  const auto host_runtime {root / "runtime"};
+  config::steamos_virtual_display.pipewire_runtime = host_runtime.string();
+  config::steamos_virtual_display.pipewire_remote = "pipewire-test";
+  rtsp_stream::launch_session_t launch {};
+  launch.id = 77;
+  std::string error;
+
+  ASSERT_TRUE(steamos_virtual_session::prepare(launch, error)) << error;
+  const auto session_runtime {std::filesystem::path {config::steamos_virtual_display.runtime_directory} / ("session-" + std::to_string(::getpid()) + "-77")};
+  std::ifstream environment {session_runtime / "gamescope-pipewire-environment"};
+  const std::string contents {(std::istreambuf_iterator<char> {environment}), std::istreambuf_iterator<char> {}};
+  EXPECT_NE(contents.find("runtime=" + host_runtime.string()), std::string::npos);
+  EXPECT_NE(contents.find("remote=pipewire-test"), std::string::npos);
+}
+
+/**
+ * @brief Verify an external host PipeWire runtime is rejected before Gamescope starts.
+ */
+TEST_F(SteamOSVirtualSessionTest, RejectsHostPipeWireRuntimeOutsideLoginRuntime) {
+  config::steamos_virtual_display.pipewire_runtime = "/tmp/steamshine-pipewire";
+  rtsp_stream::launch_session_t launch {};
+  std::string error;
+
+  EXPECT_FALSE(steamos_virtual_session::prepare(launch, error));
+  EXPECT_NE(error.find("PipeWire runtime"), std::string::npos);
 }
 
 /**

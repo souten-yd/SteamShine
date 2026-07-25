@@ -59,6 +59,16 @@ namespace steamos_virtual_session {
     constexpr std::string_view gamescope_pid_name {"gamescope.pid"};
 
     /**
+     * @brief Resolve the login user's PipeWire runtime independently of private Wayland state.
+     *
+     * @param runtime_root Original login XDG runtime directory.
+     * @return Configured host PipeWire runtime, or the original runtime when unset.
+     */
+    std::filesystem::path host_pipewire_runtime(const std::filesystem::path &runtime_root) {
+      return config::steamos_virtual_display.pipewire_runtime.empty() ? runtime_root : std::filesystem::path {config::steamos_virtual_display.pipewire_runtime};
+    }
+
+    /**
      * @brief Check that a path is a UNIX-domain socket.
      *
      * @param path Candidate socket path.
@@ -654,6 +664,12 @@ namespace steamos_virtual_session {
       manager.current = state_e::Failed;
       return false;
     }
+    const auto pipewire_runtime {host_pipewire_runtime(runtime_root)};
+    if (!path_is_within_runtime_root(pipewire_runtime, runtime_root) || !std::filesystem::is_directory(pipewire_runtime)) {
+      error = "SteamOS host PipeWire runtime is unavailable or outside XDG_RUNTIME_DIR";
+      manager.current = state_e::Failed;
+      return false;
+    }
     manager.runtime_directory = base / ("session-" + std::to_string(::getpid()) + "-" + std::to_string(launch_session.id));
     manager.pci_bdf = gpu->pci_bdf;
     manager.render_node = gpu->render_node;
@@ -693,7 +709,10 @@ namespace steamos_virtual_session {
       ::setpgid(0, 0);
       const auto path {config::steamos_virtual_display.gamescope_path};
       const auto runtime {manager.runtime_directory.string()};
+      const auto pipewire_runtime_value {pipewire_runtime.string()};
       ::setenv("XDG_RUNTIME_DIR", runtime.c_str(), 1);
+      ::setenv("PIPEWIRE_RUNTIME_DIR", pipewire_runtime_value.c_str(), 1);
+      ::setenv("PIPEWIRE_REMOTE", config::steamos_virtual_display.pipewire_remote.c_str(), 1);
       // A headless Gamescope owns its Wayland server.  Inheriting the desktop
       // display name makes Gamescope try to connect to a non-existent parent
       // socket below this private runtime directory before it starts that
