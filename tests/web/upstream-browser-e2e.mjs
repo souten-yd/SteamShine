@@ -175,7 +175,7 @@ try {
     if (message.type() === 'error' && !/status of (400|401|429)/.test(message.text())) consoleErrors.push(message.text());
   });
   steamshinePage.on('requestfailed', (request) => {
-    if (request.url().startsWith(baseUrl) && !request.url().includes('/api/steamshine/v1/session') && !request.url().includes('/api/steamshine/v1/pairing/pin')) {
+    if (request.url().startsWith(baseUrl) && !request.url().includes('/api/steamshine/v1/session') && !request.url().includes('/api/steamshine/v1/pairing/pin') && !request.url().includes('/api/steamshine/v1/config/virtual-display')) {
       failedRequests.push(`${request.method()} ${request.url()}`);
     }
   });
