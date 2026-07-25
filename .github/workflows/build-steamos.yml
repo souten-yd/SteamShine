@@ -270,7 +270,8 @@ jobs:
           scripts/package-steamos-artifact.sh cmake-build-steamos dist
           artifact="$(find dist -name 'steamshine-steamos-*.tar.zst' -print -quit)"
           (cd "$(dirname "${artifact}")" && sha256sum -c "$(basename "${artifact}").sha256")
-          export STEAMSHINE_ARTIFACT_SHA256="$(sha256sum "${artifact}" | awk '{print $1}')"
+          STEAMSHINE_ARTIFACT_SHA256="$(sha256sum "${artifact}" | awk '{print $1}')"
+          export STEAMSHINE_ARTIFACT_SHA256
           export STEAMSHINE_COMMIT_SHA="${GITHUB_SHA}"
           smoke_home="$(mktemp -d)"; mkdir -p "${smoke_home}/run"
           HOME="${smoke_home}" XDG_RUNTIME_DIR="${smoke_home}/run" ./steamshine.sh install --artifact "${artifact}" --no-service --non-interactive --yes
