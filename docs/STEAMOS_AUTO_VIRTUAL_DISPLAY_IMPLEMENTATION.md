@@ -37,6 +37,18 @@ credential keys. The operator must record actual Moonlight video, audio, and
 input outcomes separately; pressing Enter is intentionally not treated as
 streaming acceptance.
 
+### GPU selector diagnosis
+
+Run `scripts/diagnose-steamos-gpu.sh` before changing a SteamOS GPU selector.
+It records the live DRM render-to-card mapping, PCI BDF, AMD driver and VRAM,
+current-user and systemd-user-service device access, active service settings,
+configured selectors, Vulkan summary, and recent non-sensitive GPU failures.
+GPU selectors trim surrounding configuration whitespace and accept canonical
+`/dev/dri/renderD*` paths, bare `renderD*` names, canonical `card*` paths or
+names (resolved through their shared sysfs PCI device), and PCI BDFs. A blank
+selector remains automatic selection and cannot be mistaken for a whitespace
+only explicit selector.
+
 ### Web configuration
 
 Both Web interfaces expose the persisted `off`, `auto`, and `force` policy.

@@ -199,6 +199,27 @@ namespace steamos_virtual_session {
     }
 
     /**
+     * @brief Remove configuration whitespace from a GPU selector.
+     *
+     * @param value Raw configuration value.
+     * @return Selector without leading or trailing whitespace.
+     */
+    std::string trim_gpu_selector(std::string_view value) {
+      const auto first {std::find_if_not(value.begin(), value.end(), [](const unsigned char character) {
+        return std::isspace(character);
+      })};
+      const auto last {std::find_if_not(
+                         value.rbegin(),
+                         value.rend(),
+                         [](const unsigned char character) {
+                           return std::isspace(character);
+                         }
+      )
+                         .base()};
+      return first >= last ? std::string {} : std::string {first, last};
+    }
+
+    /**
      * @brief Describe an AMD DRM render node from its sysfs device directory.
      */
     struct gpu_candidate_t {
@@ -210,6 +231,27 @@ namespace steamos_virtual_session {
     };
 
     /**
+     * @brief Verify that a DRM render node is a usable character device.
+     *
+     * @param render_node Candidate render node.
+     * @return True only when the current service user can open the node read/write.
+     */
+    bool accessible_render_node(const std::filesystem::path &render_node) {
+#if defined(__linux__)
+      std::error_code error;
+      if (!std::filesystem::is_character_file(std::filesystem::status(render_node, error)) || error) {
+        return false;
+      }
+      const int descriptor {::open(render_node.c_str(), O_RDWR | O_CLOEXEC)};
+      if (descriptor < 0) {
+        return false;
+      }
+      ::close(descriptor);
+#endif
+      return true;
+    }
+
+    /**
      * @brief Resolve a DRM render node to an AMD GPU descriptor.
      *
      * @param render_node Candidate `/dev/dri/renderD*` node.
@@ -219,7 +261,7 @@ namespace steamos_virtual_session {
       const auto sys_device {std::filesystem::path {"/sys/class/drm"} / render_node.filename() / "device"};
       const auto vendor {read_attribute(sys_device / "vendor")};
       const auto device {read_attribute(sys_device / "device")};
-      if (vendor != "0x1002" || device.size() != 6 || !std::filesystem::exists(render_node)) {
+      if (vendor != "0x1002" || device.size() != 6 || !accessible_render_node(render_node)) {
         return std::nullopt;
       }
       gpu_candidate_t candidate;
@@ -259,21 +301,22 @@ namespace steamos_virtual_session {
      * @return Selected GPU descriptor.
      */
     std::optional<gpu_candidate_t> select_amd_dgpu(const std::string &requested, std::string &error) {
-      if (!requested.empty() && requested.find(':') != std::string::npos && requested.find('/') == std::string::npos && requested.find('.') == std::string::npos) {
-        if (requested.rfind("1002:", 0) != 0) {
+      const auto selector {trim_gpu_selector(requested)};
+      if (!selector.empty() && selector.find(':') != std::string::npos && selector.find('/') == std::string::npos && selector.find('.') == std::string::npos) {
+        if (selector.rfind("1002:", 0) != 0) {
           error = "SteamOS virtual display requires an AMD GPU identifier";
           return std::nullopt;
         }
 #ifdef SUNSHINE_TESTS
         // Unit tests use a synthetic Gamescope PCI identifier because CI has no DRM GPU.
-        return gpu_candidate_t {"test-pci-bdf", "", "", requested, 0};
+        return gpu_candidate_t {"test-pci-bdf", "", "", selector, 0};
 #else
         error = "Configure the SteamOS GPU as a PCI BDF or DRM render node";
         return std::nullopt;
 #endif
       }
-      if (!requested.empty()) {
-        if (requested.find(':') != std::string::npos && requested.find('.') != std::string::npos) {
+      if (!selector.empty()) {
+        if (selector.find(':') != std::string::npos && selector.find('.') != std::string::npos) {
           std::error_code iterator_error;
           for (const auto &entry : std::filesystem::directory_iterator {"/dev/dri", iterator_error}) {
             const auto name {entry.path().filename().string()};
@@ -282,17 +325,40 @@ namespace steamos_virtual_session {
             }
             const auto sys_device {std::filesystem::path {"/sys/class/drm"} / name / "device"};
             std::error_code canonical_error;
-            if (std::filesystem::canonical(sys_device, canonical_error).filename() == requested) {
+            if (std::filesystem::canonical(sys_device, canonical_error).filename() == selector) {
               if (const auto candidate {amd_gpu_from_render_node(entry.path())}) {
                 return candidate;
               }
             }
           }
         }
-        const auto explicit_node {std::filesystem::path {requested}};
+        const auto explicit_node {std::filesystem::path {selector.rfind("renderD", 0) == 0 || selector.rfind("card", 0) == 0 ? "/dev/dri/" + selector : selector}};
         if (const auto candidate {amd_gpu_from_render_node(explicit_node)}) {
           return candidate;
         }
+        if (explicit_node.filename().string().rfind("card", 0) == 0) {
+          std::error_code card_error;
+          const auto card_device {std::filesystem::canonical(std::filesystem::path {"/sys/class/drm"} / explicit_node.filename() / "device", card_error)};
+          if (!card_error) {
+            std::error_code iterator_error;
+            for (const auto &entry : std::filesystem::directory_iterator {"/dev/dri", iterator_error}) {
+              if (entry.path().filename().string().rfind("renderD", 0) != 0) {
+                continue;
+              }
+              std::error_code render_error;
+              const auto render_device {std::filesystem::canonical(std::filesystem::path {"/sys/class/drm"} / entry.path().filename() / "device", render_error)};
+              if (!render_error && render_device == card_device) {
+                if (const auto candidate {amd_gpu_from_render_node(entry.path())}) {
+                  return candidate;
+                }
+              }
+            }
+          }
+        }
+        BOOST_LOG(warning) << "GPU_SELECTOR configured_value=" << selector << " normalized_input=" << explicit_node
+                           << " exists=" << std::filesystem::exists(explicit_node)
+                           << " accessible=" << accessible_render_node(explicit_node)
+                           << " failure_reason=not_accessible_amd_render_node";
         error = "Configured SteamOS game GPU is not an accessible AMD DRM render node";
         return std::nullopt;
       }

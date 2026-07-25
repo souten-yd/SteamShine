@@ -235,6 +235,18 @@ TEST_F(SteamOSVirtualSessionTest, RejectsEncoderOrCaptureOnDifferentGpu) {
   EXPECT_NE(error.find("one AMD dGPU"), std::string::npos);
 }
 
+/**
+ * @brief Verify whitespace-only configuration cannot disable automatic GPU selection.
+ */
+TEST_F(SteamOSVirtualSessionTest, TrimsGpuSelectorWhitespace) {
+  config::steamos_virtual_display.game_gpu = "  1002:9999\t";
+  rtsp_stream::launch_session_t launch {};
+  std::string error;
+
+  EXPECT_TRUE(steamos_virtual_session::prepare(launch, error));
+  EXPECT_TRUE(error.empty());
+}
+
 TEST_F(SteamOSVirtualSessionTest, FakeGamescopeReadinessAndCleanup) {
   rtsp_stream::launch_session_t launch {};
   launch.id = 42;
