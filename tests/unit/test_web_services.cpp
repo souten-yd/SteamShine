@@ -211,3 +211,16 @@ TEST(WebServicesTest, StatusSnapshotIncludesPipeWireDiagnostics) {
   EXPECT_EQ(snapshot.at("pipewire_object_serial"), 0);
   EXPECT_EQ(snapshot.at("pipewire_producer_pid"), -1);
 }
+
+/**
+ * @brief Verify resident Gamescope discovery exposes only a bounded public schema.
+ */
+TEST(WebServicesTest, GamescopeSourceDiscoveryHasBoundedSchema) {
+  web::ConfigurationService configuration;
+  const auto snapshot = configuration.gamescope_sources();
+
+  EXPECT_TRUE(snapshot.contains("available"));
+  EXPECT_TRUE(snapshot.contains("error"));
+  ASSERT_TRUE(snapshot.contains("sources"));
+  EXPECT_TRUE(snapshot.at("sources").is_array());
+}

@@ -1718,6 +1718,19 @@ namespace confighttp {
   }
 
   /**
+   * @brief Return verified resident Game Mode Gamescope candidates.
+   *
+   * @param response HTTPS response to populate.
+   * @param request Authenticated HTTPS request.
+   */
+  void steamshine_gamescope_sources(const resp_https_t &response, const req_https_t &request) {
+    if (require_steamshine_session(response, request).empty()) {
+      return;
+    }
+    send_steamshine_response(response, configuration_service.gamescope_sources());
+  }
+
+  /**
    * @brief Save the selected SteamOS virtual-display policy for the next restart.
    *
    * @param response HTTPS response to populate.
@@ -2272,6 +2285,7 @@ namespace confighttp {
     server.resource["^/api/steamshine/v1/status$"]["GET"] = steamshine_handler(steamshine_status);
     server.resource["^/api/steamshine/v1/config/virtual-display$"]["GET"] = steamshine_handler(steamshine_virtual_display_config);
     server.resource["^/api/steamshine/v1/config/virtual-display$"]["POST"] = steamshine_handler(steamshine_save_virtual_display_config);
+    server.resource["^/api/steamshine/v1/config/virtual-display/sources$"]["GET"] = steamshine_handler(steamshine_gamescope_sources);
     server.resource["^/api/steamshine/v1/session$"]["GET"] = steamshine_handler(steamshine_session);
     server.resource["^/api/steamshine/v1/pairing/pin$"]["POST"] = steamshine_handler(steamshine_pairing_pin);
     server.resource["^/api/steamshine/v1/clients$"]["GET"] = steamshine_handler(steamshine_clients);

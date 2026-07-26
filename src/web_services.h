@@ -278,6 +278,13 @@ namespace web {
     nlohmann::json snapshot() const;
 
     /**
+     * @brief Return verified resident Game Mode Gamescope candidates for explicit selection.
+     *
+     * @return Bounded candidate metadata and a non-secret discovery result.
+     */
+    nlohmann::json gamescope_sources() const;
+
+    /**
      * @brief Persist the virtual-display policy for use after the next restart.
      *
      * @param enabled Whether SteamShine virtual-display management is enabled.

@@ -5,6 +5,8 @@
 
 // standard includes
 #include <algorithm>
+#include <chrono>
+#include <cstdlib>
 #include <vector>
 
 // lib includes
@@ -16,6 +18,7 @@
 #include "file_handler.h"
 #include "httpcommon.h"
 #include "nvhttp.h"
+#include "platform/linux/gamescope_source.h"
 #include "process.h"
 #include "rtsp.h"
 #include "steamos_virtual_session.h"
@@ -221,6 +224,32 @@ namespace web {
       {"steamos_session_source", session_source},
       {"steamos_keep_session_alive", keep_session_alive},
       {"steamos_existing_gamescope_pid", existing_gamescope_pid},
+    };
+  }
+
+  nlohmann::json ConfigurationService::gamescope_sources() const {
+    const char *const inherited_runtime {std::getenv("XDG_RUNTIME_DIR")};
+    const char *const inherited_remote {std::getenv("PIPEWIRE_REMOTE")};
+    const std::string runtime {config::steamos_virtual_display.pipewire_runtime.empty() ? (inherited_runtime ? inherited_runtime : "") : config::steamos_virtual_display.pipewire_runtime};
+    const std::string remote {config::steamos_virtual_display.pipewire_remote.empty() ? (inherited_remote && *inherited_remote ? inherited_remote : "pipewire-0") : config::steamos_virtual_display.pipewire_remote};
+    std::string error;
+    const auto sources {gamescope_source::discover_gamescope_sources(runtime, remote, std::chrono::milliseconds {250}, error)};
+    nlohmann::json candidates {nlohmann::json::array()};
+    for (const auto &source : sources) {
+      if (!source.game_mode_verified || source.origin != steamos_virtual_session::session_origin_e::attached_existing) {
+        continue;
+      }
+      candidates.push_back({
+        {"pid", source.producer_pid},
+        {"start_time", source.producer_start_time},
+        {"description", source.node_description.empty() ? source.application_name : source.node_description},
+        {"render_node", source.render_node},
+      });
+    }
+    return {
+      {"available", error.empty()},
+      {"error", error},
+      {"sources", candidates},
     };
   }
 
