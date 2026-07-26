@@ -7,6 +7,7 @@
 #include <src/platform/linux/gamescope_presenter.h>
 #include <src/platform/linux/gamescope_source.h>
 #include <src/platform/linux/host_desktop_endpoint.h>
+#include <src/platform/linux/pipewire_capture.h>
 #include <src/platform/linux/steam_session.h>
 #include <src/steamos_virtual_session_core.h>
 #include <string>
@@ -322,6 +323,29 @@ namespace {
     EXPECT_TRUE(steam_session::command_references_steam("xdg-open steam://open/bigpicture"));
     EXPECT_FALSE(steam_session::command_references_steam("steamwebhelper --type=renderer"));
     EXPECT_FALSE(steam_session::command_references_steam("/usr/bin/gamescope --steamcompmgr"));
+  }
+
+  /**
+   * @brief Verify each PipeWire consumer retains a complete, independent source identity.
+   */
+  TEST(SteamOSVirtualSessionCore, ComparesPipeWireConsumerDescriptorsWithoutSharingFds) {
+    const pipewire_capture::stream_descriptor_t remote {
+      .connected_core_fd = 11,
+      .node_id = 23,
+      .object_serial = 45,
+      .producer_pid = 67,
+      .producer_start_time = 89,
+      .render_node = "/dev/dri/renderD128",
+      .source_label = "Gamescope Video/Source",
+    };
+    auto local {remote};
+    local.connected_core_fd = 12;
+    EXPECT_TRUE(pipewire_capture::has_verified_source_identity(remote));
+    EXPECT_TRUE(pipewire_capture::has_verified_source_identity(local));
+    EXPECT_TRUE(pipewire_capture::refers_to_same_source(remote, local));
+
+    local.producer_start_time++;
+    EXPECT_FALSE(pipewire_capture::refers_to_same_source(remote, local));
   }
 
   /**

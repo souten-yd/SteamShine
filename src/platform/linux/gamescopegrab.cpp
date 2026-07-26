@@ -3,6 +3,7 @@
  * @brief PipeWire capture provider for verified Gamescope sessions.
  */
 #include "gamescope_source.h"
+#include "pipewire_capture.h"
 #include "pipewire.cpp"
 #include "src/config.h"
 #include "src/logging.h"
@@ -63,9 +64,23 @@ namespace gamescope_pipewire {
       env_logical_height = height;
       offset_x = 0;
       offset_y = 0;
-      out_pipewire_fd = *stream_fd;
-      out_pipewire_node = source->node_id;
-      out_pipewire_objectserial = source->object_serial;
+      pipewire_capture::stream_descriptor_t descriptor {
+        .connected_core_fd = *stream_fd,
+        .node_id = source->node_id,
+        .object_serial = source->object_serial,
+        .producer_pid = source->producer_pid,
+        .producer_start_time = source->producer_start_time,
+        .render_node = source->render_node,
+        .source_label = source->node_description,
+      };
+      if (!pipewire_capture::has_verified_source_identity(descriptor)) {
+        BOOST_LOG(error) << "PIPEWIRE_NODE_DISCOVERY_FAILED reason=incomplete_verified_source_identity";
+        close(*stream_fd);
+        return -1;
+      }
+      out_pipewire_fd = descriptor.connected_core_fd;
+      out_pipewire_node = descriptor.node_id;
+      out_pipewire_objectserial = descriptor.object_serial;
       steamos_virtual_session::mark_gamescope_pipewire_node(source->node_id, source->object_serial, source->producer_pid);
       BOOST_LOG(info) << "CAPTURE_SOURCE source=gamescope_pipewire PIPEWIRE_NODE id=" << source->node_id << " PIPEWIRE_SERIAL serial=" << source->object_serial << " PRODUCER_PID=" << source->producer_pid << " DRM_RENDER_NODE=" << session.render_node;
       return 0;
