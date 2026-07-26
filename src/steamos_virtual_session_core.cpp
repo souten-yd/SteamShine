@@ -23,6 +23,31 @@ namespace steamos_virtual_session {
     }
   }  // namespace
 
+  std::optional<session_source_policy_e> parse_session_source_policy(const std::string_view value) {
+    if (value == "auto") {
+      return session_source_policy_e::auto_select;
+    }
+    if (value == "existing_gamescope") {
+      return session_source_policy_e::existing_gamescope;
+    }
+    if (value == "owned_private") {
+      return session_source_policy_e::owned_private;
+    }
+    return std::nullopt;
+  }
+
+  std::string_view to_string(const session_source_policy_e policy) {
+    switch (policy) {
+      case session_source_policy_e::auto_select:
+        return "auto";
+      case session_source_policy_e::existing_gamescope:
+        return "existing_gamescope";
+      case session_source_policy_e::owned_private:
+        return "owned_private";
+    }
+    return "auto";
+  }
+
   std::optional<virtual_display_mode_e> parse_virtual_display_mode(const std::string_view value) {
     if (value == "off") {
       return virtual_display_mode_e::off;

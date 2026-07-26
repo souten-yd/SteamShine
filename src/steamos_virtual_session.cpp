@@ -45,6 +45,12 @@ namespace steamos_virtual_session {
       std::mutex mutex;  ///< Serializes virtual-session state transitions.
       state_e current {state_e::Disabled};  ///< Current lifecycle state.
       std::filesystem::path runtime_directory;  ///< Runtime path uniquely owned by this process.
+      session_origin_e origin {session_origin_e::none};  ///< Origin of the selected Gamescope session.
+      bool process_owned {false};  ///< Whether SteamShine may stop the selected process group.
+      bool runtime_owned {false};  ///< Whether SteamShine may remove the selected runtime directory.
+      std::string source_description;  ///< Human-readable verified source description.
+      std::string source_executable;  ///< Verified Gamescope executable path.
+      uint64_t source_process_start_time {0};  ///< Verified Gamescope process start time.
       std::string pipewire_runtime;  ///< Host PipeWire runtime retained for owned children.
       std::string pipewire_remote;  ///< Host PipeWire remote retained for owned children.
       std::optional<uint32_t> pipewire_node_id;  ///< Verified current-core Gamescope PipeWire node ID.
@@ -216,14 +222,22 @@ namespace steamos_virtual_session {
      */
     void recover_failed_session_locked() {
 #if defined(__linux__)
-      if (manager.process_group > 0) {
+      if (manager.process_owned && manager.process_group > 0) {
         stop_owned_process_group(manager.process_group, std::chrono::seconds {config::steamos_virtual_display.shutdown_timeout_seconds});
       }
       manager.process_group = -1;
 #endif
       std::error_code error;
-      std::filesystem::remove_all(manager.runtime_directory, error);
+      if (manager.runtime_owned) {
+        std::filesystem::remove_all(manager.runtime_directory, error);
+      }
       manager.runtime_directory.clear();
+      manager.origin = session_origin_e::none;
+      manager.process_owned = false;
+      manager.runtime_owned = false;
+      manager.source_description.clear();
+      manager.source_executable.clear();
+      manager.source_process_start_time = 0;
       manager.pipewire_runtime.clear();
       manager.pipewire_remote.clear();
       manager.pipewire_node_id.reset();
@@ -824,6 +838,12 @@ namespace steamos_virtual_session {
       return false;
     }
     manager.runtime_directory = base / ("session-" + std::to_string(::getpid()) + "-" + std::to_string(launch_session.id));
+    manager.origin = session_origin_e::owned_private;
+    manager.process_owned = true;
+    manager.runtime_owned = true;
+    manager.source_description = "SteamShine-owned private Gamescope";
+    manager.source_executable = config::steamos_virtual_display.gamescope_path;
+    manager.source_process_start_time = 0;
     manager.pci_bdf = gpu->pci_bdf;
     manager.render_node = gpu->render_node;
     manager.pipewire_runtime = pipewire_runtime->string();
@@ -997,6 +1017,12 @@ namespace steamos_virtual_session {
     std::scoped_lock lock {manager.mutex};
     status_snapshot_t snapshot;
     snapshot.state = manager.current;
+    snapshot.origin = manager.origin;
+    snapshot.process_owned = manager.process_owned;
+    snapshot.runtime_owned = manager.runtime_owned;
+    snapshot.source_description = manager.source_description;
+    snapshot.source_executable = manager.source_executable;
+    snapshot.source_process_start_time = manager.source_process_start_time;
     snapshot.runtime_directory = manager.runtime_directory.string();
     snapshot.pci_bdf = manager.pci_bdf;
     snapshot.render_node = manager.render_node;
@@ -1067,7 +1093,7 @@ namespace steamos_virtual_session {
     manager.packet_tracking.store(false, std::memory_order_release);
     if (manager.current == state_e::Streaming) {
       manager.current = state_e::Ready;
-      BOOST_LOG(info) << "SteamOS virtual display retained after stream disconnect";
+      BOOST_LOG(info) << "SteamOS virtual display retained after stream disconnect origin=" << (manager.origin == session_origin_e::owned_private ? "owned_private" : "attached_existing");
     }
   }
 
@@ -1192,7 +1218,7 @@ namespace steamos_virtual_session {
   void stop() {
     std::scoped_lock lock {manager.mutex};
 #if defined(__linux__)
-    if (manager.process_group > 0) {
+    if (manager.process_owned && manager.process_group > 0) {
       manager.current = state_e::Stopping;
       manager.packet_tracking.store(false, std::memory_order_release);
       BOOST_LOG(info) << "SteamOS virtual display stopping owned Gamescope session";

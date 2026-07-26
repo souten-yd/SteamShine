@@ -11,6 +11,40 @@
 
 namespace steamos_virtual_session {
   /**
+   * @brief Identifies who owns the selected Gamescope session.
+   */
+  enum class session_origin_e {
+    none,  ///< No Gamescope source is selected.
+    owned_private,  ///< SteamShine owns the Gamescope process and its private runtime.
+    attached_existing,  ///< SteamShine only consumes a verified resident Gamescope source.
+  };
+
+  /**
+   * @brief Selects which class of Gamescope source a launch may use.
+   */
+  enum class session_source_policy_e {
+    auto_select,  ///< Prefer a verified resident source, then an owned private source.
+    existing_gamescope,  ///< Require a verified resident Gamescope source.
+    owned_private,  ///< Require a SteamShine-owned private Gamescope source.
+  };
+
+  /**
+   * @brief Parse a canonical SteamOS session-source policy value.
+   *
+   * @param value Configuration value to parse; matching is case-sensitive.
+   * @return Parsed policy, or std::nullopt when the value is unsupported.
+   */
+  std::optional<session_source_policy_e> parse_session_source_policy(std::string_view value);
+
+  /**
+   * @brief Return the canonical configuration spelling for a session-source policy.
+   *
+   * @param policy Policy to serialize.
+   * @return The lowercase configuration value.
+   */
+  std::string_view to_string(session_source_policy_e policy);
+
+  /**
    * @brief Policy governing whether SteamShine owns a virtual display.
    */
   enum class virtual_display_mode_e {

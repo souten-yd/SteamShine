@@ -16,6 +16,7 @@ add_subdirectory("${GTEST_SOURCE_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/googletest")
 
 add_library(steamos_virtual_session_core STATIC
     "${CMAKE_CURRENT_LIST_DIR}/../../src/steamos_virtual_session_core.cpp"
+    "${CMAKE_CURRENT_LIST_DIR}/../../src/platform/linux/gamescope_source.cpp"
 )
 target_include_directories(steamos_virtual_session_core PUBLIC "${CMAKE_CURRENT_LIST_DIR}/../..")
 target_compile_options(steamos_virtual_session_core PRIVATE -Wall -Wno-sign-compare)

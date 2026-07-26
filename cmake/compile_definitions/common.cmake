@@ -108,6 +108,8 @@ set(SUNSHINE_TARGET_FILES
         "${CMAKE_SOURCE_DIR}/src/steamos_virtual_session.h"
         "${CMAKE_SOURCE_DIR}/src/steamos_virtual_session_core.cpp"
         "${CMAKE_SOURCE_DIR}/src/steamos_virtual_session_core.h"
+        "${CMAKE_SOURCE_DIR}/src/platform/linux/gamescope_source.cpp"
+        "${CMAKE_SOURCE_DIR}/src/platform/linux/gamescope_source.h"
         "${CMAKE_SOURCE_DIR}/src/video.cpp"
         "${CMAKE_SOURCE_DIR}/src/video.h"
         "${CMAKE_SOURCE_DIR}/src/video_colorspace.cpp"

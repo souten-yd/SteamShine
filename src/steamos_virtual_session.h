@@ -38,6 +38,12 @@ namespace steamos_virtual_session {
    */
   struct status_snapshot_t {
     state_e state {state_e::Disabled};  ///< Current lifecycle state.
+    session_origin_e origin {session_origin_e::none};  ///< Origin of the selected Gamescope source.
+    bool process_owned {false};  ///< Whether SteamShine may signal the Gamescope process group.
+    bool runtime_owned {false};  ///< Whether SteamShine may remove the session runtime directory.
+    std::string source_description;  ///< Human-readable verified PipeWire source description.
+    std::string source_executable;  ///< Verified Gamescope executable path.
+    uint64_t source_process_start_time {0};  ///< Verified Gamescope `/proc` start time.
     std::string runtime_directory;  ///< Owned runtime directory, when active.
     std::string socket_path;  ///< Private Gamescope Wayland socket, when ready.
     std::string pci_bdf;  ///< Selected AMD PCI BDF, when available.
@@ -181,12 +187,12 @@ namespace steamos_virtual_session {
   bool encoder_render_node(std::string &render_node);
 
   /**
-   * @brief Return the verified host PipeWire endpoint and owned Gamescope PID.
+   * @brief Return the verified host PipeWire endpoint and selected Gamescope PID.
    *
    * @param runtime_directory Receives the host PipeWire runtime directory.
    * @param remote_name Receives the host PipeWire remote name.
-   * @param gamescope_pid Receives the owned Gamescope process-group leader.
-   * @return True only while an owned session can use its host PipeWire endpoint.
+   * @param gamescope_pid Receives the selected Gamescope producer PID.
+   * @return True only while an active session can use its host PipeWire endpoint.
    */
   bool gamescope_pipewire_endpoint(std::string &runtime_directory, std::string &remote_name, int &gamescope_pid);
 

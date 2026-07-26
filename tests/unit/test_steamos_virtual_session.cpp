@@ -319,6 +319,10 @@ TEST_F(SteamOSVirtualSessionTest, SeparatesPrivateWaylandAndHostPipeWireRuntimes
   EXPECT_EQ(application_pipewire_remote, "pipewire-test");
   EXPECT_GT(gamescope_pid, 0);
   const auto snapshot {steamos_virtual_session::status_snapshot()};
+  EXPECT_EQ(snapshot.origin, steamos_virtual_session::session_origin_e::owned_private);
+  EXPECT_TRUE(snapshot.process_owned);
+  EXPECT_TRUE(snapshot.runtime_owned);
+  EXPECT_EQ(snapshot.source_description, "SteamShine-owned private Gamescope");
   EXPECT_EQ(snapshot.width, 1920);
   EXPECT_EQ(snapshot.height, 1080);
   EXPECT_EQ(snapshot.fps, 60);

@@ -298,6 +298,9 @@ namespace config {
   struct steamos_virtual_display_t {
     bool enabled {false};  ///< Enable the opt-in SteamOS virtual display provider.
     steamos_virtual_session::virtual_display_mode_e mode {steamos_virtual_session::virtual_display_mode_e::auto_detect};  ///< Virtual display policy parsed once during configuration loading.
+    steamos_virtual_session::session_source_policy_e session_source {steamos_virtual_session::session_source_policy_e::auto_select};  ///< Gamescope source selection policy.
+    bool keep_session_alive {true};  ///< Retain a prepared owned session after Moonlight disconnect.
+    int existing_gamescope_pid {0};  ///< Optional administrator-selected resident Gamescope PID; zero selects automatically.
     std::string gamescope_path {"gamescope"};  ///< Gamescope executable used for owned sessions.
     std::string runtime_directory;  ///< Base directory for owned runtime state.
     std::string game_gpu;  ///< Preferred game render GPU PCI BDF or render node.
