@@ -214,6 +214,7 @@ if(WAYLAND_FOUND)
     endif()
 
     GEN_WAYLAND("${WAYLAND_PROTOCOLS_DIR}" "unstable/xdg-output" xdg-output-unstable-v1)
+    GEN_WAYLAND("${WAYLAND_PROTOCOLS_DIR}" "stable/xdg-shell" xdg-shell)
     GEN_WAYLAND("${WAYLAND_PROTOCOLS_DIR}" "unstable/linux-dmabuf" linux-dmabuf-unstable-v1)
     GEN_WAYLAND("${CMAKE_SOURCE_DIR}/third-party/wlr-protocols" "unstable" wlr-screencopy-unstable-v1)
 
