@@ -178,12 +178,12 @@ namespace steam_session {
         by_pid.emplace(record.pid, &record);
       }
     }
-    bool steam_present {};
+    bool steam_inside_target {};
+    bool steam_outside_target {};
     for (const auto &record : records) {
       if (!is_steam_family_process(record.executable_name)) {
         continue;
       }
-      steam_present = true;
       if (!record.metadata_readable) {
         return instance_location_e::unknown;
       }
@@ -191,10 +191,17 @@ namespace steam_session {
         return instance_location_e::unknown;
       }
       if (belongs_to_target(record, target, by_pid)) {
-        return instance_location_e::inside_target_gamescope;
+        steam_inside_target = true;
+      } else {
+        steam_outside_target = true;
       }
     }
-    return steam_present ? instance_location_e::outside_target_gamescope : instance_location_e::absent;
+    // An inner Steam process never makes an outer one safe.  Treat a mixed
+    // placement as outside so a caller cannot start a second singleton.
+    if (steam_outside_target) {
+      return instance_location_e::outside_target_gamescope;
+    }
+    return steam_inside_target ? instance_location_e::inside_target_gamescope : instance_location_e::absent;
   }
 
   instance_location_e classify_current_user_instance(const target_session_t &target) {

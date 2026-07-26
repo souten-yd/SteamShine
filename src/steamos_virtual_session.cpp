@@ -1255,12 +1255,36 @@ namespace steamos_virtual_session {
   }
 
   bool steam_command_allowed(const std::string_view command, std::string &error) {
-    std::scoped_lock lock {manager.mutex};
-    if (manager.origin != session_origin_e::owned_private || manager.steam_location != "outside_target_gamescope" || !steam_session::command_references_steam(command)) {
+    if (!steam_session::command_references_steam(command)) {
       return true;
     }
-    error = "Steam is already running outside the SteamShine Gamescope session; stop or migrate it before launching Steam here";
-    return false;
+    steam_session::target_session_t target;
+    {
+      std::scoped_lock lock {manager.mutex};
+      if (manager.origin == session_origin_e::none || manager.process_group <= 0) {
+        return true;
+      }
+      target = {
+        .gamescope_pid = manager.process_group,
+        .runtime_directory = manager.runtime_directory.string(),
+        .wayland_display = "gamescope-0",
+        .cgroup = steam_session::cgroup_for_process(manager.process_group),
+      };
+    }
+    const auto location {steam_session::classify_current_user_instance(target)};
+    {
+      std::scoped_lock lock {manager.mutex};
+      manager.steam_location = std::string {steam_session::to_string(location)};
+    }
+    if (location == steam_session::instance_location_e::outside_target_gamescope) {
+      error = "Steam is already running outside the SteamShine Gamescope session; stop or migrate it before launching Steam here";
+      return false;
+    }
+    if (location == steam_session::instance_location_e::unknown) {
+      error = "Steam placement could not be verified; refusing to risk a second Steam instance";
+      return false;
+    }
+    return true;
   }
 
   bool capture_socket(std::string &socket_path) {

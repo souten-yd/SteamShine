@@ -67,7 +67,7 @@ namespace steam_session {
    * The check is intentionally conservative: a Steam executable path and a
    * `steam://` URI both count as a Steam launch request. It is used only to
    * prevent creating a second Steam singleton while a verified one is outside
-   * a SteamShine-owned Gamescope session.
+   * the selected Gamescope session.
    *
    * @param command Configured application, prep, or detached command.
    * @return True when the command contains a standalone Steam reference.

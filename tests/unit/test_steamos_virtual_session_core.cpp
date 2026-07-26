@@ -318,6 +318,12 @@ namespace {
       {.pid = 501, .parent_pid = 1, .executable_name = "steam", .cgroup = shared_cgroup_target.cgroup},
     };
     EXPECT_EQ(classify_instance_location(shared_cgroup, shared_cgroup_target), instance_location_e::outside_target_gamescope);
+
+    const std::vector<process_record_t> mixed {
+      {.pid = 601, .parent_pid = 100, .executable_name = "steam"},
+      {.pid = 602, .parent_pid = 1, .executable_name = "steamwebhelper", .xdg_runtime_directory = "/run/user/1000"},
+    };
+    EXPECT_EQ(classify_instance_location(mixed, target), instance_location_e::outside_target_gamescope);
   }
 
   /**

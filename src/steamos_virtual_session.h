@@ -165,10 +165,11 @@ namespace steamos_virtual_session {
   /**
    * @brief Check whether a configured command may start or address Steam.
    *
-   * Steam commands are rejected only when a SteamShine-owned private
-   * Gamescope has verified that another Steam singleton is outside it. This
-   * avoids silently creating a second Steam instance while allowing ordinary
-   * non-Steam applications to run normally.
+   * Every Steam request rechecks the live process placement. Steam commands
+   * are rejected when an existing instance is outside the selected Gamescope
+   * or its placement cannot be verified. This avoids silently creating a
+   * second Steam instance while allowing ordinary non-Steam applications to
+   * run normally.
    *
    * @param command Configured application command.
    * @param error Human-readable rejection reason.
