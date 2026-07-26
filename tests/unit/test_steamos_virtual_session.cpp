@@ -399,6 +399,23 @@ TEST_F(SteamOSVirtualSessionTest, RetainsVirtualDisplayAcrossStreamDisconnect) {
 }
 
 /**
+ * @brief Verify an opt-out disconnect stops only the SteamShine-owned session.
+ */
+TEST_F(SteamOSVirtualSessionTest, StopsOwnedVirtualDisplayWhenRetentionIsDisabled) {
+  config::steamos_virtual_display.keep_session_alive = false;
+  rtsp_stream::launch_session_t launch {};
+  std::string error;
+
+  ASSERT_TRUE(steamos_virtual_session::prepare(launch, error)) << error;
+  steamos_virtual_session::mark_capture_ready();
+  steamos_virtual_session::mark_streaming();
+  steamos_virtual_session::mark_streaming_disconnected();
+
+  EXPECT_FALSE(steamos_virtual_session::active());
+  EXPECT_EQ(steamos_virtual_session::status_snapshot().origin, steamos_virtual_session::session_origin_e::none);
+}
+
+/**
  * @brief Verify an external host PipeWire runtime is rejected before Gamescope starts.
  */
 TEST_F(SteamOSVirtualSessionTest, RejectsHostPipeWireRuntimeOutsideLoginRuntime) {

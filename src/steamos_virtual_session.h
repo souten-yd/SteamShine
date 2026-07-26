@@ -113,16 +113,16 @@ namespace steamos_virtual_session {
   void mark_streaming();
 
   /**
-   * @brief Suspend packet accounting while retaining the owned virtual session.
+   * @brief Handle stream disconnection according to the owned-session policy.
    *
-   * A transient Moonlight disconnect must not terminate the application or its
-   * Gamescope session. A later `/resume` request calls @ref mark_streaming to
-   * attach a new stream to the retained virtual display.
+   * A transient Moonlight disconnect retains the session by default. When
+   * @c steamos_keep_session_alive is disabled, only a SteamShine-owned session
+   * is stopped; an attached Game Mode session is always left untouched.
    */
   void mark_streaming_disconnected();
 
   /**
-   * @brief Record one encoded video packet for the owned virtual session.
+   * @brief Record one encoded video packet for the active virtual session.
    *
    * This is an in-memory, lock-free counter used only for the final lifecycle
    * report. It deliberately performs no file or network I/O on the video

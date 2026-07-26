@@ -1157,12 +1157,20 @@ namespace steamos_virtual_session {
   }
 
   void mark_streaming_disconnected() {
-    std::scoped_lock lock {manager.mutex};
-    manager.stream_requested = false;
-    manager.packet_tracking.store(false, std::memory_order_release);
-    if (manager.current == state_e::Streaming) {
-      manager.current = state_e::Ready;
-      BOOST_LOG(info) << "SteamOS virtual display retained after stream disconnect origin=" << (manager.origin == session_origin_e::owned_private ? "owned_private" : "attached_existing");
+    bool stop_owned_session {};
+    {
+      std::scoped_lock lock {manager.mutex};
+      manager.stream_requested = false;
+      manager.packet_tracking.store(false, std::memory_order_release);
+      stop_owned_session = manager.origin == session_origin_e::owned_private && manager.process_owned && !config::steamos_virtual_display.keep_session_alive;
+      if (manager.current == state_e::Streaming && !stop_owned_session) {
+        manager.current = state_e::Ready;
+        BOOST_LOG(info) << "SteamOS virtual display retained after stream disconnect origin=" << (manager.origin == session_origin_e::owned_private ? "owned_private" : "attached_existing");
+      }
+    }
+    if (stop_owned_session) {
+      BOOST_LOG(info) << "SteamOS virtual display stopping owned session after stream disconnect";
+      stop();
     }
   }
 
