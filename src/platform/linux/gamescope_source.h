@@ -55,6 +55,19 @@ namespace gamescope_source {
   std::vector<gamescope_source_t> discover_gamescope_sources(const std::string &runtime_directory, std::string_view remote_name, std::chrono::milliseconds timeout, std::string &error);
 
   /**
+   * @brief Open a validated current-user host PipeWire socket for one consumer.
+   *
+   * The caller owns the returned descriptor and must transfer or close it. A
+   * descriptor is intentionally never shared between separate consumers.
+   *
+   * @param runtime_directory Host PipeWire runtime directory.
+   * @param remote_name Host PipeWire socket name.
+   * @param error Receives a stable non-secret failure reason.
+   * @return Connected descriptor, or std::nullopt when validation or connection fails.
+   */
+  std::optional<int> open_host_pipewire_socket(const std::string &runtime_directory, std::string_view remote_name, std::string &error);
+
+  /**
    * @brief Stable identity and PipeWire metadata for one Gamescope Video/Source node.
    */
   struct gamescope_source_t {

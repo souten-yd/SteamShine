@@ -2,6 +2,7 @@
  * @file src/platform/linux/gamescopegrab.cpp
  * @brief PipeWire capture provider for SteamShine-owned Gamescope sessions.
  */
+#include "gamescope_source.h"
 #include "pipewire.cpp"
 #include "src/config.h"
 #include "src/logging.h"
@@ -366,23 +367,16 @@ namespace gamescope_pipewire {
         return -1;
       }
       std::string failure;
-      auto discovery_connection {pipewire_connection_t::connect(runtime, remote, failure)};
-      if (!discovery_connection) {
-        BOOST_LOG(error) << "PIPEWIRE_NODE_DISCOVERY_FAILED reason=" << failure;
-        return -1;
-      }
-      gamescope_pipewire_registry_t registry;
-      if (!registry.connect(std::move(*discovery_connection), failure)) {
-        BOOST_LOG(error) << "PIPEWIRE_NODE_DISCOVERY_FAILED reason=" << failure;
-        return -1;
-      }
-      gamescope_node_t node;
-      if (!registry.wait_for_owned_node(gamescope_pid, std::chrono::milliseconds {config::steamos_virtual_display.pipewire_node_timeout_milliseconds}, node, failure)) {
+      const auto sources {gamescope_source::discover_gamescope_sources(runtime, remote, std::chrono::milliseconds {config::steamos_virtual_display.pipewire_node_timeout_milliseconds}, failure)};
+      const auto source {std::find_if(sources.begin(), sources.end(), [gamescope_pid](const gamescope_source::gamescope_source_t &candidate) {
+        return candidate.producer_pid == gamescope_pid && gamescope_source::source_identity_is_current(candidate);
+      })};
+      if (source == sources.end()) {
         BOOST_LOG(error) << "PIPEWIRE_NODE_DISCOVERY_FAILED reason=" << failure << " gamescope_pid=" << gamescope_pid;
         return -1;
       }
-      auto stream_connection {pipewire_connection_t::connect(runtime, remote, failure)};
-      if (!stream_connection) {
+      const auto stream_fd {gamescope_source::open_host_pipewire_socket(runtime, remote, failure)};
+      if (!stream_fd) {
         BOOST_LOG(error) << "PIPEWIRE_STREAM_CONNECT_FAILED reason=" << failure;
         return -1;
       }
@@ -401,11 +395,11 @@ namespace gamescope_pipewire {
       env_logical_height = height;
       offset_x = 0;
       offset_y = 0;
-      out_pipewire_fd = stream_connection->release();
-      out_pipewire_node = node.id;
-      out_pipewire_objectserial = node.object_serial;
-      steamos_virtual_session::mark_gamescope_pipewire_node(node.id, node.object_serial, node.producer_pid);
-      BOOST_LOG(info) << "CAPTURE_SOURCE source=gamescope_pipewire PIPEWIRE_NODE id=" << node.id << " PIPEWIRE_SERIAL serial=" << node.object_serial << " PRODUCER_PID=" << node.producer_pid << " DRM_RENDER_NODE=" << session.render_node;
+      out_pipewire_fd = *stream_fd;
+      out_pipewire_node = source->node_id;
+      out_pipewire_objectserial = source->object_serial;
+      steamos_virtual_session::mark_gamescope_pipewire_node(source->node_id, source->object_serial, source->producer_pid);
+      BOOST_LOG(info) << "CAPTURE_SOURCE source=gamescope_pipewire PIPEWIRE_NODE id=" << source->node_id << " PIPEWIRE_SERIAL serial=" << source->object_serial << " PRODUCER_PID=" << source->producer_pid << " DRM_RENDER_NODE=" << session.render_node;
       return 0;
     }
 

@@ -301,7 +301,16 @@ namespace gamescope_source {
        * @return Verified descriptor list.
        */
       std::vector<gamescope_source_t> snapshot(const std::chrono::milliseconds timeout) {
-        std::this_thread::sleep_for(timeout);
+        const auto deadline {std::chrono::steady_clock::now() + timeout};
+        while (std::chrono::steady_clock::now() < deadline) {
+          {
+            std::scoped_lock lock {mutex_};
+            if (!sources_.empty() && !clients_.empty()) {
+              break;
+            }
+          }
+          std::this_thread::sleep_for(std::chrono::milliseconds {25});
+        }
         std::scoped_lock lock {mutex_};
         std::vector<gamescope_source_t> result;
         for (auto source : sources_) {
@@ -467,6 +476,18 @@ namespace gamescope_source {
     (void) timeout;
     error = "gamescope_source_pipewire_unavailable";
     return {};
+#endif
+  }
+
+  std::optional<int> open_host_pipewire_socket(const std::string &runtime_directory, const std::string_view remote_name, std::string &error) {
+#if defined(SUNSHINE_BUILD_PIPEWIRE)
+    auto connection {pipewire_connection_t::connect(runtime_directory, remote_name, error)};
+    return connection ? std::optional<int> {connection->release()} : std::nullopt;
+#else
+    (void) runtime_directory;
+    (void) remote_name;
+    error = "gamescope_source_pipewire_unavailable";
+    return std::nullopt;
 #endif
   }
 
