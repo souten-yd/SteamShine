@@ -267,6 +267,8 @@ if(PIPEWIRE_FOUND)
             "${CMAKE_SOURCE_DIR}/src/platform/linux/pipewire_capture.cpp")
     list(APPEND PLATFORM_TARGET_FILES
             "${CMAKE_SOURCE_DIR}/src/platform/linux/gamescopegrab.cpp")
+    list(APPEND PLATFORM_TARGET_FILES
+            "${CMAKE_SOURCE_DIR}/src/platform/linux/gamescope_presenter_pipewire.cpp")
 endif()
 
 # XDG portal
