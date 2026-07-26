@@ -17,12 +17,23 @@ owned Gamescope -> host PipeWire Video/Source node -> SteamShine PipeWire
 consumer -> DMA-BUF -> Vulkan Video encoder -> Moonlight
 ```
 
-## Scope
+## Implementation status
 
-This document records the design before implementation.  The first sprint is
-limited to discovering and verifying the PipeWire Video/Source node published
-by the owned Gamescope process.  It does not claim frame capture, DMA-BUF
-import, encoding, or Moonlight video success.
+The original first sprint described here is implemented. SteamShine discovers
+the `Video/Source` node published by owned Gamescope, joins it to the PipeWire
+Client PID/UID, verifies the producer process identity and start time, and
+opens a dedicated PipeWire core connection for capture. The capture consumer
+requires DMA-BUF and feeds the Vulkan Video encoder without a CPU frame
+readback.
+
+On the SteamOS RX 9070 XT baseline this route produced positive captured-frame,
+encoded-packet, encoded-byte, and IDR counters, and Moonlight video was
+observed. Those observations remain historical acceptance evidence, not a
+claim that every subsequent branch is accepted. In particular, the current
+branch is being revalidated after fixes for PipeWire registry ordering, absent
+Gamescope render-node metadata, and capability-restricted `/proc/<pid>/exe`
+access. Local presentation and PipeWire two-consumer integration are separate
+remaining work.
 
 ## Endpoint separation
 
