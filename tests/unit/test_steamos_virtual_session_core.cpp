@@ -43,11 +43,13 @@ namespace {
    */
   TEST(SteamOSVirtualSessionCore, ParsesSessionSourcePolicies) {
     using steamos_virtual_session::parse_session_source_policy;
+    using steamos_virtual_session::session_origin_e;
     using steamos_virtual_session::session_source_policy_e;
 
     EXPECT_EQ(parse_session_source_policy("auto"), session_source_policy_e::auto_select);
     EXPECT_EQ(parse_session_source_policy("existing_gamescope"), session_source_policy_e::existing_gamescope);
     EXPECT_EQ(parse_session_source_policy("owned_private"), session_source_policy_e::owned_private);
+    EXPECT_EQ(steamos_virtual_session::to_string(session_origin_e::attached_existing), "attached_existing");
     EXPECT_FALSE(parse_session_source_policy("existing").has_value());
     EXPECT_FALSE(parse_session_source_policy("AUTO").has_value());
   }

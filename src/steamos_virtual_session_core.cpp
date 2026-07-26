@@ -23,6 +23,18 @@ namespace steamos_virtual_session {
     }
   }  // namespace
 
+  std::string_view to_string(const session_origin_e origin) {
+    switch (origin) {
+      case session_origin_e::none:
+        return "none";
+      case session_origin_e::owned_private:
+        return "owned_private";
+      case session_origin_e::attached_existing:
+        return "attached_existing";
+    }
+    return "none";
+  }
+
   std::optional<session_source_policy_e> parse_session_source_policy(const std::string_view value) {
     if (value == "auto") {
       return session_source_policy_e::auto_select;

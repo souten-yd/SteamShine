@@ -20,6 +20,14 @@ namespace steamos_virtual_session {
   };
 
   /**
+   * @brief Return the stable status spelling for a Gamescope session origin.
+   *
+   * @param origin Ownership origin to serialize.
+   * @return The lowercase status value.
+   */
+  std::string_view to_string(session_origin_e origin);
+
+  /**
    * @brief Selects which class of Gamescope source a launch may use.
    */
   enum class session_source_policy_e {
