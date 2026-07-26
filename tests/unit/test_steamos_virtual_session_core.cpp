@@ -4,6 +4,7 @@
  */
 #include <gtest/gtest.h>
 #include <src/platform/linux/gamescope_source.h>
+#include <src/platform/linux/steam_session.h>
 #include <src/steamos_virtual_session_core.h>
 #include <string>
 #include <unistd.h>
@@ -213,5 +214,44 @@ namespace {
     source.producer_start_time = identity->start_time;
     source.executable = identity->executable.string();
     EXPECT_FALSE(gamescope_source::source_identity_is_current(source));
+  }
+
+  /**
+   * @brief Verify Steam singleton placement uses target membership rather than a name alone.
+   */
+  TEST(SteamOSVirtualSessionCore, ClassifiesSteamInstanceLocation) {
+    using steam_session::classify_instance_location;
+    using steam_session::instance_location_e;
+    using steam_session::process_record_t;
+    using steam_session::target_session_t;
+
+    const target_session_t target {
+      .gamescope_pid = 100,
+      .runtime_directory = "/run/user/1000/steamshine/session-1",
+      .wayland_display = "gamescope-0",
+      .cgroup = "user.slice/gamescope-session.scope",
+    };
+    EXPECT_EQ(classify_instance_location({}, target), instance_location_e::absent);
+
+    const std::vector<process_record_t> inside {
+      {.pid = 100, .parent_pid = 1, .executable_name = "gamescope"},
+      {.pid = 101, .parent_pid = 100, .executable_name = "steam"},
+    };
+    EXPECT_EQ(classify_instance_location(inside, target), instance_location_e::inside_target_gamescope);
+
+    const std::vector<process_record_t> outside {
+      {.pid = 201, .parent_pid = 1, .executable_name = "steam", .xdg_runtime_directory = "/run/user/1000", .wayland_display = "gamescope-0"},
+    };
+    EXPECT_EQ(classify_instance_location(outside, target), instance_location_e::outside_target_gamescope);
+
+    const std::vector<process_record_t> unknown {
+      {.pid = 301, .parent_pid = 1, .executable_name = "steam", .metadata_readable = false},
+    };
+    EXPECT_EQ(classify_instance_location(unknown, target), instance_location_e::unknown);
+
+    const std::vector<process_record_t> cgroup_inside {
+      {.pid = 401, .parent_pid = 1, .executable_name = "steamwebhelper", .cgroup = target.cgroup},
+    };
+    EXPECT_EQ(classify_instance_location(cgroup_inside, target), instance_location_e::inside_target_gamescope);
   }
 }  // namespace

@@ -44,6 +44,7 @@ namespace steamos_virtual_session {
     std::string source_description;  ///< Human-readable verified PipeWire source description.
     std::string source_executable;  ///< Verified Gamescope executable path.
     uint64_t source_process_start_time {0};  ///< Verified Gamescope `/proc` start time.
+    std::string steam_location;  ///< Steam singleton location relative to the selected Gamescope.
     std::string runtime_directory;  ///< Owned runtime directory, when active.
     std::string socket_path;  ///< Private Gamescope Wayland socket, when ready.
     std::string pci_bdf;  ///< Selected AMD PCI BDF, when available.

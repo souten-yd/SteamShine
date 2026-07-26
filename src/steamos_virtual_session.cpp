@@ -7,6 +7,7 @@
 #include "config.h"
 #include "logging.h"
 #include "platform/linux/gamescope_source.h"
+#include "platform/linux/steam_session.h"
 #include "rtsp.h"
 
 #include <algorithm>
@@ -52,6 +53,7 @@ namespace steamos_virtual_session {
       std::string source_description;  ///< Human-readable verified source description.
       std::string source_executable;  ///< Verified Gamescope executable path.
       uint64_t source_process_start_time {0};  ///< Verified Gamescope process start time.
+      std::string steam_location {"unknown"};  ///< Steam singleton location relative to the selected Gamescope.
       std::string pipewire_runtime;  ///< Host PipeWire runtime retained for owned children.
       std::string pipewire_remote;  ///< Host PipeWire remote retained for owned children.
       std::optional<uint32_t> pipewire_node_id;  ///< Verified current-core Gamescope PipeWire node ID.
@@ -239,6 +241,7 @@ namespace steamos_virtual_session {
       manager.source_description.clear();
       manager.source_executable.clear();
       manager.source_process_start_time = 0;
+      manager.steam_location = "unknown";
       manager.pipewire_runtime.clear();
       manager.pipewire_remote.clear();
       manager.pipewire_node_id.reset();
@@ -869,6 +872,10 @@ namespace steamos_virtual_session {
         manager.source_description = selected->node_description.empty() ? selected->application_name : selected->node_description;
         manager.source_executable = selected->executable;
         manager.source_process_start_time = selected->producer_start_time;
+        manager.steam_location = std::string {steam_session::to_string(steam_session::classify_current_user_instance({
+          .gamescope_pid = selected->producer_pid,
+          .cgroup = steam_session::cgroup_for_process(selected->producer_pid),
+        }))};
         manager.packet_tracking.store(false, std::memory_order_release);
         manager.encoded_packets.store(0, std::memory_order_relaxed);
         manager.encoded_bytes.store(0, std::memory_order_relaxed);
@@ -878,7 +885,7 @@ namespace steamos_virtual_session {
         manager.process_group = selected->producer_pid;
   #endif
         manager.current = state_e::WaitingForCapture;
-        BOOST_LOG(info) << "GAMESCOPE_SOURCE_ATTACHED origin=attached_existing pid=" << selected->producer_pid << " start_time=" << selected->producer_start_time << " node_id=" << selected->node_id << " object_serial=" << selected->object_serial << " render_node=" << selected->render_node;
+        BOOST_LOG(info) << "GAMESCOPE_SOURCE_ATTACHED origin=attached_existing pid=" << selected->producer_pid << " start_time=" << selected->producer_start_time << " node_id=" << selected->node_id << " object_serial=" << selected->object_serial << " render_node=" << selected->render_node << " steam_location=" << manager.steam_location;
         return true;
       }
       BOOST_LOG(info) << "GAMESCOPE_SOURCE_UNAVAILABLE policy=" << to_string(config::steamos_virtual_display.session_source) << " reason=" << (discovery_error.empty() ? "selection_failed" : discovery_error);
@@ -989,6 +996,12 @@ namespace steamos_virtual_session {
     if (const auto identity {gamescope_source::read_process_identity(child)}) {
       manager.source_process_start_time = identity->start_time;
       manager.source_executable = identity->executable.string();
+      manager.steam_location = std::string {steam_session::to_string(steam_session::classify_current_user_instance({
+        .gamescope_pid = child,
+        .runtime_directory = manager.runtime_directory.string(),
+        .wayland_display = "gamescope-0",
+        .cgroup = steam_session::cgroup_for_process(child),
+      }))};
     }
     {
       std::ofstream pid_file {manager.runtime_directory / gamescope_pid_name.data(), std::ios::trunc};
@@ -1078,6 +1091,7 @@ namespace steamos_virtual_session {
     snapshot.source_description = manager.source_description;
     snapshot.source_executable = manager.source_executable;
     snapshot.source_process_start_time = manager.source_process_start_time;
+    snapshot.steam_location = manager.steam_location;
     snapshot.runtime_directory = manager.runtime_directory.string();
     snapshot.pci_bdf = manager.pci_bdf;
     snapshot.render_node = manager.render_node;
