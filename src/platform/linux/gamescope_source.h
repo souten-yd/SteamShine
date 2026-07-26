@@ -8,11 +8,40 @@
 
 #include <cstdint>
 #include <expected>
+#include <filesystem>
 #include <optional>
 #include <string>
 #include <vector>
 
 namespace gamescope_source {
+  struct gamescope_source_t;
+
+  /**
+   * @brief Immutable process identity used to detect PID reuse.
+   */
+  struct process_identity_t {
+    int pid {-1};  ///< Process identifier observed from PipeWire or `/proc`.
+    int uid {-1};  ///< Owning user ID from `/proc/<pid>` metadata.
+    uint64_t start_time {0};  ///< Field 22 from `/proc/<pid>/stat`.
+    std::filesystem::path executable;  ///< Canonical `/proc/<pid>/exe` target.
+  };
+
+  /**
+   * @brief Read a process identity without following a PID across reuse.
+   *
+   * @param pid Process ID to inspect.
+   * @return Current process identity, or std::nullopt when it cannot be read safely.
+   */
+  std::optional<process_identity_t> read_process_identity(int pid);
+
+  /**
+   * @brief Verify that a source still identifies the originally discovered Gamescope process.
+   *
+   * @param source Source descriptor to validate against current `/proc` state.
+   * @return True only when PID, UID, start time, and executable still match Gamescope.
+   */
+  bool source_identity_is_current(const gamescope_source_t &source);
+
   /**
    * @brief Stable identity and PipeWire metadata for one Gamescope Video/Source node.
    */

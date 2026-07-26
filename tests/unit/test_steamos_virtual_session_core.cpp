@@ -6,6 +6,7 @@
 #include <src/platform/linux/gamescope_source.h>
 #include <src/steamos_virtual_session_core.h>
 #include <string>
+#include <unistd.h>
 #include <vector>
 
 namespace {
@@ -194,5 +195,23 @@ namespace {
     const auto not_game_mode {gamescope_source::select_gamescope_source({source}, {})};
     EXPECT_FALSE(not_game_mode.has_value());
     EXPECT_EQ(not_game_mode.error(), gamescope_source::source_error_e::unavailable);
+  }
+
+  /**
+   * @brief Verify process identity records a live PID and rejects a non-Gamescope executable.
+   */
+  TEST(SteamOSVirtualSessionCore, ReadsProcessIdentityWithoutTrustingPidAlone) {
+    const auto identity {gamescope_source::read_process_identity(::getpid())};
+    ASSERT_TRUE(identity.has_value());
+    EXPECT_EQ(identity->pid, ::getpid());
+    EXPECT_GE(identity->uid, 0);
+    EXPECT_GT(identity->start_time, 0U);
+    EXPECT_FALSE(identity->executable.empty());
+
+    auto source {verified_source(steamos_virtual_session::session_origin_e::attached_existing, ::getpid())};
+    source.producer_uid = identity->uid;
+    source.producer_start_time = identity->start_time;
+    source.executable = identity->executable.string();
+    EXPECT_FALSE(gamescope_source::source_identity_is_current(source));
   }
 }  // namespace

@@ -323,6 +323,7 @@ TEST_F(SteamOSVirtualSessionTest, SeparatesPrivateWaylandAndHostPipeWireRuntimes
   EXPECT_TRUE(snapshot.process_owned);
   EXPECT_TRUE(snapshot.runtime_owned);
   EXPECT_EQ(snapshot.source_description, "SteamShine-owned private Gamescope");
+  EXPECT_GT(snapshot.source_process_start_time, 0U);
   EXPECT_EQ(snapshot.width, 1920);
   EXPECT_EQ(snapshot.height, 1080);
   EXPECT_EQ(snapshot.fps, 60);

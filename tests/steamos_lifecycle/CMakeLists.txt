@@ -17,6 +17,7 @@ find_package(OpenSSL REQUIRED)
 add_library(steamos_virtual_session_lifecycle STATIC
     "${CMAKE_CURRENT_LIST_DIR}/../../src/steamos_virtual_session.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/../../src/steamos_virtual_session_core.cpp"
+    "${CMAKE_CURRENT_LIST_DIR}/../../src/platform/linux/gamescope_source.cpp"
     "stubs.cpp"
 )
 target_include_directories(steamos_virtual_session_lifecycle PUBLIC "${CMAKE_CURRENT_LIST_DIR}/../..")

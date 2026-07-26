@@ -6,6 +6,7 @@
 
 #include "config.h"
 #include "logging.h"
+#include "platform/linux/gamescope_source.h"
 #include "rtsp.h"
 
 #include <algorithm>
@@ -935,6 +936,10 @@ namespace steamos_virtual_session {
       return false;
     }
     manager.process_group = child;
+    if (const auto identity {gamescope_source::read_process_identity(child)}) {
+      manager.source_process_start_time = identity->start_time;
+      manager.source_executable = identity->executable.string();
+    }
     {
       std::ofstream pid_file {manager.runtime_directory / gamescope_pid_name.data(), std::ios::trunc};
       pid_file << child << '\n';
