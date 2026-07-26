@@ -19,10 +19,11 @@ if [[ -n "${COMMAND_PATH:-}" ]]; then
 fi
 
 write_summary() {
-  local result="$1" capture_event=false streaming_event=false cleanup_event=false metrics packets bytes idr captured_frames
+  local result="$1" capture_event=false streaming_event=false cleanup_event=false retained_event=false metrics packets bytes idr captured_frames
   grep -Rqs 'SteamOS virtual display capture attached' "${report_dir}"/service-*.log 2>/dev/null && capture_event=true
   grep -Rqs 'SteamOS virtual display streaming started' "${report_dir}"/service-*.log 2>/dev/null && streaming_event=true
   grep -Rqs 'SteamOS virtual display stopping owned Gamescope session' "${report_dir}"/service-*.log 2>/dev/null && cleanup_event=true
+  grep -q '^owned_session_evidence=disconnected-' "${report}" 2>/dev/null && retained_event=true
   metrics="$(grep -Rh 'SteamOS virtual display encoded packets=' "${report_dir}"/service-*.log 2>/dev/null | tail -n 1 || true)"
   packets="$(sed -n 's/.*encoded packets=\([0-9][0-9]*\).*/\1/p' <<<"${metrics}")"
   bytes="$(sed -n 's/.* bytes=\([0-9][0-9]*\).*/\1/p' <<<"${metrics}")"
@@ -40,21 +41,22 @@ write_summary() {
   "connect_disconnect_cycles": ${completed_attempts},
   "capture_attached_evidence": ${capture_event},
   "streaming_started_evidence": ${streaming_event},
+  "disconnect_retains_owned_session_evidence": ${retained_event},
   "cleanup_started_evidence": ${cleanup_event},
   "encoded_packet_count": ${packets},
   "encoded_bytes": ${bytes},
   "idr_frame_count": ${idr},
   "captured_frame_count": ${captured_frames},
-  "note": "Frame and packet counters are emitted once during owned-session cleanup; null means no completed live stream was observed."
+  "note": "Disconnect retains the owned virtual session for resume. Frame and packet counters are emitted once during explicit owned-session cleanup; null means no completed live stream was observed."
 }
 EOF
 }
 trap 'result=$?; write_summary "$( ((result == 0)) && printf pass || printf fail )"' EXIT
 
-# Verify that a completed owned virtual session emitted actual GameStream
-# packet evidence. The counters are produced in the stream send path and
-# written once when the owned session stops, so a ready Wayland socket alone
-# can never satisfy the hardware acceptance test. $1 is the post-disconnect
+# Verify that an explicitly stopped owned virtual session emitted actual
+# GameStream packet evidence. The counters are produced in the stream send
+# path and written once when the owned session stops, so a ready Wayland socket
+# alone can never satisfy the hardware acceptance test. $1 is the post-stop
 # journal label. Returns zero only when packets, bytes, and an IDR are present.
 require_encoded_stream_evidence() {
   local label="$1" journal metrics packets bytes idr captured_frames
@@ -172,8 +174,8 @@ require_owned_virtual_session_evidence() {
 }
 
 # The hook is intentionally inert in normal installations. Shell integration
-# tests set both variables to model an owned socket appearing at connect time
-# and disappearing at disconnect time without a GPU or Gamescope daemon.
+# tests set both variables to model an owned socket appearing at connect time,
+# retained across disconnects, and disappearing only at explicit stop time.
 run_test_event_hook() {
   local event="$1"
   [[ "${STEAMSHINE_TEST_MODE:-}" == 1 && -n "${STEAMSHINE_TEST_EVENT_HOOK:-}" ]] || return 0
@@ -253,15 +255,20 @@ for attempt in $(seq 1 10); do
     wait "${latency_process}"
     wait "${writes_process}"
   fi
-  echo "Attempt ${attempt}: disconnect Moonlight now, then press Enter after cleanup."
+  echo "Attempt ${attempt}: disconnect Moonlight now, then press Enter after the client has disconnected."
   read -r
   run_test_event_hook "disconnected-${attempt}"
   collect "disconnected-${attempt}"
-  require_encoded_stream_evidence "disconnected-${attempt}"
-  if owned_gamescope_processes | grep -q .; then echo "FAIL: owned Gamescope remains" | tee -a "${report}"; exit 1; fi
-  if owned_session_directories | grep -q .; then echo "FAIL: owned runtime session remains" | tee -a "${report}"; exit 1; fi
+  require_owned_virtual_session_evidence "disconnected-${attempt}"
   completed_attempts="${attempt}"
 done
+echo 'After confirming the final disconnect, explicitly stop SteamShine (or cancel the app) now. Press Enter once the owned Gamescope session has been removed.'
+read -r
+run_test_event_hook stopped
+collect stopped
+require_encoded_stream_evidence stopped
+if owned_gamescope_processes | grep -q .; then echo "FAIL: owned Gamescope remains after explicit stop" | tee -a "${report}"; exit 1; fi
+if owned_session_directories | grep -q .; then echo "FAIL: owned runtime session remains after explicit stop" | tee -a "${report}"; exit 1; fi
 for capability in video audio keyboard mouse gamepad; do
   read -r -p "Did ${capability} work during the acceptance cycles? [y/N] " answer
   if [[ ! "${answer}" =~ ^[Yy]$ ]]; then
@@ -269,4 +276,4 @@ for capability in video audio keyboard mouse gamepad; do
     exit 1
   fi
 done
-echo "PASS: ten operator-verified connect/disconnect cycles completed" | tee -a "${report}"
+echo "PASS: ten operator-verified connect/disconnect cycles retained one owned session and explicit stop cleaned it up" | tee -a "${report}"

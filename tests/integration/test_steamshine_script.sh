@@ -212,8 +212,8 @@ EOF
 chmod 755 "${test_root}/hardware-bin/pgrep"
 cat >"${test_root}/hardware-bin/journalctl" <<'EOF'
 #!/usr/bin/env bash
-# A completed owned session must leave all three event classes in the user
-# journal.  Repeating this bounded fixture models each acceptance cycle.
+# An explicitly stopped owned session leaves all three event classes in the
+# user journal. Repeating this bounded fixture models the final cleanup.
 printf '%s\n' 'SteamOS virtual display capture attached'
 printf '%s\n' 'SteamOS virtual display streaming started'
 printf '%s\n' 'SteamOS virtual display stopping owned Gamescope session'
@@ -266,7 +266,8 @@ if [[ "${event}" == connected-* ]]; then
   mkdir -p "${session}" "${proc_root}/101"
   printf '%s\n' 'steamshine-steamos-virtual-session-v1' >"${session}/steamshine-owner"
   printf '101\n' >"${session}/gamescope.pid"
-  python3 - "${session}/gamescope-0" <<'PY' &
+  if [[ ! -S "${session}/gamescope-0" ]]; then
+    python3 - "${session}/gamescope-0" <<'PY' &
 import signal
 import socket
 import sys
@@ -276,16 +277,17 @@ sock.bind(path)
 sock.listen()
 signal.pause()
 PY
-  echo "$!" >"${session}/socket.pid"
+    echo "$!" >"${session}/socket.pid"
+  fi
   for _ in $(seq 1 20); do [[ -S "${session}/gamescope-0" ]] && break; sleep 0.01; done
   printf 'XDG_RUNTIME_DIR=%s\0' "${session}" >"${proc_root}/101/environ"
-else
+elif [[ "${event}" == stopped ]]; then
   if [[ -r "${session}/socket.pid" ]]; then kill "$(<"${session}/socket.pid")" 2>/dev/null || true; fi
   rm -rf -- "${session}" "${proc_root}/101"
 fi
 EOF
 chmod 755 "${test_root}/hardware-bin/event-hook"
-for _ in $(seq 1 20); do printf '\n'; done >"${acceptance_input}"
+for _ in $(seq 1 21); do printf '\n'; done >"${acceptance_input}"
 for _ in video audio keyboard mouse gamepad; do printf 'y\n'; done >>"${acceptance_input}"
 HOME="${test_root}/home" XDG_RUNTIME_DIR="${test_root}/home/run" PATH="${test_root}/hardware-bin:${PATH}" \
   STEAMSHINE_BINARY="${test_root}/hardware-bin/steamshine" STEAMSHINE_HARDWARE_REPORT_DIR="${hardware_acceptance_report}" \
@@ -293,6 +295,8 @@ HOME="${test_root}/home" XDG_RUNTIME_DIR="${test_root}/home/run" PATH="${test_ro
   "${root_dir}/scripts/test-steamos-virtual-display.sh" <"${acceptance_input}"
 grep -Fq '"result": "pass"' "${hardware_acceptance_report}/hardware-report.json"
 grep -Fq '"connect_disconnect_cycles": 10' "${hardware_acceptance_report}/hardware-report.json"
-test "$(wc -l <"${hardware_acceptance_report}/encoded-stream-evidence.tsv")" -eq 10
+test "$(wc -l <"${hardware_acceptance_report}/encoded-stream-evidence.tsv")" -eq 1
 grep -Fq '"captured_frame_count": 60' "${hardware_acceptance_report}/hardware-report.json"
 test "$(grep -c '^owned_session_evidence=connected-' "${hardware_acceptance_report}/virtual-display.log")" -eq 10
+test "$(grep -c '^owned_session_evidence=disconnected-' "${hardware_acceptance_report}/virtual-display.log")" -eq 10
+grep -Fq '"disconnect_retains_owned_session_evidence": true' "${hardware_acceptance_report}/hardware-report.json"
