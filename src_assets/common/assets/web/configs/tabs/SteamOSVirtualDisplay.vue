@@ -33,6 +33,11 @@ const config = ref(props.config)
       <div class="form-text">Disconnect preserves the owned session for reconnect. Explicit stop destroys only SteamShine-owned resources.</div>
     </div>
     <div class="mb-3">
+      <label class="form-label" for="steamos_existing_gamescope_pid">Existing Gamescope PID</label>
+      <input id="steamos_existing_gamescope_pid" v-model="config.steamos_existing_gamescope_pid" class="form-control" type="number" min="0" step="1" />
+      <div class="form-text">Use 0 for automatic selection. A nonzero PID must be the uniquely verified current-user Game Mode Gamescope.</div>
+    </div>
+    <div class="mb-3">
       <label class="form-label" for="steamos_virtual_display_mode">Virtual Display Mode</label>
       <select id="steamos_virtual_display_mode" class="form-select" v-model="config.steamos_virtual_display_mode">
         <option value="off">Off</option>

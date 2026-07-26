@@ -284,9 +284,10 @@ namespace web {
      * @param mode Requested canonical mode: off, auto, or force.
      * @param session_source Requested Gamescope source: auto, existing_gamescope, or owned_private.
      * @param keep_session_alive Whether an owned session remains available after disconnect.
+     * @param existing_gamescope_pid Optional current-user resident Gamescope PID; zero selects automatically.
      * @return Non-secret result describing validation or persistence outcome.
      */
-    service_result_t save_virtual_display(bool enabled, std::string_view mode, std::string_view session_source, bool keep_session_alive) const;
+    service_result_t save_virtual_display(bool enabled, std::string_view mode, std::string_view session_source, bool keep_session_alive, int existing_gamescope_pid) const;
   };
 
   /**
