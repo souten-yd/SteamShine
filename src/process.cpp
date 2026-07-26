@@ -167,6 +167,23 @@ namespace proc {
     _app_prep_begin = std::begin(_app.prep_cmds);
     _app_prep_it = _app_prep_begin;
 
+    std::string steam_command_error;
+    const auto steam_command_is_allowed {[&steam_command_error](const std::string &command) {
+      return steamos_virtual_session::steam_command_allowed(command, steam_command_error);
+    }};
+    bool all_steam_commands_allowed {steam_command_is_allowed(_app.cmd)};
+    for (const auto &command : _app.detached) {
+      all_steam_commands_allowed = all_steam_commands_allowed && steam_command_is_allowed(command);
+    }
+    for (const auto &command : _app.prep_cmds) {
+      all_steam_commands_allowed = all_steam_commands_allowed && steam_command_is_allowed(command.do_cmd) && steam_command_is_allowed(command.undo_cmd);
+    }
+    if (!all_steam_commands_allowed) {
+      BOOST_LOG(error) << "Refusing configured Steam launch: " << steam_command_error;
+      _app_id = -1;
+      return 503;
+    }
+
     // Add Stream-specific environment variables
     _env["SUNSHINE_APP_ID"] = std::to_string(_app_id);
     _env["SUNSHINE_APP_NAME"] = _app.name;

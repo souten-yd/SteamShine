@@ -62,6 +62,19 @@ namespace steam_session {
   instance_location_e classify_current_user_instance(const target_session_t &target);
 
   /**
+   * @brief Determine whether a shell command can start or address Steam.
+   *
+   * The check is intentionally conservative: a Steam executable path and a
+   * `steam://` URI both count as a Steam launch request. It is used only to
+   * prevent creating a second Steam singleton while a verified one is outside
+   * a SteamShine-owned Gamescope session.
+   *
+   * @param command Configured application, prep, or detached command.
+   * @return True when the command contains a standalone Steam reference.
+   */
+  bool command_references_steam(std::string_view command);
+
+  /**
    * @brief Read the cgroup membership of one process without invoking external tools.
    *
    * @param pid Process ID to inspect.

@@ -162,6 +162,20 @@ namespace steamos_virtual_session {
   bool application_environment(std::string &runtime_directory, std::string &wayland_display, std::string &pipewire_runtime, std::string &pipewire_remote, std::string &pulse_runtime);
 
   /**
+   * @brief Check whether a configured command may start or address Steam.
+   *
+   * Steam commands are rejected only when a SteamShine-owned private
+   * Gamescope has verified that another Steam singleton is outside it. This
+   * avoids silently creating a second Steam instance while allowing ordinary
+   * non-Steam applications to run normally.
+   *
+   * @param command Configured application command.
+   * @param error Human-readable rejection reason.
+   * @return True when the command is safe to execute.
+   */
+  bool steam_command_allowed(std::string_view command, std::string &error);
+
+  /**
    * @brief Return the absolute path to the owned Wayland socket for capture.
    *
    * Capture backends use this path to create their own socket connection rather

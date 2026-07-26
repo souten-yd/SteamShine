@@ -302,6 +302,26 @@ namespace {
       {.pid = 401, .parent_pid = 1, .executable_name = "steamwebhelper", .cgroup = target.cgroup},
     };
     EXPECT_EQ(classify_instance_location(cgroup_inside, target), instance_location_e::inside_target_gamescope);
+
+    const target_session_t shared_cgroup_target {
+      .gamescope_pid = 100,
+      .cgroup = "user.slice/user-1000.slice/user@1000.service/app.slice",
+    };
+    const std::vector<process_record_t> shared_cgroup {
+      {.pid = 501, .parent_pid = 1, .executable_name = "steam", .cgroup = shared_cgroup_target.cgroup},
+    };
+    EXPECT_EQ(classify_instance_location(shared_cgroup, shared_cgroup_target), instance_location_e::outside_target_gamescope);
+  }
+
+  /**
+   * @brief Verify Steam command detection catches executable paths and URIs only.
+   */
+  TEST(SteamOSVirtualSessionCore, DetectsSteamCommandsWithoutMatchingSteamHelperNames) {
+    EXPECT_TRUE(steam_session::command_references_steam("steam -tenfoot"));
+    EXPECT_TRUE(steam_session::command_references_steam("/usr/bin/steam steam://open/bigpicture"));
+    EXPECT_TRUE(steam_session::command_references_steam("xdg-open steam://open/bigpicture"));
+    EXPECT_FALSE(steam_session::command_references_steam("steamwebhelper --type=renderer"));
+    EXPECT_FALSE(steam_session::command_references_steam("/usr/bin/gamescope --steamcompmgr"));
   }
 
   /**

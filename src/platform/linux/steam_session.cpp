@@ -32,6 +32,21 @@ namespace steam_session {
     }
 
     /**
+     * @brief Determine whether cgroup membership identifies a Gamescope scope.
+     *
+     * A normal user-session cgroup is shared by unrelated desktop processes,
+     * so equality alone is not sufficient evidence that Steam belongs to a
+     * target Gamescope. SteamOS Game Mode scopes contain a Gamescope-specific
+     * component and may be used as an additional identity signal.
+     *
+     * @param cgroup Raw cgroup membership text.
+     * @return True when the cgroup path contains a Gamescope-specific scope.
+     */
+    bool is_gamescope_specific_cgroup(const std::string_view cgroup) {
+      return cgroup.find("gamescope") != std::string_view::npos;
+    }
+
+    /**
      * @brief Check whether a process reaches the target Gamescope through parent links.
      *
      * @param record Process to inspect.
@@ -64,7 +79,7 @@ namespace steam_session {
      */
     bool belongs_to_target(const process_record_t &record, const target_session_t &target, const std::unordered_map<int, const process_record_t *> &by_pid) {
       const bool runtime_match {!target.runtime_directory.empty() && record.xdg_runtime_directory == target.runtime_directory && !target.wayland_display.empty() && record.wayland_display == target.wayland_display};
-      const bool cgroup_match {!target.cgroup.empty() && record.cgroup == target.cgroup};
+      const bool cgroup_match {!target.cgroup.empty() && record.cgroup == target.cgroup && is_gamescope_specific_cgroup(target.cgroup)};
       return runtime_match || cgroup_match || has_target_parent(record, by_pid, target.gamescope_pid);
     }
 
@@ -205,6 +220,25 @@ namespace steam_session {
     (void) target;
     return instance_location_e::unknown;
 #endif
+  }
+
+  bool command_references_steam(const std::string_view command) {
+    constexpr std::string_view steam {"steam"};
+    size_t offset {};
+    while ((offset = command.find(steam, offset)) != std::string_view::npos) {
+      const auto is_identifier_character {[&command](const size_t position) {
+        const auto character {static_cast<unsigned char>(command[position])};
+        return std::isalnum(character) || character == '_';
+      }};
+      const bool preceding_identifier {offset > 0 && is_identifier_character(offset - 1)};
+      const size_t after {offset + steam.size()};
+      const bool following_identifier {after < command.size() && is_identifier_character(after)};
+      if (!preceding_identifier && !following_identifier) {
+        return true;
+      }
+      offset = after;
+    }
+    return false;
   }
 
   std::string cgroup_for_process(const int pid) {

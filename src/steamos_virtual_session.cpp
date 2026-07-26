@@ -1254,6 +1254,15 @@ namespace steamos_virtual_session {
     return true;
   }
 
+  bool steam_command_allowed(const std::string_view command, std::string &error) {
+    std::scoped_lock lock {manager.mutex};
+    if (manager.origin != session_origin_e::owned_private || manager.steam_location != "outside_target_gamescope" || !steam_session::command_references_steam(command)) {
+      return true;
+    }
+    error = "Steam is already running outside the SteamShine Gamescope session; stop or migrate it before launching Steam here";
+    return false;
+  }
+
   bool capture_socket(std::string &socket_path) {
     std::scoped_lock lock {manager.mutex};
     const auto socket {manager.runtime_directory / "gamescope-0"};
