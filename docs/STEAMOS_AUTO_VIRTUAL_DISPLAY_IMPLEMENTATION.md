@@ -25,7 +25,7 @@ Once a virtual session is prepared, a missing or invalid private socket fails ca
 
 The PipeWire Gamescope-node provider and client-PID ownership verification are implemented. On the SteamOS 3.8.16 RX 9070 XT host, a local build has verified the host PipeWire socket, Gamescope `Video/Source` discovery, matching producer PID, PipeWire streaming, DMA-BUF capture on `/dev/dri/renderD128`, Vulkan encoding, positive captured-frame/packet/byte/IDR counters, Moonlight video, and Steam Big Picture in the private 1920x1080 Xwayland display. The current acceptance evidence is stored under `~/.local/state/steamshine/pipewire-runtime-diagnosis/`.
 
-The final hardware-gated acceptance remains audio, keyboard/mouse, gamepad, monitorless operation, retained-session behavior across disconnect, explicit-stop cleanup, and ten live reconnect cycles using the latest CI artifact. A Game Mode session also needs a separate acceptance pass: its resident Steam client can receive a `steam://open/bigpicture` request instead of a Steam client launched inside the owned virtual Gamescope session. The Desktop Mode Big Picture result must therefore not be used as proof of the Game Mode case. GitHub Actions validates format, ShellCheck, configure, build, lifecycle GTests, installer smoke, runtime linkage, ABI ceiling, packaging, checksum, and Artifact upload; it cannot establish live GPU or input acceptance. Use `./steamshine.sh hardware-test --interactive` on the target system.
+The current local acceptance has also confirmed audio, touch/mouse control, retained-session behavior across a transient disconnect, and ten cable-disconnect/reconnect cycles. The operator intentionally removed the retained session after the final cycle; that is not evidence for explicit-stop cleanup. The remaining hardware-gated acceptance is keyboard input, gamepad input, monitorless operation, explicit-stop cleanup, and repeating the accepted scenario with the latest CI Artifact. A Game Mode session also needs a separate acceptance pass: its resident Steam client can receive a `steam://open/bigpicture` request instead of a Steam client launched inside the owned virtual Gamescope session. The Desktop Mode Big Picture result must therefore not be used as proof of the Game Mode case. GitHub Actions validates format, ShellCheck, configure, build, lifecycle GTests, installer smoke, runtime linkage, ABI ceiling, packaging, checksum, and Artifact upload; it cannot establish live GPU or input acceptance. Use `./steamshine.sh hardware-test --interactive` on the target system.
 
 ### Force-mode hardware harness
 
@@ -179,12 +179,12 @@ Tasks:
 
 Acceptance:
 
-- Video, audio, and input all work.
+- Video, audio, and touch/mouse control work; keyboard and gamepad remain explicit acceptance checks.
 - Capture and encoder use the RX 9070 XT owned render node.
 - No CPU software encoder fallback occurs.
 - Every disconnect retains the owned process group and runtime path for `/resume`.
 - After the final cycle, explicit cancel or service stop removes the owned process group and runtime path within five seconds.
-- Ten reconnect cycles pass without manual cleanup or a replacement Gamescope session.
+- Ten reconnect cycles have passed without a replacement Gamescope session; repeat the check from the latest CI Artifact before release.
 
 Rollback condition:
 
