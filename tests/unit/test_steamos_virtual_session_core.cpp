@@ -4,6 +4,7 @@
  */
 #include <cstdlib>
 #include <gtest/gtest.h>
+#include <src/platform/linux/gamescope_presenter.h>
 #include <src/platform/linux/gamescope_source.h>
 #include <src/platform/linux/host_desktop_endpoint.h>
 #include <src/platform/linux/steam_session.h>
@@ -72,6 +73,32 @@ namespace {
     EXPECT_EQ(decide_presentation(local_presentation_policy_e::auto_select, session_origin_e::attached_existing, true, true), presentation_e::remote_only);
     EXPECT_EQ(decide_presentation(local_presentation_policy_e::mirror, session_origin_e::owned_private, false, true), presentation_e::remote_only);
     EXPECT_EQ(steamos_virtual_session::to_string(presentation_e::remote_and_local), "remote_and_local");
+  }
+
+  /**
+   * @brief Verify local presentation keeps only the newest acquired frame.
+   */
+  TEST(SteamOSVirtualSessionCore, UsesLatestFrameWinsPresentationQueue) {
+    gamescope_presenter::latest_frame_queue_t queue;
+    uint64_t released_sequence {};
+
+    EXPECT_FALSE(queue.publish({.sequence = 1, .release = [&released_sequence] {
+                                  released_sequence = 1;
+                                }})
+                   .replaced_pending_frame);
+    EXPECT_TRUE(queue.publish({.sequence = 2, .release = [&released_sequence] {
+                                 released_sequence = 2;
+                               }})
+                  .replaced_pending_frame);
+    EXPECT_EQ(released_sequence, 1U);
+    EXPECT_EQ(queue.pending_count(), 1U);
+
+    const auto frame {queue.take_latest()};
+    ASSERT_TRUE(frame.has_value());
+    EXPECT_EQ(frame->sequence, 2U);
+    EXPECT_EQ(queue.pending_count(), 0U);
+    frame->release();
+    EXPECT_EQ(released_sequence, 2U);
   }
 
   /**
