@@ -210,7 +210,7 @@ try {
   const csrfValue = await steamshinePage.evaluate(async () => (await fetch('/api/steamshine/v1/session')).json().then((value) => value.csrf_token));
   await steamshinePage.goto(`${baseUrl}/steamshine/config`, { waitUntil: 'networkidle' });
   await steamshinePage.getByRole('heading', { name: 'Virtual Display' }).waitFor({ timeout: 5000 });
-  await steamshinePage.getByText('Force always creates and streams from a SteamShine-owned headless Gamescope display').waitFor({ timeout: 5000 });
+  await steamshinePage.locator('#virtual-display-config select[name="mode"]').waitFor({ timeout: 5000 });
   securityResults.virtual_display_config_status = await steamshinePage.evaluate(async (csrf) => (await fetch('/api/steamshine/v1/config/virtual-display', {
     method: 'POST', headers: { 'Content-Type': 'application/json', 'X-SteamShine-CSRF-Token': csrf }, body: JSON.stringify({ enabled: true, mode: 'force' }),
   })).status, csrfValue);
