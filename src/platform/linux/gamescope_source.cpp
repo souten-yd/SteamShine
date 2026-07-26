@@ -56,6 +56,31 @@ namespace gamescope_source {
     }
 
     /**
+     * @brief Verify the command-line evidence for a Gamescope process.
+     *
+     * SteamOS installs Gamescope with a file capability. Linux then prevents
+     * ordinary same-user processes from reading `/proc/<pid>/exe`, even though
+     * the process is a direct SteamShine child. In that case the kernel-owned
+     * process name and nul-separated command line provide the available
+     * identity evidence without weakening the PID start-time or UID checks.
+     *
+     * @param process_directory Procfs directory for the candidate process.
+     * @return A stable Gamescope marker when both procfs fields agree.
+     */
+    std::optional<std::filesystem::path> gamescope_identity_from_command_line(const std::filesystem::path &process_directory) {
+      std::ifstream command_file {process_directory / "cmdline", std::ios::binary};
+      const std::string command {std::istreambuf_iterator<char> {command_file}, {}};
+      const auto command_end {command.find('\0')};
+      const std::filesystem::path command_name {command.substr(0, command_end)};
+      std::ifstream comm_file {process_directory / "comm"};
+      std::string comm;
+      std::getline(comm_file, comm);
+      const bool command_is_gamescope {command_name.filename() == "gamescope" || command_name.filename() == "gamescope-wl"};
+      const bool comm_is_gamescope {comm == "gamescope" || comm == "gamescope-wl"};
+      return command_is_gamescope && comm_is_gamescope ? std::optional<std::filesystem::path> {"gamescope"} : std::nullopt;
+    }
+
+    /**
      * @brief Check whether a source meets universal identity and GPU constraints.
      *
      * @param source Candidate source to inspect.
@@ -477,8 +502,16 @@ namespace gamescope_source {
     const std::string stat_contents {std::istreambuf_iterator<char> {stat_file}, {}};
     const auto start_time {process_start_time_from_stat(stat_contents)};
     std::error_code error;
-    const auto executable {std::filesystem::canonical(process_directory / "exe", error)};
-    if (!start_time || error || executable.empty()) {
+    auto executable {std::filesystem::canonical(process_directory / "exe", error)};
+    if (error || executable.empty()) {
+      error.clear();
+      const auto fallback {gamescope_identity_from_command_line(process_directory)};
+      if (!fallback) {
+        return std::nullopt;
+      }
+      executable = *fallback;
+    }
+    if (!start_time) {
       return std::nullopt;
     }
     return process_identity_t {
