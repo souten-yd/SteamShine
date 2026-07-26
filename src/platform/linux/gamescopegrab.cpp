@@ -7,6 +7,7 @@
 #include "src/logging.h"
 #include "src/steamos_virtual_session.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cstring>
 #include <filesystem>
@@ -115,7 +116,16 @@ namespace {
   struct gamescope_node_t {
     uint32_t id {PW_ID_ANY};  ///< Volatile PipeWire global node ID.
     uint64_t object_serial {SPA_ID_INVALID};  ///< Stable PipeWire object serial.
-    pid_t producer_pid {-1};  ///< Producer process ID reported by PipeWire.
+    uint32_t client_id {PW_ID_ANY};  ///< PipeWire client that published this node.
+    pid_t producer_pid {-1};  ///< Verified process ID of the publishing client.
+  };
+
+  /**
+   * @brief PipeWire client identity used to authenticate a published node.
+   */
+  struct pipewire_client_t {
+    uint32_t id {PW_ID_ANY};  ///< PipeWire global client ID.
+    pid_t producer_pid {-1};  ///< Client process ID reported by PipeWire.
   };
 
   /**
@@ -230,8 +240,11 @@ namespace {
           std::scoped_lock lock {mutex_};
           std::vector<gamescope_node_t> matches;
           for (const auto &candidate : candidates_) {
-            if (candidate.producer_pid == gamescope_pid) {
-              matches.emplace_back(candidate);
+            const auto client {std::find_if(clients_.begin(), clients_.end(), [&candidate](const pipewire_client_t &identity) {
+              return identity.id == candidate.client_id;
+            })};
+            if (client != clients_.end() && client->producer_pid == gamescope_pid) {
+              matches.emplace_back(gamescope_node_t {candidate.id, candidate.object_serial, client->id, client->producer_pid});
             }
           }
           if (matches.size() == 1) {
@@ -261,23 +274,38 @@ namespace {
      * @param properties Global properties.
      */
     static void on_global(void *data, const uint32_t id, uint32_t permissions [[maybe_unused]], const char *type, uint32_t version [[maybe_unused]], const spa_dict *properties) {
-      if (std::string_view {type} != PW_TYPE_INTERFACE_Node || !properties || std::string_view {property(properties, {PW_KEY_MEDIA_CLASS}) ?: ""} != "Video/Source") {
-        return;
-      }
-      const auto process_id {parse_property_integer(property(properties, {"application.process.id", "pipewire.sec.pid", "process.id"}))};
-      const auto process_user {parse_property_integer(property(properties, {"application.process.user", "pipewire.sec.uid", "process.user"}))};
-      const auto object_serial {parse_property_integer(property(properties, {PW_KEY_OBJECT_SERIAL}))};
-      if (!process_id || !process_user || !object_serial || *process_user != static_cast<unsigned long long>(::getuid())) {
+      if (!properties) {
         return;
       }
       auto *self {static_cast<gamescope_pipewire_registry_t *>(data)};
+      if (std::string_view {type} == PW_TYPE_INTERFACE_Client) {
+        const auto process_id {parse_property_integer(property(properties, {"application.process.id", "pipewire.sec.pid", "process.id"}))};
+        const auto process_user {parse_property_integer(property(properties, {"application.process.user", "pipewire.sec.uid", "process.user"}))};
+        if (!process_id || !process_user || *process_user != static_cast<unsigned long long>(::getuid())) {
+          return;
+        }
+        std::scoped_lock lock {self->mutex_};
+        std::erase_if(self->clients_, [id](const pipewire_client_t &client) {
+          return client.id == id;
+        });
+        self->clients_.push_back({id, static_cast<pid_t>(*process_id)});
+        return;
+      }
+      if (std::string_view {type} != PW_TYPE_INTERFACE_Node || std::string_view {property(properties, {PW_KEY_MEDIA_CLASS}) ?: ""} != "Video/Source") {
+        return;
+      }
+      const auto client_id {parse_property_integer(property(properties, {"client.id"}))};
+      const auto object_serial {parse_property_integer(property(properties, {PW_KEY_OBJECT_SERIAL}))};
+      if (!client_id || !object_serial || *client_id > UINT32_MAX) {
+        return;
+      }
       std::scoped_lock lock {self->mutex_};
       self->candidates_.erase(std::remove_if(self->candidates_.begin(), self->candidates_.end(), [id](const gamescope_node_t &candidate) {
                                 return candidate.id == id;
                               }),
                               self->candidates_.end());
-      self->candidates_.push_back({id, *object_serial, static_cast<pid_t>(*process_id)});
-      BOOST_LOG(debug) << "PIPEWIRE_NODE_DISCOVERED id=" << id << " serial=" << *object_serial << " pid=" << *process_id << " media_class=Video/Source";
+      self->candidates_.push_back({id, *object_serial, static_cast<uint32_t>(*client_id), -1});
+      BOOST_LOG(debug) << "PIPEWIRE_NODE_DISCOVERED id=" << id << " serial=" << *object_serial << " client_id=" << *client_id << " media_class=Video/Source";
     }
 
     /**
@@ -291,6 +319,9 @@ namespace {
       std::scoped_lock lock {self->mutex_};
       std::erase_if(self->candidates_, [id](const gamescope_node_t &candidate) {
         return candidate.id == id;
+      });
+      std::erase_if(self->clients_, [id](const pipewire_client_t &client) {
+        return client.id == id;
       });
     }
 
@@ -306,7 +337,8 @@ namespace {
     pw_registry *registry_ {};  ///< Host PipeWire registry.
     spa_hook registry_listener_ {};  ///< Registry event listener hook.
     std::mutex mutex_;  ///< Synchronizes candidates with PipeWire callbacks.
-    std::vector<gamescope_node_t> candidates_;  ///< Current verified Video/Source candidates.
+    std::vector<gamescope_node_t> candidates_;  ///< Current Video/Source candidates keyed by PipeWire client ID.
+    std::vector<pipewire_client_t> clients_;  ///< Current user-owned PipeWire client identities.
   };
 }  // namespace
 

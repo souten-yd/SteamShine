@@ -19,6 +19,7 @@
 #include "graphics.h"
 #include "src/main.h"
 #include "src/platform/common.h"
+#include "src/steamos_virtual_session.h"
 #include "src/video.h"
 #include "vaapi.h"
 #include "vulkan_encode.h"
@@ -1008,6 +1009,7 @@ namespace pipewire {
             }
             break;
           case platf::capture_e::ok:
+            steamos_virtual_session::mark_captured_frame();
             if (!push_captured_image_cb(std::move(img_out), true)) {
               BOOST_LOG(debug) << "[pipewire] PipeWire: ok -> !push_captured_image_cb -> ok";
               return platf::capture_e::ok;

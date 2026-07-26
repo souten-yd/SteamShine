@@ -344,6 +344,19 @@ TEST_F(SteamOSVirtualSessionTest, UnsetPipeWireRuntimeUsesOriginalXdgRuntime) {
 }
 
 /**
+ * @brief Verify a PipeWire capture completion contributes to session metrics.
+ */
+TEST_F(SteamOSVirtualSessionTest, TracksCapturedPipeWireFrameAfterStreamingStarts) {
+  rtsp_stream::launch_session_t launch {};
+  std::string error;
+
+  ASSERT_TRUE(steamos_virtual_session::prepare(launch, error)) << error;
+  steamos_virtual_session::mark_streaming();
+  steamos_virtual_session::mark_captured_frame();
+  EXPECT_EQ(steamos_virtual_session::status_snapshot().captured_frames, 1U);
+}
+
+/**
  * @brief Verify an external host PipeWire runtime is rejected before Gamescope starts.
  */
 TEST_F(SteamOSVirtualSessionTest, RejectsHostPipeWireRuntimeOutsideLoginRuntime) {
