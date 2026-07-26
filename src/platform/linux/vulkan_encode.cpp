@@ -7,6 +7,7 @@
 #include <array>
 #include <cstdint>
 #include <drm_fourcc.h>
+#include <string>
 #include <sys/stat.h>
 #if defined(__FreeBSD__)
   #include <sys/types.h>
@@ -18,6 +19,7 @@
 
 extern "C" {
 #include <libavcodec/avcodec.h>
+#include <libavutil/error.h>
 #include <libavutil/hwcontext.h>
 #include <libavutil/hwcontext_vulkan.h>
 }
@@ -25,6 +27,8 @@ extern "C" {
 #include "graphics.h"
 #include "src/config.h"
 #include "src/logging.h"
+#include "src/steamos_virtual_session.h"
+#include "src/utility.h"
 #include "src/video_colorspace.h"
 #include "vulkan_encode.h"
 
@@ -89,7 +93,14 @@ namespace vk {
 
   static int create_vulkan_hwdevice(AVBufferRef **hw_device_buf) {
     // Resolve render device path to Vulkan device index
-    if (auto render_path = platf::resolve_render_device(); render_path[0] == '/') {
+    const auto render_path {platf::resolve_render_device()};
+    std::string owned_render_node;
+    const bool owned_virtual_session {steamos_virtual_session::encoder_render_node(owned_render_node)};
+    if (owned_virtual_session && render_path != owned_render_node) {
+      BOOST_LOG(error) << "SteamOS virtual session rejected a Vulkan encoder device outside its owned AMD render node"sv;
+      return -1;
+    }
+    if (!render_path.empty() && render_path[0] == '/') {
       if (auto idx = find_vulkan_index_for_render_node(render_path.c_str()); !idx.empty() && av_hwdevice_ctx_create(hw_device_buf, AV_HWDEVICE_TYPE_VULKAN, idx.c_str(), nullptr, 0) >= 0) {
         return 0;
       }
@@ -98,6 +109,13 @@ namespace vk {
       if (av_hwdevice_ctx_create(hw_device_buf, AV_HWDEVICE_TYPE_VULKAN, render_path.c_str(), nullptr, 0) >= 0) {
         return 0;
       }
+    }
+    // An owned virtual session must not fall back to a different GPU, including
+    // an integrated adapter. Normal Sunshine behavior retains the legacy
+    // default-device fallback when no SteamOS virtual session is active.
+    if (owned_virtual_session) {
+      BOOST_LOG(error) << "SteamOS virtual session could not create Vulkan Video on its owned AMD render node"sv;
+      return -1;
     }
     // Final fallback: let FFmpeg pick default
     if (av_hwdevice_ctx_create(hw_device_buf, AV_HWDEVICE_TYPE_VULKAN, nullptr, nullptr, 0) >= 0) {
@@ -1083,6 +1101,84 @@ namespace vk {
       return false;
     }
     av_buffer_unref(&dev);
+    return true;
+  }
+
+  bool probe_h264(std::string &error) {
+    const AVCodec *const codec {avcodec_find_encoder_by_name("h264_vulkan")};
+    if (!codec) {
+      error = "FFmpeg does not provide h264_vulkan";
+      return false;
+    }
+    AVBufferRef *device {nullptr};
+    if (create_vulkan_hwdevice(&device) < 0) {
+      error = "Could not create a Vulkan device on the selected render node";
+      return false;
+    }
+    auto device_guard = util::fail_guard([&device]() {
+      av_buffer_unref(&device);
+    });
+    AVCodecContext *context {avcodec_alloc_context3(codec)};
+    if (!context) {
+      error = "Could not allocate the Vulkan H.264 codec context";
+      return false;
+    }
+    auto context_guard = util::fail_guard([&context]() {
+      avcodec_free_context(&context);
+    });
+    context->width = 1920;
+    context->height = 1080;
+    context->time_base = AVRational {1, 60};
+    context->framerate = AVRational {60, 1};
+    context->pix_fmt = AV_PIX_FMT_VULKAN;
+    context->bit_rate = 20'000'000;
+    context->gop_size = 60;
+    context->max_b_frames = 0;
+    context->hw_device_ctx = av_buffer_ref(device);
+    if (!context->hw_device_ctx) {
+      error = "Could not retain the selected Vulkan device for H.264";
+      return false;
+    }
+
+    // h264_vulkan validates that its input is backed by a Vulkan frames
+    // context during avcodec_open2(). The streaming path creates this context
+    // before opening the encoder; the standalone diagnostic must mirror that
+    // setup without allocating or submitting a frame.
+    AVBufferRef *frames {av_hwframe_ctx_alloc(device)};
+    if (!frames) {
+      error = "Could not allocate Vulkan H.264 hardware frames context";
+      return false;
+    }
+    auto frames_guard = util::fail_guard([&frames]() {
+      av_buffer_unref(&frames);
+    });
+    auto *frames_context {(AVHWFramesContext *) frames->data};
+    frames_context->format = AV_PIX_FMT_VULKAN;
+    frames_context->sw_format = AV_PIX_FMT_NV12;
+    frames_context->width = context->width;
+    frames_context->height = context->height;
+    auto *vulkan_frames {(AVVulkanFramesContext *) frames_context->hwctx};
+    vulkan_frames->tiling = VK_IMAGE_TILING_OPTIMAL;
+    vulkan_frames->usage = (VkImageUsageFlagBits) (VK_IMAGE_USAGE_STORAGE_BIT |
+                                                   VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+                                                   VK_IMAGE_USAGE_SAMPLED_BIT |
+                                                   VK_IMAGE_USAGE_VIDEO_ENCODE_SRC_BIT_KHR);
+    if (av_hwframe_ctx_init(frames) < 0) {
+      error = "Could not initialize Vulkan H.264 hardware frames context";
+      return false;
+    }
+    context->hw_frames_ctx = av_buffer_ref(frames);
+    if (!context->hw_frames_ctx) {
+      error = "Could not retain Vulkan H.264 hardware frames context";
+      return false;
+    }
+    const int result {avcodec_open2(context, codec, nullptr)};
+    if (result < 0) {
+      std::array<char, AV_ERROR_MAX_STRING_SIZE> message {};
+      av_strerror(result, message.data(), message.size());
+      error = "Vulkan H.264 encoder initialization failed: " + std::string {message.data()};
+      return false;
+    }
     return true;
   }
 

@@ -9,6 +9,7 @@
 #include <fstream>
 #include <functional>
 #include <iostream>
+#include <stdexcept>
 #include <thread>
 #include <unordered_map>
 #include <utility>
@@ -791,6 +792,8 @@ namespace config {
     0  // minimum_fps_target (0 = framerate)
   };
 
+  steamos_virtual_display_t steamos_virtual_display {};  ///< SteamOS virtual-display configuration.
+
   /**
    * @brief Default audio configuration values used before file and CLI overrides.
    */
@@ -879,6 +882,10 @@ namespace config {
     platf::appdata().string() + "/sunshine.log",  // log file
     false,  // notify_pre_releases
     true,  // system_tray
+    true,  // steamshine_web_ui_enabled
+    false,  // steamshine_web_ui_default
+    true,  // upstream_web_ui_enabled
+    true,  // upstream_web_ui_visible
     {},  // prep commands
   };
 
@@ -1687,6 +1694,39 @@ namespace config {
     int_f(vars, "max_bitrate", video.max_bitrate);
     double_between_f(vars, "minimum_fps_target", video.minimum_fps_target, {0.0, 1000.0});
 
+    bool_f(vars, "steamos_virtual_display_enabled", steamos_virtual_display.enabled);
+    {
+      std::string mode_value;
+      string_f(vars, "steamos_virtual_display_mode", mode_value);
+      if (!mode_value.empty()) {
+        const auto mode {steamos_virtual_session::parse_virtual_display_mode(mode_value)};
+        if (!mode) {
+          BOOST_LOG(error) << "config: invalid steamos_virtual_display_mode value: " << mode_value << "; expected off, auto, or force";
+          throw std::invalid_argument {"invalid steamos_virtual_display_mode"};
+        }
+        steamos_virtual_display.mode = *mode;
+      }
+    }
+    string_f(vars, "steamos_gamescope_path", steamos_virtual_display.gamescope_path);
+    path_f(vars, "steamos_runtime_directory", steamos_virtual_display.runtime_directory);
+    string_f(vars, "steamos_game_gpu", steamos_virtual_display.game_gpu);
+    string_f(vars, "steamos_capture_gpu", steamos_virtual_display.capture_gpu);
+    string_f(vars, "steamos_encoder_gpu", steamos_virtual_display.encoder_gpu);
+    // This is an optional runtime endpoint rather than a file managed by
+    // SteamShine.  In particular, an unset value must remain empty so that
+    // the session manager retains the original login XDG runtime.  path_f()
+    // normalizes an empty path below the application data directory, which
+    // would incorrectly select that directory as the host PipeWire runtime.
+    string_f(vars, "steamos_pipewire_runtime", steamos_virtual_display.pipewire_runtime);
+    string_f(vars, "steamos_pipewire_remote", steamos_virtual_display.pipewire_remote);
+    int_between_f(vars, "steamos_pipewire_node_timeout_ms", steamos_virtual_display.pipewire_node_timeout_milliseconds, {1000, 60000});
+    int_between_f(vars, "steamos_startup_timeout_seconds", steamos_virtual_display.startup_timeout_seconds, {1, 60});
+    int_between_f(vars, "steamos_shutdown_timeout_seconds", steamos_virtual_display.shutdown_timeout_seconds, {1, 60});
+    int_between_f(vars, "steamos_default_width", steamos_virtual_display.default_width, {640, 7680});
+    int_between_f(vars, "steamos_default_height", steamos_virtual_display.default_height, {480, 4320});
+    int_between_f(vars, "steamos_default_fps", steamos_virtual_display.default_fps, {30, 240});
+    bool_f(vars, "steamos_cleanup_orphan_sessions", steamos_virtual_display.cleanup_orphan_sessions);
+
     path_f(vars, "pkey", nvhttp.pkey);
     path_f(vars, "cert", nvhttp.cert);
     string_f(vars, "sunshine_name", nvhttp.sunshine_name);
@@ -1805,6 +1845,21 @@ namespace config {
 
     bool_f(vars, "notify_pre_releases", sunshine.notify_pre_releases);
     bool_f(vars, "system_tray", sunshine.system_tray);
+    bool_f(vars, "steamshine_web_ui_enabled", sunshine.steamshine_web_ui_enabled);
+    bool_f(vars, "steamshine_web_ui_default", sunshine.steamshine_web_ui_default);
+    bool_f(vars, "upstream_web_ui_enabled", sunshine.upstream_web_ui_enabled);
+    bool_f(vars, "upstream_web_ui_visible", sunshine.upstream_web_ui_visible);
+    if (!sunshine.steamshine_web_ui_enabled && !sunshine.upstream_web_ui_enabled) {
+      BOOST_LOG(warning) << "Both Web UIs were disabled; retaining the upstream Sunshine Web UI for recovery"sv;
+      sunshine.upstream_web_ui_enabled = true;
+    }
+    if (sunshine.steamshine_web_ui_default && !sunshine.steamshine_web_ui_enabled) {
+      BOOST_LOG(warning) << "SteamShine cannot be the default Web UI while it is disabled"sv;
+      sunshine.steamshine_web_ui_default = false;
+    }
+    if (!sunshine.upstream_web_ui_enabled) {
+      sunshine.upstream_web_ui_visible = false;
+    }
 
     int port = sunshine.port;
     int_between_f(vars, "port"s, port, {1024 + nvhttp::PORT_HTTPS, 65535 - rtsp_stream::RTSP_SETUP_PORT});
@@ -1979,6 +2034,8 @@ namespace config {
     } catch (const std::filesystem::filesystem_error &err) {
       BOOST_LOG(fatal) << "Failed to apply config: "sv << err.what();
     } catch (const boost::filesystem::filesystem_error &err) {
+      BOOST_LOG(fatal) << "Failed to apply config: "sv << err.what();
+    } catch (const std::exception &err) {
       BOOST_LOG(fatal) << "Failed to apply config: "sv << err.what();
     }
 

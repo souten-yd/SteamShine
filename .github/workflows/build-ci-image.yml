@@ -1,0 +1,65 @@
+name: SteamOS CI Image
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master]
+    paths:
+      - '.github/workflows/build-ci-image.yml'
+      - 'ci/steamos/Containerfile'
+      - 'ci/steamos/packages.txt'
+      - 'ci/steamos/mirrorlist'
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: steamos-ci-image-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-ci-image:
+    runs-on: ubuntu-latest
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Derive immutable image tag
+        id: tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          snapshot="$(sed -n 's|.*archive.archlinux.org/repos/\([0-9/]\+\)/.*|\1|p' ci/steamos/mirrorlist | tr '/' '-')"
+          inputs="$(cat ci/steamos/Containerfile ci/steamos/packages.txt ci/steamos/mirrorlist)"
+          input_hash="$(printf '%s' "${inputs}" | sha256sum | cut -c1-16)"
+          printf 'tag=steamos-%s-%s\n' "${snapshot}" "${input_hash}" >>"${GITHUB_OUTPUT}"
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Set up Buildx with an attestation-capable driver
+        uses: docker/setup-buildx-action@v3
+      - name: Build and publish immutable CI image
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ci/steamos/Containerfile
+          push: true
+          tags: ghcr.io/${{ github.repository_owner }}/steamshine-ci:${{ steps.tag.outputs.tag }}
+          provenance: mode=max
+      - name: Record image provenance
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat >image-metadata.json <<EOF
+          {"image":"ghcr.io/${{ github.repository_owner }}/steamshine-ci","tag":"${{ steps.tag.outputs.tag }}","digest":"${{ steps.build.outputs.digest }}","containerfile_sha256":"$(sha256sum ci/steamos/Containerfile | awk '{print $1}')","packages_sha256":"$(sha256sum ci/steamos/packages.txt | awk '{print $1}')"}
+          EOF
+      - uses: actions/upload-artifact@v4
+        with:
+          name: steamos-ci-image-metadata
+          path: image-metadata.json
+          if-no-files-found: error

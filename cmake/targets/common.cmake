@@ -47,21 +47,35 @@ else()
     set(NPM_BUILD_HOMEBREW "")
 endif()
 
-#WebUI build
-find_program(NPM npm REQUIRED)
+# Both Web UIs are built by default during the migration. These options provide
+# a deterministic packaging boundary without changing the shared backend.
+option(SUNSHINE_BUILD_UPSTREAM_WEB_UI "Build the upstream Sunshine Web UI" ON)
+option(STEAMSHINE_BUILD_WEB_UI "Build the SteamShine Web UI" ON)
 
-set(NPM_INSTALL_FLAGS "--ignore-scripts")
-if (NPM_OFFLINE)
-    set(NPM_INSTALL_FLAGS "${NPM_INSTALL_FLAGS} --offline")
+if(SUNSHINE_BUILD_UPSTREAM_WEB_UI)
+    find_program(NPM npm REQUIRED)
+    set(NPM_INSTALL_FLAGS "--ignore-scripts")
+    if (NPM_OFFLINE)
+        set(NPM_INSTALL_FLAGS "${NPM_INSTALL_FLAGS} --offline")
+    endif()
+    add_custom_target(web-ui ALL
+            WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+            COMMENT "Installing NPM Dependencies and Building the upstream Web UI"
+            COMMAND "$<$<BOOL:${WIN32}>:cmd;/C>" "${NPM}" ci ${NPM_INSTALL_FLAGS}
+            COMMAND "${CMAKE_COMMAND}" -E env "SUNSHINE_BUILD_HOMEBREW=${NPM_BUILD_HOMEBREW}" "SUNSHINE_SOURCE_ASSETS_DIR=${NPM_SOURCE_ASSETS_DIR}" "SUNSHINE_ASSETS_DIR=${NPM_ASSETS_DIR}" "$<$<BOOL:${WIN32}>:cmd;/C>" "${NPM}" run build  # cmake-lint: disable=C0301
+            COMMAND_EXPAND_LISTS
+            VERBATIM)
+    add_dependencies(sunshine web-ui)
 endif()
 
-add_custom_target(web-ui ALL
-        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-        COMMENT "Installing NPM Dependencies and Building the Web UI"
-        COMMAND "$<$<BOOL:${WIN32}>:cmd;/C>" "${NPM}" ci ${NPM_INSTALL_FLAGS}
-        COMMAND "${CMAKE_COMMAND}" -E env "SUNSHINE_BUILD_HOMEBREW=${NPM_BUILD_HOMEBREW}" "SUNSHINE_SOURCE_ASSETS_DIR=${NPM_SOURCE_ASSETS_DIR}" "SUNSHINE_ASSETS_DIR=${NPM_ASSETS_DIR}" "$<$<BOOL:${WIN32}>:cmd;/C>" "${NPM}" run build  # cmake-lint: disable=C0301
-        COMMAND_EXPAND_LISTS
-        VERBATIM)
+if(STEAMSHINE_BUILD_WEB_UI)
+    find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    add_custom_target(steamshine-web-ui ALL
+            COMMENT "Building the SteamShine Web UI"
+            COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/scripts/build-steamshine-web-assets.py" "${SUNSHINE_SOURCE_ASSETS_DIR}/common/assets/steamshine" "${CMAKE_BINARY_DIR}/assets/steamshine"
+            VERBATIM)
+    add_dependencies(sunshine steamshine-web-ui)
+endif()
 
 # docs
 if(BUILD_DOCS)

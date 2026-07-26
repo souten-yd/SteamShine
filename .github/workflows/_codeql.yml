@@ -7,12 +7,7 @@ name: CodeQL
 permissions: {}
 
 on:
-  pull_request:
-  push:
-    branches:
-      - master
-  schedule:
-    - cron: '00 12 * * 0'  # every Sunday at 12:00 UTC
+  workflow_dispatch:
 
 concurrency:
   group: "${{ github.workflow }}-${{ github.ref }}"

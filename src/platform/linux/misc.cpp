@@ -62,6 +62,7 @@
 #include "src/entry_handler.h"
 #include "src/logging.h"
 #include "src/platform/common.h"
+#include "src/steamos_virtual_session.h"
 #include "vaapi.h"
 
 #ifdef __GNUC__
@@ -1123,6 +1124,7 @@ namespace platf {
 #ifdef SUNSHINE_BUILD_PORTAL
       PORTAL,  ///< XDG PORTAL
 #endif
+
       MAX_FLAGS  ///< The maximum number of flags
     };
   }  // namespace source
@@ -1192,6 +1194,10 @@ namespace platf {
   }
 #endif
 
+#ifdef SUNSHINE_BUILD_PIPEWIRE
+  std::shared_ptr<display_t> gamescope_pipewire_display(mem_type_e hwdevice_type, const std::string &display_name, const video::config_t &config);
+#endif
+
 #ifdef SUNSHINE_BUILD_KWIN
   bool kwin_available();
   std::vector<std::string> kwin_display_names();
@@ -1207,6 +1213,19 @@ namespace platf {
    * @brief List display names accepted by the selected capture backend.
    */
   std::vector<std::string> display_names(mem_type_e hwdevice_type) {
+#ifdef SUNSHINE_BUILD_PIPEWIRE
+    if (steamos_virtual_session::active()) {
+      return {"Gamescope PipeWire"};
+    }
+#endif
+#ifdef SUNSHINE_BUILD_WAYLAND
+    // A virtual session has no desktop output until the Moonlight launch
+    // creates its owned Gamescope socket. Keep discovery on Wayland so it
+    // cannot enumerate an unrelated KMS/X11/portal source first.
+    if (steamos_virtual_session::capture_backend_required()) {
+      return wl_display_names();
+    }
+#endif
 #ifdef SUNSHINE_BUILD_CUDA
     // display using NvFBC only supports mem_type_e::cuda
     if (sources[source::NVFBC] && hwdevice_type == mem_type_e::cuda) {
@@ -1260,6 +1279,21 @@ namespace platf {
   }
 
   std::shared_ptr<display_t> display(mem_type_e hwdevice_type, const std::string &display_name, const video::config_t &config) {
+#ifdef SUNSHINE_BUILD_PIPEWIRE
+    if (steamos_virtual_session::active()) {
+      BOOST_LOG(info) << "Screencasting with SteamOS owned Gamescope PipeWire source"sv;
+      return gamescope_pipewire_display(hwdevice_type, display_name, config);
+    }
+#endif
+#ifdef SUNSHINE_BUILD_WAYLAND
+    // The owned socket is selected inside wl::display_t::init(). This must
+    // precede KMS so monitorless virtual sessions never fall back to a
+    // physical or cross-GPU capture path.
+    if (steamos_virtual_session::capture_backend_required()) {
+      BOOST_LOG(info) << "Screencasting with SteamOS owned Wayland protocol"sv;
+      return wl_display(hwdevice_type, display_name, config);
+    }
+#endif
     // Keep KMS as first element to check before dropping CAP_SYS_ADMIN
 #ifdef SUNSHINE_BUILD_DRM
     if (sources[source::KMS]) {
@@ -1345,7 +1379,12 @@ namespace platf {
     }
 #endif
 #ifdef SUNSHINE_BUILD_WAYLAND
-    if (((config::video.capture.empty() && sources.none()) || config::video.capture == "wlr") && verify_wl()) {
+    // Retain the WLR backend even when SteamOS starts headless. The backend
+    // attaches to the SteamShine-owned Gamescope socket at launch time.
+    if (steamos_virtual_session::capture_backend_required()) {
+      window_system = window_system_e::WAYLAND;
+      sources[source::WAYLAND] = true;
+    } else if (((config::video.capture.empty() && sources.none()) || config::video.capture == "wlr") && verify_wl()) {
       sources[source::WAYLAND] = true;
     }
 #endif
@@ -1457,6 +1496,10 @@ namespace platf {
   }
 
   std::string resolve_render_device() {
+    std::string virtual_render_node;
+    if (steamos_virtual_session::encoder_render_node(virtual_render_node)) {
+      return virtual_render_node;
+    }
     if (!config::video.adapter_name.empty()) {
       return config::video.adapter_name;
     }

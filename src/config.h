@@ -14,6 +14,7 @@
 
 // local includes
 #include "nvenc/nvenc_config.h"
+#include "steamos_virtual_session_core.h"
 
 namespace config {
   // Valid range for the packetsize limit
@@ -291,6 +292,28 @@ namespace config {
     bool native_pen_touch;  ///< Enable native pen and touch injection.
   };
 
+  /**
+   * @brief SteamOS headless virtual-display settings loaded from configuration.
+   */
+  struct steamos_virtual_display_t {
+    bool enabled {false};  ///< Enable the opt-in SteamOS virtual display provider.
+    steamos_virtual_session::virtual_display_mode_e mode {steamos_virtual_session::virtual_display_mode_e::auto_detect};  ///< Virtual display policy parsed once during configuration loading.
+    std::string gamescope_path {"gamescope"};  ///< Gamescope executable used for owned sessions.
+    std::string runtime_directory;  ///< Base directory for owned runtime state.
+    std::string game_gpu;  ///< Preferred game render GPU PCI BDF or render node.
+    std::string capture_gpu;  ///< Preferred capture GPU PCI BDF or render node.
+    std::string encoder_gpu;  ///< Preferred encoder GPU PCI BDF or render node.
+    std::string pipewire_runtime;  ///< Optional host PipeWire runtime directory kept separate from private Wayland state.
+    std::string pipewire_remote;  ///< Optional host PipeWire remote name used by owned Gamescope children.
+    int pipewire_node_timeout_milliseconds {10000};  ///< Maximum wait for an owned Gamescope PipeWire Video/Source node.
+    int startup_timeout_seconds {15};  ///< Maximum time spent waiting for virtual-display readiness.
+    int shutdown_timeout_seconds {5};  ///< Maximum time spent waiting for owned child shutdown.
+    int default_width {1920};  ///< Fallback virtual display width.
+    int default_height {1080};  ///< Fallback virtual display height.
+    int default_fps {60};  ///< Fallback virtual display refresh rate.
+    bool cleanup_orphan_sessions {true};  ///< Remove only runtime directories owned by this instance.
+  };
+
   namespace flag {
     /**
      * @brief Enumerates supported flag options.
@@ -369,6 +392,10 @@ namespace config {
     std::string log_file;  ///< Path to the configured log file.
     bool notify_pre_releases;  ///< Notify users about pre-release updates.
     bool system_tray;  ///< Enable the system tray integration.
+    bool steamshine_web_ui_enabled;  ///< Enable the SteamShine Web UI route and facade.
+    bool steamshine_web_ui_default;  ///< Use SteamShine instead of upstream Sunshine at the root Web UI route.
+    bool upstream_web_ui_enabled;  ///< Keep the upstream Sunshine Web UI available during migration.
+    bool upstream_web_ui_visible;  ///< Expose the upstream Sunshine Web UI at its compatibility route.
     std::vector<prep_cmd_t> prep_cmds;  ///< Preparation commands executed around application launch.
 
     // List of allowed origins for CSRF protection (e.g., "https://example.com,https://app.example.com")
@@ -381,6 +408,7 @@ namespace config {
   extern stream_t stream;
   extern nvhttp_t nvhttp;
   extern input_t input;
+  extern steamos_virtual_display_t steamos_virtual_display;
   extern sunshine_t sunshine;
 
   /**

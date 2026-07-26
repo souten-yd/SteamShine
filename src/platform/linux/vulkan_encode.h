@@ -45,4 +45,17 @@ namespace vk {
    */
   bool validate();
 
+  /**
+   * @brief Open the selected Vulkan Video H.264 encoder without streaming.
+   *
+   * This explicit hardware-test preflight uses the same FFmpeg Vulkan device
+   * selection as the streaming path. It validates device creation, the
+   * H.264 Vulkan encoder, and codec-context initialization without writing a
+   * bitstream or adding work to a streaming thread.
+   *
+   * @param error Receives a diagnostic reason when the preflight fails.
+   * @return True when the selected GPU accepts an H.264 Vulkan encoder context.
+   */
+  bool probe_h264(std::string &error);
+
 }  // namespace vk

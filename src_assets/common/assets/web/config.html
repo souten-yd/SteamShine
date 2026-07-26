@@ -131,6 +131,12 @@
         :platform="platform">
       </advanced>
 
+      <!-- SteamOS virtual display policy tab -->
+      <steamos-virtual-display
+        v-if="currentTab === 'steamos-display'"
+        :config="config">
+      </steamos-virtual-display>
+
       <container-encoders
         :current-tab="currentTab"
         :config="config"
@@ -154,6 +160,7 @@
   import Network from './configs/tabs/Network.vue'
   import Files from './configs/tabs/Files.vue'
   import Advanced from './configs/tabs/Advanced.vue'
+  import SteamOSVirtualDisplay from './configs/tabs/SteamOSVirtualDisplay.vue'
   import AudioVideo from './configs/tabs/AudioVideo.vue'
   import ContainerEncoders from './configs/tabs/ContainerEncoders.vue'
   import {$tp, usePlatformI18n} from './platform-i18n'
@@ -181,6 +188,7 @@
       Network,
       Files,
       Advanced,
+      SteamOSVirtualDisplay,
       // They will be accessible via audio-video, container-encoders only.
       AudioVideo,
       ContainerEncoders,
@@ -216,6 +224,10 @@
               "global_prep_cmd": [],
               "notify_pre_releases": "disabled",
               "system_tray": "enabled",
+              "steamshine_web_ui_enabled": "enabled",
+              "steamshine_web_ui_default": "disabled",
+              "upstream_web_ui_enabled": "enabled",
+              "upstream_web_ui_visible": "enabled",
             },
           },
           {
@@ -304,6 +316,14 @@
               "av1_mode": 0,
               "capture": "",
               "encoder": "",
+            },
+          },
+          {
+            id: "steamos-display",
+            name: "SteamOS Virtual Display",
+            options: {
+              "steamos_virtual_display_enabled": "disabled",
+              "steamos_virtual_display_mode": "auto",
             },
           },
           {
@@ -418,7 +438,7 @@
       }
     },
     created() {
-      fetch("./api/config")
+      fetch("/api/config")
         .then((r) => r.json())
         .then((r) => {
           this.config = r;
@@ -476,6 +496,7 @@
           'network': 'NetworkIcon',
           'files': 'FileCog',
           'advanced': 'Sliders',
+          'steamos-display': 'Gpu',
           'nv': 'Gpu',
           'amd': 'Gpu',
           'qsv': 'Gpu',
@@ -515,7 +536,7 @@
           });
         });
 
-        return apiFetch("./api/config", {
+        return apiFetch("/api/config", {
           method: "POST",
           headers: {
             'Content-Type': 'application/json'
@@ -541,7 +562,7 @@
             setTimeout(() => {
               this.saved = this.restarted = false;
             }, 5000);
-            apiFetch("./api/restart", {
+            apiFetch("/api/restart", {
               method: "POST",
               headers: {
                 "Content-Type": "application/json"

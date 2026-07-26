@@ -1,0 +1,64 @@
+name: SteamOS Artifact Promotion
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_run_id:
+        description: Successful SteamOS Runtime Build run ID to promote
+        required: true
+        type: string
+      artifact_name:
+        description: Artifact name produced by the source run
+        required: true
+        type: string
+      release_tag:
+        description: New Git tag used for the GitHub release
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify full-validation provenance
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+        run: |
+          set -euo pipefail
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${SOURCE_RUN_ID}" >source-run.json
+          test "$(jq -r .conclusion source-run.json)" = success
+          test "$(jq -r .name source-run.json)" = 'SteamOS Runtime Build'
+          test "$(jq -r .head_repository.full_name source-run.json)" = "${GITHUB_REPOSITORY}"
+          jq '{source_run_id: .id, source_sha: .head_sha, source_workflow: .name, source_url: .html_url}' source-run.json >release-provenance.json
+      - name: Download validated artifact without rebuilding
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.artifact_name }}
+          run-id: ${{ inputs.source_run_id }}
+          github-token: ${{ github.token }}
+          path: artifact
+      - name: Verify promoted payload and metadata
+        run: |
+          set -euo pipefail
+          artifact="$(find artifact -maxdepth 1 -name 'steamshine-steamos-x86_64-*.tar.zst' -print -quit)"
+          test -n "${artifact}"
+          checksum="${artifact}.sha256"
+          test -f "${checksum}"
+          (cd "$(dirname "${artifact}")" && sha256sum -c "$(basename "${checksum}")")
+          tar --zstd -tf "${artifact}" | grep -Eq '(^|/)BUILD_INFO\.json$'
+          tar --zstd -tf "${artifact}" | grep -Eq '(^|/)RUNTIME_DEPENDENCIES\.txt$'
+          printf 'artifact=%s\nchecksum=%s\n' "${artifact}" "${checksum}" >>"${GITHUB_ENV}"
+      - name: Create release from the validated binary
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          gh release create "${RELEASE_TAG}" "${artifact}" "${checksum}" release-provenance.json \
+            --title "SteamShine ${RELEASE_TAG}" \
+            --notes "Promoted without rebuild from successful SteamOS Runtime Build run ${{ inputs.source_run_id }}."

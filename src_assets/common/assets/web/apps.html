@@ -713,7 +713,7 @@
     created() {
       this.loadApps();
 
-      fetch("./api/config")
+      fetch("/api/config")
         .then(r => r.json())
         .then(r => {
           this.platform = r.platform;
@@ -777,14 +777,14 @@
         if (modal) modal.hide();
       },
       loadApps() {
-        return fetch("./api/apps")
+        return fetch("/api/apps")
           .then((r) => r.json())
           .then((r) => {
             this.apps = r.apps;
           });
       },
       confirmDelete() {
-        apiFetch("./api/apps/" + this.deleteTarget.index, {
+        apiFetch("/api/apps/" + this.deleteTarget.index, {
           method: "DELETE",
           headers: {
             "Content-Type": "application/json"
@@ -882,7 +882,7 @@
       },
       useCover(cover) {
         this.coverFinderBusy = true;
-        apiFetch("./api/covers/upload", {
+        apiFetch("/api/covers/upload", {
           method: "POST",
           headers: {
             'Content-Type': 'application/json'
@@ -936,7 +936,7 @@
         this.fileBrowserError = '';
         const params = new URLSearchParams({ type: this.fileBrowserType });
         if (path) params.set('path', path);
-        fetch(`./api/browse?${params.toString()}`)
+        fetch(`/api/browse?${params.toString()}`)
           .then(r => r.ok ? r.json() : r.json().then(e => { throw new Error(e.error || 'Browse failed'); }))
           .then(data => {
             this.fileBrowserCurrentPath = data.path ?? '';
@@ -985,7 +985,7 @@
       },
       save() {
         this.editForm["image-path"] = this.editForm["image-path"].toString().replace(/"/g, '');
-        apiFetch("./api/apps", {
+        apiFetch("/api/apps", {
           method: "POST",
           headers: {
             'Content-Type': 'application/json'

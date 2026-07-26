@@ -8,9 +8,13 @@
 
 // standard includes
 #include <algorithm>
+#include <chrono>
+#include <deque>
 #include <filesystem>
 #include <format>
 #include <fstream>
+#include <map>
+#include <mutex>
 #include <string_view>
 
 // lib includes
@@ -44,11 +48,19 @@
 #include "rtsp.h"
 #include "utility.h"
 #include "uuid.h"
+#include "web_services.h"
 
 using namespace std::literals;
 
 namespace confighttp {
   namespace fs = std::filesystem;
+  const web::CredentialService credential_service {};  ///< Shared Web credential operations.
+  web::SessionService session_service {};  ///< Server-side SteamShine Web session operations.
+  const web::PairingService pairing_service {};  ///< Shared Web pairing operations.
+  const web::ClientService client_service {};  ///< Shared Web paired-client operations.
+  const web::StatusSnapshotService status_snapshot_service {};  ///< Shared Web status operations.
+  const web::DiagnosticService diagnostic_service {};  ///< Shared Web diagnostic operations.
+  const web::ConfigurationService configuration_service {};  ///< Shared Web configuration operations.
 
   /**
    * @brief HTTPS server type used for Sunshine's configuration UI.
@@ -92,6 +104,17 @@ namespace confighttp {
   std::map<std::string, csrf_token_t, std::less<>> csrf_tokens;  ///< CSRF tokens by client identifier. NOSONAR(cpp:S5421) - intentionally mutable global
   std::mutex csrf_tokens_mutex;  ///< Mutex protecting CSRF token storage. NOSONAR(cpp:S5421) - intentionally mutable global
 
+  /**
+   * @brief Recent protected-operation timestamps for one remote address.
+   */
+  struct rate_limit_t {
+    std::deque<std::chrono::steady_clock::time_point> attempts;  ///< Attempts still within the limit window.
+  };
+
+  std::map<std::string, rate_limit_t, std::less<>> steamshine_login_attempts;  ///< Login attempts by remote address.
+  std::map<std::string, rate_limit_t, std::less<>> steamshine_pin_attempts;  ///< PIN attempts by remote address.
+  std::mutex steamshine_rate_limit_mutex;  ///< Mutex protecting SteamShine rate-limit state.
+
   // CSRF token configuration
   /**
    * @brief Number of random bytes used when generating a CSRF token.
@@ -101,6 +124,29 @@ namespace confighttp {
    * @brief Amount of time a generated CSRF token remains valid.
    */
   constexpr auto CSRF_TOKEN_LIFETIME = std::chrono::hours(1);  // Tokens valid for 1 hour
+
+  /**
+   * @brief Allow a bounded number of sensitive requests in a rolling time window.
+   *
+   * @param attempts Request timestamps indexed by remote address.
+   * @param address Normalized remote address.
+   * @param maximum_attempts Maximum permitted requests in the window.
+   * @param window Rolling time window.
+   * @return True when this request is allowed and recorded.
+   */
+  bool consume_steamshine_rate_limit(std::map<std::string, rate_limit_t, std::less<>> &attempts, const std::string_view address, const std::size_t maximum_attempts, const std::chrono::steady_clock::duration window) {
+    const auto now = std::chrono::steady_clock::now();
+    std::scoped_lock lock(steamshine_rate_limit_mutex);
+    auto &entry = attempts[std::string {address}].attempts;
+    while (!entry.empty() && entry.front() <= now - window) {
+      entry.pop_front();
+    }
+    if (entry.size() >= maximum_attempts) {
+      return false;
+    }
+    entry.emplace_back(now);
+    return true;
+  }
 
   /**
    * @brief Log the request details.
@@ -133,6 +179,21 @@ namespace confighttp {
     headers.emplace("Content-Type", "application/json");
     headers.emplace("X-Frame-Options", "DENY");
     headers.emplace("Content-Security-Policy", "frame-ancestors 'none';");
+    response->write(output_tree.dump(), headers);
+  }
+
+  /**
+   * @brief Send a SteamShine facade response with its dedicated security policy.
+   *
+   * @param response The HTTP response object.
+   * @param output_tree The JSON tree to send.
+   * @param headers Additional response headers, such as session cookies.
+   */
+  void send_steamshine_response(const resp_https_t &response, const nlohmann::json &output_tree, SimpleWeb::CaseInsensitiveMultimap headers = {}) {
+    headers.emplace("Content-Type", "application/json");
+    headers.emplace("X-Frame-Options", "DENY");
+    headers.emplace("Content-Security-Policy", "default-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self';");
+    headers.emplace("Cache-Control", "no-store");
     response->write(output_tree.dump(), headers);
   }
 
@@ -587,6 +648,61 @@ namespace confighttp {
   }
 
   /**
+   * @brief Return the SteamShine single-page frontend without upstream Basic authentication.
+   *
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   */
+  void getSteamshinePage(const resp_https_t &response, const req_https_t &request) {
+    if (!config::sunshine.steamshine_web_ui_enabled) {
+      not_found(response, request);
+      return;
+    }
+    print_req(request);
+    const std::string content = file_handler::read_file((std::string(SUNSHINE_ASSETS_DIR) + "/steamshine/index.html").c_str());
+    const SimpleWeb::CaseInsensitiveMultimap headers {
+      {"Content-Type", "text/html; charset=utf-8"},
+      {"X-Frame-Options", "DENY"},
+      {"Content-Security-Policy", "default-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self';"},
+      {"Cache-Control", "no-store"}
+    };
+    response->write(content, headers);
+  }
+
+  /**
+   * @brief Return a path-safe static SteamShine frontend asset.
+   *
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   */
+  void getSteamshineAsset(const resp_https_t &response, const req_https_t &request) {
+    if (!config::sunshine.steamshine_web_ui_enabled) {
+      not_found(response, request);
+      return;
+    }
+    print_req(request);
+    const fs::path root = fs::weakly_canonical(fs::path {SUNSHINE_ASSETS_DIR} / "steamshine");
+    const fs::path requested_name = fs::path {request->path}.filename();
+    if (requested_name != "app.css" && requested_name != "app.js") {
+      not_found(response, request);
+      return;
+    }
+    const fs::path requested = root / requested_name;
+    const auto mime_type = mime_types.find(requested.extension().string().substr(1));
+    if (mime_type == mime_types.end()) {
+      bad_request(response, request);
+      return;
+    }
+    const SimpleWeb::CaseInsensitiveMultimap headers {
+      {"Content-Type", mime_type->second},
+      {"X-Frame-Options", "DENY"},
+      {"Content-Security-Policy", "default-src 'self'; frame-ancestors 'none'; base-uri 'none';"}
+    };
+    std::ifstream input {requested, std::ios::binary};
+    response->write(SimpleWeb::StatusCode::success_ok, input, headers);
+  }
+
+  /**
    * @brief Get a CSRF token for the authenticated user.
    * @param response The HTTP response object.
    * @param request The HTTP request object.
@@ -859,7 +975,7 @@ namespace confighttp {
 
     print_req(request);
 
-    const nlohmann::json named_certs = nvhttp::get_all_clients();
+    const nlohmann::json named_certs = client_service.list();
 
     nlohmann::json output_tree;
     output_tree["named_certs"] = named_certs;
@@ -954,17 +1070,15 @@ namespace confighttp {
     ss << request->content.rdbuf();
 
     try {
-      // TODO: Input Validation
       nlohmann::json output_tree;
       const nlohmann::json input_tree = nlohmann::json::parse(ss);
       const std::string uuid = input_tree.value("uuid", "");
-      const bool removed = nvhttp::unpair_client(uuid);
-      output_tree["status"] = removed;
-
-      if (removed && nvhttp::get_all_clients().empty()) {
-        proc::proc.terminate();
+      const auto result = client_service.revoke(uuid);
+      output_tree["status"] = result.success;
+      output_tree["code"] = result.code;
+      if (!result.success) {
+        output_tree["error"] = result.message;
       }
-
       send_response(response, output_tree);
     } catch (std::exception &e) {
       BOOST_LOG(warning) << "Unpair: "sv << e.what();
@@ -1242,7 +1356,7 @@ namespace confighttp {
 
     print_req(request);
 
-    std::string content = file_handler::read_file(config::sunshine.log_file.c_str());
+    const std::string content = diagnostic_service.recent_logs();
     SimpleWeb::CaseInsensitiveMultimap headers;
     headers.emplace("Content-Type", "text/plain");
     headers.emplace("X-Frame-Options", "DENY");
@@ -1282,48 +1396,24 @@ namespace confighttp {
 
     print_req(request);
 
-    std::vector<std::string> errors = {};
     std::stringstream ss;
-    std::stringstream config_stream;
     ss << request->content.rdbuf();
     try {
-      // TODO: Input Validation
       nlohmann::json output_tree;
       nlohmann::json input_tree = nlohmann::json::parse(ss);
-      std::string username = input_tree.value("currentUsername", "");
-      std::string newUsername = input_tree.value("newUsername", "");
-      std::string password = input_tree.value("currentPassword", "");
-      std::string newPassword = input_tree.value("newPassword", "");
-      std::string confirmPassword = input_tree.value("confirmNewPassword", "");
-      if (newUsername.empty()) {
-        newUsername = username;
-      }
-      if (newUsername.empty()) {
-        errors.emplace_back("Invalid Username");
-      } else {
-        auto hash = util::hex(crypto::hash(password + config::sunshine.salt)).to_string();
-        if (config::sunshine.username.empty() || (boost::iequals(username, config::sunshine.username) && hash == config::sunshine.password)) {
-          if (newPassword.empty() || newPassword != confirmPassword) {
-            errors.emplace_back("Password Mismatch");
-          } else {
-            http::save_user_creds(config::sunshine.credentials_file, newUsername, newPassword);
-            http::reload_user_creds(config::sunshine.credentials_file);
-            output_tree["status"] = true;
-          }
-        } else {
-          errors.emplace_back("Invalid Current Credentials");
-        }
-      }
-
-      if (!errors.empty()) {
-        // join the errors array
-        std::string error = std::accumulate(errors.begin(), errors.end(), std::string(), [](const std::string &a, const std::string &b) {
-          return a.empty() ? b : a + ", " + b;
-        });
-        bad_request(response, request, error);
+      const auto result = credential_service.save(
+        input_tree.value("currentUsername", ""),
+        input_tree.value("currentPassword", ""),
+        input_tree.value("newUsername", input_tree.value("currentUsername", "")),
+        input_tree.value("newPassword", ""),
+        input_tree.value("confirmNewPassword", "")
+      );
+      if (!result.success) {
+        bad_request(response, request, result.message);
         return;
       }
-
+      session_service.invalidate_all();
+      output_tree["status"] = true;
       send_response(response, output_tree);
     } catch (std::exception &e) {
       BOOST_LOG(warning) << "SavePassword: "sv << e.what();
@@ -1365,21 +1455,349 @@ namespace confighttp {
     try {
       nlohmann::json output_tree;
       nlohmann::json input_tree = nlohmann::json::parse(ss);
-      const std::string name = input_tree.value("name", "");
-      const std::string pin = input_tree.value("pin", "");
-
-      int _pin = 0;
-      _pin = std::stoi(pin);
-      if (_pin < 0 || _pin > 9999) {
-        bad_request(response, request, "PIN must be between 0000 and 9999");
+      const auto result = pairing_service.submit_pin(input_tree.value("pin", ""), input_tree.value("name", ""));
+      output_tree["status"] = result.success;
+      output_tree["code"] = result.code;
+      if (!result.success) {
+        output_tree["error"] = result.message;
       }
-
-      output_tree["status"] = nvhttp::pin(pin, name);
       send_response(response, output_tree);
     } catch (std::exception &e) {
       BOOST_LOG(warning) << "SavePin: "sv << e.what();
       bad_request(response, request, e.what());
     }
+  }
+
+  /**
+   * @brief Maximum accepted SteamShine facade JSON request size.
+   */
+  constexpr auto STEAMSHINE_MAX_REQUEST_BYTES = 65536U;
+
+  /**
+   * @brief Obtain one named HTTP cookie without logging its value.
+   *
+   * @param request The HTTP request object.
+   * @param name Cookie name to find.
+   * @return Cookie value or an empty string when it was not present.
+   */
+  std::string get_cookie_value(const req_https_t &request, const std::string_view name) {
+    const auto cookie_header = request->header.find("cookie");
+    if (cookie_header == request->header.end()) {
+      return {};
+    }
+    std::string_view cookies {cookie_header->second};
+    while (!cookies.empty()) {
+      const auto separator = cookies.find(';');
+      const auto cookie = cookies.substr(0, separator);
+      const auto equals = cookie.find('=');
+      const auto cookie_name = cookie.substr(0, equals);
+      if (equals != std::string_view::npos && boost::algorithm::trim_copy(std::string {cookie_name}) == name) {
+        return std::string {cookie.substr(equals + 1)};
+      }
+      if (separator == std::string_view::npos) {
+        break;
+      }
+      cookies.remove_prefix(separator + 1);
+    }
+    return {};
+  }
+
+  /**
+   * @brief Reject a SteamShine facade request whose browser origin differs from its host.
+   *
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   * @param required Whether a missing Origin header is rejected.
+   * @return True when the request origin is acceptable.
+   */
+  bool validate_steamshine_origin(const resp_https_t &response, const req_https_t &request, const bool required) {
+    const auto origin = request->header.find("origin");
+    if (origin == request->header.end()) {
+      if (!required) {
+        return true;
+      }
+      bad_request(response, request, "Missing Origin header");
+      return false;
+    }
+    const auto host = request->header.find("host");
+    if (host == request->header.end() || origin->second != "https://" + host->second) {
+      bad_request(response, request, "Origin mismatch");
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * @brief Read a bounded JSON request body for a SteamShine facade handler.
+   *
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   * @param output Parsed JSON object written on success.
+   * @return True when the body is JSON and within the allowed size.
+   */
+  bool read_steamshine_json(const resp_https_t &response, const req_https_t &request, nlohmann::json &output) {
+    if (!check_content_type(response, request, "application/json")) {
+      return false;
+    }
+    std::string content {std::istreambuf_iterator<char> {request->content}, {}};
+    if (content.size() > STEAMSHINE_MAX_REQUEST_BYTES) {
+      bad_request(response, request, "Request body is too large");
+      return false;
+    }
+    try {
+      output = nlohmann::json::parse(content);
+      return output.is_object();
+    } catch (const nlohmann::json::exception &) {
+      bad_request(response, request, "Malformed JSON");
+      return false;
+    }
+  }
+
+  /**
+   * @brief Authorize a SteamShine facade request using its HTTP-only session cookie.
+   *
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   * @return Validated session identifier, or an empty string after responding with an error.
+   */
+  std::string require_steamshine_session(const resp_https_t &response, const req_https_t &request) {
+    const auto address = net::addr_to_normalized_string(request->remote_endpoint().address());
+    if (net::from_address(address) > http::origin_web_ui_allowed) {
+      response->write(SimpleWeb::StatusCode::client_error_forbidden);
+      return {};
+    }
+    const auto session_id = get_cookie_value(request, "steamshine_session");
+    if (!session_service.validate(session_id).has_value()) {
+      response->write(SimpleWeb::StatusCode::client_error_unauthorized);
+      return {};
+    }
+    return session_id;
+  }
+
+  /**
+   * @brief Require a valid SteamShine session and matching CSRF header for a mutation.
+   *
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   * @return Validated session identifier, or an empty string after responding with an error.
+   */
+  std::string require_steamshine_mutation(const resp_https_t &response, const req_https_t &request) {
+    if (!validate_steamshine_origin(response, request, true)) {
+      return {};
+    }
+    const auto session_id = require_steamshine_session(response, request);
+    const auto csrf_token = request->header.find("x-steamshine-csrf-token");
+    if (session_id.empty() || csrf_token == request->header.end() || !session_service.validate_csrf(session_id, csrf_token->second)) {
+      if (!session_id.empty()) {
+        bad_request(response, request, "Invalid CSRF token");
+      }
+      return {};
+    }
+    return session_id;
+  }
+
+  /**
+   * @brief Return whether the shared Web credential has been initialized.
+   *
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   */
+  void steamshine_setup_status(const resp_https_t &response, const req_https_t &request) {
+    send_steamshine_response(response, {{"configured", credential_service.is_configured()}});
+  }
+
+  /**
+   * @brief Create the initial shared Web credential through the SteamShine facade.
+   *
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   */
+  void steamshine_setup_credentials(const resp_https_t &response, const req_https_t &request) {
+    if (!validate_steamshine_origin(response, request, true) || credential_service.is_configured()) {
+      if (credential_service.is_configured()) {
+        response->write(SimpleWeb::StatusCode::client_error_forbidden);
+      }
+      return;
+    }
+    nlohmann::json input;
+    if (!read_steamshine_json(response, request, input)) {
+      return;
+    }
+    const auto result = credential_service.save({}, {}, input.value("username", ""), input.value("password", ""), input.value("confirm_password", ""));
+    if (result.success) {
+      session_service.invalidate_all();
+    }
+    send_steamshine_response(response, {{"status", result.success}, {"code", result.code}, {"message", result.message}});
+  }
+
+  /**
+   * @brief Authenticate a SteamShine browser and issue its HTTP-only session cookie.
+   *
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   */
+  void steamshine_login(const resp_https_t &response, const req_https_t &request) {
+    if (!validate_steamshine_origin(response, request, true)) {
+      return;
+    }
+    const auto address = net::addr_to_normalized_string(request->remote_endpoint().address());
+    if (!consume_steamshine_rate_limit(steamshine_login_attempts, address, 5U, std::chrono::minutes(5))) {
+      response->write(SimpleWeb::StatusCode::client_error_too_many_requests);
+      return;
+    }
+    nlohmann::json input;
+    if (!read_steamshine_json(response, request, input)) {
+      return;
+    }
+    const auto session = session_service.login(credential_service, input.value("username", ""), input.value("password", ""));
+    if (!session.has_value()) {
+      response->write(SimpleWeb::StatusCode::client_error_unauthorized);
+      return;
+    }
+    SimpleWeb::CaseInsensitiveMultimap headers;
+    headers.emplace("Set-Cookie", "steamshine_session=" + session->id + "; Path=/; Secure; HttpOnly; SameSite=Strict");
+    send_steamshine_response(response, {{"status", true}, {"username", session->username}, {"csrf_token", session->csrf_token}}, std::move(headers));
+  }
+
+  /**
+   * @brief Invalidate the current SteamShine browser session.
+   *
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   */
+  void steamshine_logout(const resp_https_t &response, const req_https_t &request) {
+    const auto session_id = require_steamshine_mutation(response, request);
+    if (session_id.empty()) {
+      return;
+    }
+    session_service.logout(session_id);
+    SimpleWeb::CaseInsensitiveMultimap headers;
+    headers.emplace("Set-Cookie", "steamshine_session=; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=0");
+    send_steamshine_response(response, {{"status", true}}, std::move(headers));
+  }
+
+  /**
+   * @brief Return the current SteamShine browser session state.
+   *
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   */
+  void steamshine_session(const resp_https_t &response, const req_https_t &request) {
+    const auto session_id = require_steamshine_session(response, request);
+    if (session_id.empty()) {
+      return;
+    }
+    const auto session = session_service.validate(session_id);
+    send_steamshine_response(response, {{"authenticated", true}, {"username", session->username}, {"csrf_token", session->csrf_token}});
+  }
+
+  /**
+   * @brief Return shared stream and virtual-display status to SteamShine.
+   *
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   */
+  void steamshine_status(const resp_https_t &response, const req_https_t &request) {
+    if (require_steamshine_session(response, request).empty()) {
+      return;
+    }
+    send_steamshine_response(response, status_snapshot_service.snapshot());
+  }
+
+  /**
+   * @brief Return the persisted SteamOS virtual-display policy to SteamShine.
+   *
+   * @param response HTTPS response to populate.
+   * @param request Authenticated HTTPS request.
+   */
+  void steamshine_virtual_display_config(const resp_https_t &response, const req_https_t &request) {
+    if (require_steamshine_session(response, request).empty()) {
+      return;
+    }
+    send_steamshine_response(response, configuration_service.snapshot());
+  }
+
+  /**
+   * @brief Save the selected SteamOS virtual-display policy for the next restart.
+   *
+   * @param response HTTPS response to populate.
+   * @param request CSRF-protected HTTPS request carrying enabled and mode fields.
+   */
+  void steamshine_save_virtual_display_config(const resp_https_t &response, const req_https_t &request) {
+    if (require_steamshine_mutation(response, request).empty()) {
+      return;
+    }
+    nlohmann::json input;
+    if (!read_steamshine_json(response, request, input)) {
+      return;
+    }
+    const auto result = configuration_service.save_virtual_display(input.value("enabled", false), input.value("mode", ""));
+    send_steamshine_response(response, {{"status", result.success}, {"code", result.code}, {"message", result.message}});
+  }
+
+  /**
+   * @brief Submit a Moonlight pairing PIN through the shared pairing service.
+   *
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   */
+  void steamshine_pairing_pin(const resp_https_t &response, const req_https_t &request) {
+    if (require_steamshine_mutation(response, request).empty()) {
+      return;
+    }
+    const auto address = net::addr_to_normalized_string(request->remote_endpoint().address());
+    if (!consume_steamshine_rate_limit(steamshine_pin_attempts, address, 5U, std::chrono::minutes(1))) {
+      response->write(SimpleWeb::StatusCode::client_error_too_many_requests);
+      return;
+    }
+    nlohmann::json input;
+    if (!read_steamshine_json(response, request, input)) {
+      return;
+    }
+    const auto result = pairing_service.submit_pin(input.value("pin", ""), input.value("name", ""));
+    send_steamshine_response(response, {{"status", result.success}, {"code", result.code}, {"message", result.message}});
+  }
+
+  /**
+   * @brief Return shared paired clients to SteamShine.
+   *
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   */
+  void steamshine_clients(const resp_https_t &response, const req_https_t &request) {
+    if (require_steamshine_session(response, request).empty()) {
+      return;
+    }
+    send_steamshine_response(response, {{"named_certs", client_service.list()}});
+  }
+
+  /**
+   * @brief Revoke one paired client through the shared client service.
+   *
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   */
+  void steamshine_revoke_client(const resp_https_t &response, const req_https_t &request) {
+    if (require_steamshine_mutation(response, request).empty()) {
+      return;
+    }
+    constexpr std::string_view prefix = "/api/steamshine/v1/clients/";
+    const auto uuid = request->path.substr(prefix.size());
+    const auto result = client_service.revoke(uuid);
+    send_steamshine_response(response, {{"status", result.success}, {"code", result.code}, {"message", result.message}});
+  }
+
+  /**
+   * @brief Return bounded recent diagnostics to SteamShine.
+   *
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   */
+  void steamshine_recent_logs(const resp_https_t &response, const req_https_t &request) {
+    if (require_steamshine_session(response, request).empty()) {
+      return;
+    }
+    send_steamshine_response(response, {{"content", diagnostic_service.recent_logs()}});
   }
 
   /**
@@ -1760,7 +2178,20 @@ namespace confighttp {
     // Helper to create page handler lambdas without repeating the signature
     auto page_handler = [](const char *file, bool require_auth = true, bool redirect_if_username = false) {
       return [file, require_auth, redirect_if_username](const resp_https_t &response, const req_https_t &request) {
+        if (!config::sunshine.upstream_web_ui_enabled) {
+          not_found(response, request);
+          return;
+        }
         getPage(response, request, file, require_auth, redirect_if_username);
+      };
+    };
+    auto steamshine_handler = [](const https_handler_t &handler) {
+      return [handler](const resp_https_t &response, const req_https_t &request) {
+        if (!config::sunshine.steamshine_web_ui_enabled) {
+          not_found(response, request);
+          return;
+        }
+        handler(response, request);
       };
     };
 
@@ -1780,7 +2211,24 @@ namespace confighttp {
     server.default_resource["GET"] = not_found_handler;
 
     // web pages
-    server.resource["^/$"]["GET"] = page_handler("index.html");
+    server.resource["^/$"]["GET"] = [](const resp_https_t &response, const req_https_t &request) {
+      if (config::sunshine.steamshine_web_ui_default && config::sunshine.steamshine_web_ui_enabled) {
+        getSteamshinePage(response, request);
+        return;
+      }
+      if (!config::sunshine.upstream_web_ui_enabled) {
+        not_found(response, request);
+        return;
+      }
+      getPage(response, request, "index.html", true, false);
+    };
+    server.resource["^/sunshine/?$"]["GET"] = [](const resp_https_t &response, const req_https_t &request) {
+      if (!config::sunshine.upstream_web_ui_enabled || !config::sunshine.upstream_web_ui_visible) {
+        not_found(response, request);
+        return;
+      }
+      getPage(response, request, "index.html", true, false);
+    };
     server.resource["^/apps/?$"]["GET"] = page_handler("apps.html");
     server.resource["^/clients/?$"]["GET"] = page_handler("clients.html");
     server.resource["^/config/?$"]["GET"] = page_handler("config.html");
@@ -1790,6 +2238,7 @@ namespace confighttp {
     server.resource["^/pin/?$"]["GET"] = page_handler("pin.html");
     server.resource["^/troubleshooting/?$"]["GET"] = page_handler("troubleshooting.html");
     server.resource["^/welcome/?$"]["GET"] = page_handler("welcome.html", false, true);
+    server.resource["^/steamshine/?(?:setup|login|dashboard|config|pairing|clients|logs)?/?$"]["GET"] = getSteamshinePage;
 
     // rest api
     server.resource["^/api/browse$"]["GET"] = browseDirectory;
@@ -1815,9 +2264,24 @@ namespace confighttp {
     server.resource["^/api/vigembus/status$"]["GET"] = getViGEmBusStatus;
     server.resource["^/api/vigembus/install$"]["POST"] = installViGEmBus;
 
+    // SteamShine facade API. It uses a distinct cookie and server-side session store.
+    server.resource["^/api/steamshine/v1/setup/status$"]["GET"] = steamshine_handler(steamshine_setup_status);
+    server.resource["^/api/steamshine/v1/setup/credentials$"]["POST"] = steamshine_handler(steamshine_setup_credentials);
+    server.resource["^/api/steamshine/v1/auth/login$"]["POST"] = steamshine_handler(steamshine_login);
+    server.resource["^/api/steamshine/v1/auth/logout$"]["POST"] = steamshine_handler(steamshine_logout);
+    server.resource["^/api/steamshine/v1/status$"]["GET"] = steamshine_handler(steamshine_status);
+    server.resource["^/api/steamshine/v1/config/virtual-display$"]["GET"] = steamshine_handler(steamshine_virtual_display_config);
+    server.resource["^/api/steamshine/v1/config/virtual-display$"]["POST"] = steamshine_handler(steamshine_save_virtual_display_config);
+    server.resource["^/api/steamshine/v1/session$"]["GET"] = steamshine_handler(steamshine_session);
+    server.resource["^/api/steamshine/v1/pairing/pin$"]["POST"] = steamshine_handler(steamshine_pairing_pin);
+    server.resource["^/api/steamshine/v1/clients$"]["GET"] = steamshine_handler(steamshine_clients);
+    server.resource["^/api/steamshine/v1/clients/.+$"]["DELETE"] = steamshine_handler(steamshine_revoke_client);
+    server.resource["^/api/steamshine/v1/logs/recent$"]["GET"] = steamshine_handler(steamshine_recent_logs);
+
     // static/dynamic resources
     server.resource["^/images/sunshine.ico$"]["GET"] = getFaviconImage;
     server.resource["^/images/logo-sunshine-45.png$"]["GET"] = getSunshineLogoImage;
+    server.resource["^/steamshine/.+\\.(css|js)$"]["GET"] = getSteamshineAsset;
     server.resource["^/assets\\/.+$"]["GET"] = getAsset;
 
     server.config.reuse_address = true;
