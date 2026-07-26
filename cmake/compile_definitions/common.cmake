@@ -110,6 +110,8 @@ set(SUNSHINE_TARGET_FILES
         "${CMAKE_SOURCE_DIR}/src/steamos_virtual_session_core.h"
         "${CMAKE_SOURCE_DIR}/src/platform/linux/gamescope_source.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/linux/gamescope_source.h"
+        "${CMAKE_SOURCE_DIR}/src/platform/linux/host_desktop_endpoint.cpp"
+        "${CMAKE_SOURCE_DIR}/src/platform/linux/host_desktop_endpoint.h"
         "${CMAKE_SOURCE_DIR}/src/platform/linux/steam_session.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/linux/steam_session.h"
         "${CMAKE_SOURCE_DIR}/src/video.cpp"

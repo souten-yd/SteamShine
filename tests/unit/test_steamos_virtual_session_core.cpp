@@ -2,8 +2,10 @@
  * @file tests/unit/test_steamos_virtual_session_core.cpp
  * @brief Tests for standalone SteamOS virtual-session request helpers.
  */
+#include <cstdlib>
 #include <gtest/gtest.h>
 #include <src/platform/linux/gamescope_source.h>
+#include <src/platform/linux/host_desktop_endpoint.h>
 #include <src/platform/linux/steam_session.h>
 #include <src/steamos_virtual_session_core.h>
 #include <string>
@@ -255,5 +257,38 @@ namespace {
       {.pid = 401, .parent_pid = 1, .executable_name = "steamwebhelper", .cgroup = target.cgroup},
     };
     EXPECT_EQ(classify_instance_location(cgroup_inside, target), instance_location_e::inside_target_gamescope);
+  }
+
+  /**
+   * @brief Verify the local presenter endpoint cannot be replaced by later child setup.
+   */
+  TEST(SteamOSVirtualSessionCore, CapturesHostDesktopEndpointOnlyOnce) {
+    const auto *const original_runtime {std::getenv("XDG_RUNTIME_DIR")};
+    const auto *const original_wayland {std::getenv("WAYLAND_DISPLAY")};
+    const bool had_runtime {original_runtime != nullptr};
+    const bool had_wayland {original_wayland != nullptr};
+    const std::string saved_runtime {original_runtime ? original_runtime : ""};
+    const std::string saved_wayland {original_wayland ? original_wayland : ""};
+    host_desktop_endpoint::capture();
+    const auto original {host_desktop_endpoint::current()};
+
+    ASSERT_EQ(::setenv("XDG_RUNTIME_DIR", "/tmp/steamshine-private-runtime", 1), 0);
+    ASSERT_EQ(::setenv("WAYLAND_DISPLAY", "gamescope-0", 1), 0);
+    host_desktop_endpoint::capture();
+
+    const auto retained {host_desktop_endpoint::current()};
+    EXPECT_EQ(retained.xdg_runtime_directory, original.xdg_runtime_directory);
+    EXPECT_EQ(retained.wayland_display, original.wayland_display);
+    EXPECT_EQ(retained.x11_display, original.x11_display);
+    if (had_runtime) {
+      ASSERT_EQ(::setenv("XDG_RUNTIME_DIR", saved_runtime.c_str(), 1), 0);
+    } else {
+      ASSERT_EQ(::unsetenv("XDG_RUNTIME_DIR"), 0);
+    }
+    if (had_wayland) {
+      ASSERT_EQ(::setenv("WAYLAND_DISPLAY", saved_wayland.c_str(), 1), 0);
+    } else {
+      ASSERT_EQ(::unsetenv("WAYLAND_DISPLAY"), 0);
+    }
   }
 }  // namespace
