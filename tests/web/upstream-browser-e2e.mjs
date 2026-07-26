@@ -116,6 +116,14 @@ try {
     ignoreHTTPSErrors: true,
     httpCredentials: { username: 'web-e2e', password: 'web-e2e-password' },
   });
+  await authenticatedContext.route('https://api.github.com/repos/LizardByte/Sunshine/releases/latest', async (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify({ tag_name: 'v0.0.0', name: 'SteamShine browser test' }),
+  }));
+  await authenticatedContext.route('https://api.github.com/repos/LizardByte/Sunshine/releases', async (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify([{ tag_name: 'v0.0.1', name: 'SteamShine browser test pre-release', prerelease: true }]),
+  }));
   const authenticatedPage = await authenticatedContext.newPage();
   authenticatedPage.on('console', (message) => {
     if (message.type() === 'error') consoleErrors.push(message.text());
