@@ -1307,6 +1307,69 @@ namespace steamos_virtual_session {
 #endif
   }
 
+  bool open_verified_gamescope_pipewire_consumer(pipewire_capture::stream_descriptor_t &descriptor, std::string &error) {
+#if defined(__linux__)
+    std::string runtime;
+    std::string remote;
+    int producer_pid {};
+    uint64_t producer_start_time {};
+    uint64_t object_serial {};
+    std::string render_node;
+    std::string source_label;
+    {
+      std::scoped_lock lock {manager.mutex};
+      if (manager.pipewire_runtime.empty() || manager.pipewire_remote.empty() || manager.process_group <= 0 || manager.source_process_start_time == 0 || manager.render_node.empty() ||
+          (manager.current != state_e::WaitingForCapture && manager.current != state_e::Ready && manager.current != state_e::Streaming)) {
+        error = "Selected Gamescope PipeWire source is unavailable";
+        return false;
+      }
+      runtime = manager.pipewire_runtime;
+      remote = manager.pipewire_remote;
+      producer_pid = manager.process_group;
+      producer_start_time = manager.source_process_start_time;
+      object_serial = manager.pipewire_object_serial.value_or(0);
+      render_node = manager.render_node;
+      source_label = manager.source_description;
+    }
+    const auto timeout {std::chrono::milliseconds {config::steamos_virtual_display.pipewire_node_timeout_milliseconds}};
+    const auto sources {gamescope_source::discover_gamescope_sources(runtime, remote, timeout, error)};
+    const auto source {std::find_if(sources.begin(), sources.end(), [producer_pid, producer_start_time, object_serial, &render_node](const gamescope_source::gamescope_source_t &candidate) {
+      return candidate.producer_pid == producer_pid && candidate.producer_start_time == producer_start_time && candidate.render_node == render_node &&
+             (object_serial == 0 || candidate.object_serial == object_serial) && gamescope_source::source_identity_is_current(candidate);
+    })};
+    if (source == sources.end()) {
+      if (error.empty()) {
+        error = "Verified Gamescope PipeWire source disappeared or changed identity";
+      }
+      return false;
+    }
+    const auto fd {gamescope_source::open_host_pipewire_socket(runtime, remote, error)};
+    if (!fd) {
+      return false;
+    }
+    descriptor = {
+      .connected_core_fd = *fd,
+      .node_id = source->node_id,
+      .object_serial = source->object_serial,
+      .producer_pid = source->producer_pid,
+      .producer_start_time = source->producer_start_time,
+      .render_node = source->render_node,
+      .source_label = source_label.empty() ? source->node_description : source_label,
+    };
+    if (!pipewire_capture::has_verified_source_identity(descriptor)) {
+      close(descriptor.connected_core_fd);
+      descriptor.connected_core_fd = -1;
+      error = "Verified Gamescope PipeWire source has incomplete identity";
+      return false;
+    }
+    return true;
+#else
+    (void) descriptor;
+    error = "PipeWire consumers are available only on Linux";
+    return false;
+#endif
+  }
+
   void mark_gamescope_pipewire_node(const uint32_t node_id, const uint64_t object_serial, const int producer_pid) {
     std::scoped_lock lock {manager.mutex};
 #if defined(__linux__)

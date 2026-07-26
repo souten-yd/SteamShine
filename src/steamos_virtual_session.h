@@ -4,6 +4,7 @@
  */
 #pragma once
 
+#include "platform/linux/pipewire_capture.h"
 #include "steamos_virtual_session_core.h"
 
 #include <cstddef>
@@ -214,6 +215,20 @@ namespace steamos_virtual_session {
    * @return True only while an active session can use its host PipeWire endpoint.
    */
   bool gamescope_pipewire_endpoint(std::string &runtime_directory, std::string &remote_name, int &gamescope_pid);
+
+  /**
+   * @brief Open one dedicated PipeWire connection for the verified source.
+   *
+   * Every caller receives a new connection FD. The remote encoder and local
+   * presenter therefore share source identity only, never a PipeWire core or
+   * queue. The source is rediscovered and checked against its PID, start time,
+   * object serial, and render node before the FD is returned.
+   *
+   * @param descriptor Receives the dedicated consumer descriptor.
+   * @param error Receives a human-readable validation or socket error.
+   * @return True only when the returned descriptor is still verified.
+   */
+  bool open_verified_gamescope_pipewire_consumer(pipewire_capture::stream_descriptor_t &descriptor, std::string &error);
 
   /**
    * @brief Record the identity of the verified owned Gamescope PipeWire node.
