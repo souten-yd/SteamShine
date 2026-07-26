@@ -1061,6 +1061,16 @@ namespace steamos_virtual_session {
     manager.packet_tracking.store(true, std::memory_order_release);
   }
 
+  void mark_streaming_disconnected() {
+    std::scoped_lock lock {manager.mutex};
+    manager.stream_requested = false;
+    manager.packet_tracking.store(false, std::memory_order_release);
+    if (manager.current == state_e::Streaming) {
+      manager.current = state_e::Ready;
+      BOOST_LOG(info) << "SteamOS virtual display retained after stream disconnect";
+    }
+  }
+
   void mark_encoded_packet(size_t bytes, bool idr) {
     if (!manager.packet_tracking.load(std::memory_order_acquire)) {
       return;

@@ -357,6 +357,29 @@ TEST_F(SteamOSVirtualSessionTest, TracksCapturedPipeWireFrameAfterStreamingStart
 }
 
 /**
+ * @brief Verify a disconnect retains the owned display for a later resume.
+ */
+TEST_F(SteamOSVirtualSessionTest, RetainsVirtualDisplayAcrossStreamDisconnect) {
+  rtsp_stream::launch_session_t launch {};
+  std::string error;
+
+  ASSERT_TRUE(steamos_virtual_session::prepare(launch, error)) << error;
+  steamos_virtual_session::mark_capture_ready();
+  steamos_virtual_session::mark_streaming();
+  steamos_virtual_session::mark_captured_frame();
+  steamos_virtual_session::mark_streaming_disconnected();
+
+  const auto disconnected {steamos_virtual_session::status_snapshot()};
+  EXPECT_EQ(disconnected.state, steamos_virtual_session::state_e::Ready);
+  EXPECT_EQ(disconnected.captured_frames, 1U);
+  EXPECT_TRUE(steamos_virtual_session::active());
+
+  steamos_virtual_session::mark_streaming();
+  steamos_virtual_session::mark_captured_frame();
+  EXPECT_EQ(steamos_virtual_session::status_snapshot().captured_frames, 2U);
+}
+
+/**
  * @brief Verify an external host PipeWire runtime is rejected before Gamescope starts.
  */
 TEST_F(SteamOSVirtualSessionTest, RejectsHostPipeWireRuntimeOutsideLoginRuntime) {

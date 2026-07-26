@@ -2186,13 +2186,11 @@ namespace stream {
 
       // If this is the last session, invoke the platform callbacks
       if (--running_sessions == 0) {
-        // SteamOS virtual sessions are explicitly connection-scoped. The
-        // normal Sunshine desktop policy may leave an application running,
-        // but an app connected to our owned headless Gamescope must be
-        // terminated before its process group and runtime directory vanish.
-        if (steamos_virtual_session::active() && proc::proc.running()) {
-          proc::proc.terminate();
-        }
+        // A network disconnect is not a request to stop the application. Keep
+        // the owned Gamescope session and its child application available for
+        // Moonlight's /resume path; only an explicit /cancel or service stop
+        // tears them down.
+        steamos_virtual_session::mark_streaming_disconnected();
         bool revert_display_config {config::video.dd.config_revert_on_disconnect};
         if (proc::proc.running()) {
 #if defined SUNSHINE_TRAY && SUNSHINE_TRAY >= 1
@@ -2208,7 +2206,6 @@ namespace stream {
         }
 
         platf::streaming_will_stop();
-        steamos_virtual_session::stop();
       }
 
       BOOST_LOG(debug) << "Session ended"sv;

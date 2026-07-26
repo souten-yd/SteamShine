@@ -1209,6 +1209,7 @@ namespace nvhttp {
     tree.put("root.resume", 1);
 
     rtsp_stream::launch_session_raise(launch_session);
+    steamos_virtual_session::mark_streaming();
   }
 
   /**
