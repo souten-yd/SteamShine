@@ -1358,7 +1358,7 @@ namespace steamos_virtual_session {
     const auto timeout {std::chrono::milliseconds {config::steamos_virtual_display.pipewire_node_timeout_milliseconds}};
     const auto sources {gamescope_source::discover_gamescope_sources(runtime, remote, timeout, error)};
     const auto source {std::find_if(sources.begin(), sources.end(), [producer_pid, producer_start_time, object_serial, &render_node](const gamescope_source::gamescope_source_t &candidate) {
-      return candidate.producer_pid == producer_pid && candidate.producer_start_time == producer_start_time && candidate.render_node == render_node &&
+      return candidate.producer_pid == producer_pid && candidate.producer_start_time == producer_start_time && pipewire_capture::matches_selected_render_node(candidate.render_node, render_node) &&
              (object_serial == 0 || candidate.object_serial == object_serial) && gamescope_source::source_identity_is_current(candidate);
     })};
     if (source == sources.end()) {
@@ -1377,7 +1377,7 @@ namespace steamos_virtual_session {
       .object_serial = source->object_serial,
       .producer_pid = source->producer_pid,
       .producer_start_time = source->producer_start_time,
-      .render_node = source->render_node,
+      .render_node = render_node,
       .source_label = source_label.empty() ? source->node_description : source_label,
     };
     if (!pipewire_capture::has_verified_source_identity(descriptor)) {

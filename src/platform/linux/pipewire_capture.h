@@ -34,6 +34,19 @@ namespace pipewire_capture {
   bool has_verified_source_identity(const stream_descriptor_t &descriptor);
 
   /**
+   * @brief Check an optional producer render-node property against the selected GPU.
+   *
+   * Gamescope's PipeWire node may omit a render-node property even though its
+   * producer process and configured Gamescope GPU are independently verified.
+   * An absent property remains acceptable; a present value must match exactly.
+   *
+   * @param producer_render_node Optional render-node property from PipeWire.
+   * @param selected_render_node DRM render node selected for the session.
+   * @return True when the property is absent or exactly matches the selection.
+   */
+  bool matches_selected_render_node(const std::string &producer_render_node, const std::string &selected_render_node);
+
+  /**
    * @brief Compare two descriptors without treating their consumer FDs as shared state.
    *
    * @param left First verified descriptor.

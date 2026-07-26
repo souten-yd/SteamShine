@@ -355,6 +355,9 @@ namespace {
     EXPECT_TRUE(pipewire_capture::has_verified_source_identity(remote));
     EXPECT_TRUE(pipewire_capture::has_verified_source_identity(local));
     EXPECT_TRUE(pipewire_capture::refers_to_same_source(remote, local));
+    EXPECT_TRUE(pipewire_capture::matches_selected_render_node("", remote.render_node));
+    EXPECT_TRUE(pipewire_capture::matches_selected_render_node(remote.render_node, remote.render_node));
+    EXPECT_FALSE(pipewire_capture::matches_selected_render_node("/dev/dri/renderD129", remote.render_node));
 
     local.producer_start_time++;
     EXPECT_FALSE(pipewire_capture::refers_to_same_source(remote, local));
