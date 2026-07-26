@@ -60,6 +60,48 @@ namespace steamos_virtual_session {
     return "auto";
   }
 
+  std::optional<local_presentation_policy_e> parse_local_presentation_policy(const std::string_view value) {
+    if (value == "auto") {
+      return local_presentation_policy_e::auto_select;
+    }
+    if (value == "off") {
+      return local_presentation_policy_e::off;
+    }
+    if (value == "mirror") {
+      return local_presentation_policy_e::mirror;
+    }
+    return std::nullopt;
+  }
+
+  std::string_view to_string(const local_presentation_policy_e policy) {
+    switch (policy) {
+      case local_presentation_policy_e::auto_select:
+        return "auto";
+      case local_presentation_policy_e::off:
+        return "off";
+      case local_presentation_policy_e::mirror:
+        return "mirror";
+    }
+    return "auto";
+  }
+
+  presentation_e decide_presentation(const local_presentation_policy_e policy, const session_origin_e origin, const bool host_wayland_available, const bool physical_output_connected) {
+    if (policy == local_presentation_policy_e::off || origin != session_origin_e::owned_private || !host_wayland_available || !physical_output_connected) {
+      return presentation_e::remote_only;
+    }
+    return presentation_e::remote_and_local;
+  }
+
+  std::string_view to_string(const presentation_e presentation) {
+    switch (presentation) {
+      case presentation_e::remote_only:
+        return "remote_only";
+      case presentation_e::remote_and_local:
+        return "remote_and_local";
+    }
+    return "remote_only";
+  }
+
   std::optional<virtual_display_mode_e> parse_virtual_display_mode(const std::string_view value) {
     if (value == "off") {
       return virtual_display_mode_e::off;

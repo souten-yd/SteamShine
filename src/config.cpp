@@ -1720,6 +1720,18 @@ namespace config {
         steamos_virtual_display.session_source = *source;
       }
     }
+    {
+      std::string presentation_value;
+      string_f(vars, "steamos_local_presentation", presentation_value);
+      if (!presentation_value.empty()) {
+        const auto presentation {steamos_virtual_session::parse_local_presentation_policy(presentation_value)};
+        if (!presentation) {
+          BOOST_LOG(error) << "config: invalid steamos_local_presentation value: " << presentation_value << "; expected auto, off, or mirror";
+          throw std::invalid_argument {"invalid steamos_local_presentation"};
+        }
+        steamos_virtual_display.local_presentation = *presentation;
+      }
+    }
     bool_f(vars, "steamos_keep_session_alive", steamos_virtual_display.keep_session_alive);
     int_between_f(vars, "steamos_existing_gamescope_pid", steamos_virtual_display.existing_gamescope_pid, {0, INT_MAX});
     string_f(vars, "steamos_gamescope_path", steamos_virtual_display.gamescope_path);

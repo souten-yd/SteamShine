@@ -57,6 +57,24 @@ namespace {
   }
 
   /**
+   * @brief Verify local presentation never mirrors an attached Game Mode output.
+   */
+  TEST(SteamOSVirtualSessionCore, DecidesLocalPresentationSafely) {
+    using steamos_virtual_session::decide_presentation;
+    using steamos_virtual_session::local_presentation_policy_e;
+    using steamos_virtual_session::parse_local_presentation_policy;
+    using steamos_virtual_session::presentation_e;
+    using steamos_virtual_session::session_origin_e;
+
+    EXPECT_EQ(parse_local_presentation_policy("mirror"), local_presentation_policy_e::mirror);
+    EXPECT_FALSE(parse_local_presentation_policy("local").has_value());
+    EXPECT_EQ(decide_presentation(local_presentation_policy_e::mirror, session_origin_e::owned_private, true, true), presentation_e::remote_and_local);
+    EXPECT_EQ(decide_presentation(local_presentation_policy_e::auto_select, session_origin_e::attached_existing, true, true), presentation_e::remote_only);
+    EXPECT_EQ(decide_presentation(local_presentation_policy_e::mirror, session_origin_e::owned_private, false, true), presentation_e::remote_only);
+    EXPECT_EQ(steamos_virtual_session::to_string(presentation_e::remote_and_local), "remote_and_local");
+  }
+
+  /**
    * @brief Verify force never falls back because a physical desktop exists.
    */
   TEST(SteamOSVirtualSessionCore, DecidesVirtualDisplayPolicy) {

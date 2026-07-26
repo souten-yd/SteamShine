@@ -299,6 +299,7 @@ namespace config {
     bool enabled {false};  ///< Enable the opt-in SteamOS virtual display provider.
     steamos_virtual_session::virtual_display_mode_e mode {steamos_virtual_session::virtual_display_mode_e::auto_detect};  ///< Virtual display policy parsed once during configuration loading.
     steamos_virtual_session::session_source_policy_e session_source {steamos_virtual_session::session_source_policy_e::auto_select};  ///< Gamescope source selection policy.
+    steamos_virtual_session::local_presentation_policy_e local_presentation {steamos_virtual_session::local_presentation_policy_e::auto_select};  ///< Local presentation policy for owned private sessions.
     bool keep_session_alive {true};  ///< Retain a prepared owned session after Moonlight disconnect.
     int existing_gamescope_pid {0};  ///< Optional administrator-selected resident Gamescope PID; zero selects automatically.
     std::string gamescope_path {"gamescope"};  ///< Gamescope executable used for owned sessions.

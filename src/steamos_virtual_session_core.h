@@ -53,6 +53,58 @@ namespace steamos_virtual_session {
   std::string_view to_string(session_source_policy_e policy);
 
   /**
+   * @brief Selects whether an owned private session is mirrored locally.
+   */
+  enum class local_presentation_policy_e {
+    auto_select,  ///< Mirror only when an owned session and host display are available.
+    off,  ///< Keep the session remote-only.
+    mirror,  ///< Require a local mirror for a SteamShine-owned private session.
+  };
+
+  /**
+   * @brief Parse a canonical local-presentation policy value.
+   *
+   * @param value Configuration value to parse; matching is case-sensitive.
+   * @return Parsed policy, or std::nullopt when unsupported.
+   */
+  std::optional<local_presentation_policy_e> parse_local_presentation_policy(std::string_view value);
+
+  /**
+   * @brief Return the canonical configuration spelling for a local-presentation policy.
+   *
+   * @param policy Policy to serialize.
+   * @return The lowercase configuration value.
+   */
+  std::string_view to_string(local_presentation_policy_e policy);
+
+  /**
+   * @brief Active presentation paths for the selected Gamescope session.
+   */
+  enum class presentation_e {
+    remote_only,  ///< Stream only through the remote encoder path.
+    remote_and_local,  ///< Stream remotely and mirror the owned private session locally.
+  };
+
+  /**
+   * @brief Choose local presentation without mirroring an existing Game Mode output.
+   *
+   * @param policy Local presentation configuration.
+   * @param origin Ownership origin of the selected Gamescope source.
+   * @param host_wayland_available Whether a captured host Wayland endpoint exists.
+   * @param physical_output_connected Whether a local physical output is available.
+   * @return Desired presentation paths; unavailable local presentation fails closed to remote-only.
+   */
+  presentation_e decide_presentation(local_presentation_policy_e policy, session_origin_e origin, bool host_wayland_available, bool physical_output_connected);
+
+  /**
+   * @brief Return a stable status spelling for presentation paths.
+   *
+   * @param presentation Presentation paths to serialize.
+   * @return The lowercase status value.
+   */
+  std::string_view to_string(presentation_e presentation);
+
+  /**
    * @brief Policy governing whether SteamShine owns a virtual display.
    */
   enum class virtual_display_mode_e {
