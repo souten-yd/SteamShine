@@ -156,19 +156,23 @@ TEST(WebServicesTest, PersistsVirtualDisplayPolicyForRestart) {
   config::sunshine.config_file = temporary_config.string();
 
   web::ConfigurationService configuration;
-  const auto invalid = configuration.save_virtual_display(true, "FORCE", "auto", true, 0);
+  const auto invalid = configuration.save_virtual_display(true, "FORCE", "auto", "auto", true, 0);
   EXPECT_FALSE(invalid.success);
   EXPECT_EQ(invalid.code, "invalid_virtual_display_mode");
 
-  const auto invalid_source = configuration.save_virtual_display(true, "force", "resident", true, 0);
+  const auto invalid_source = configuration.save_virtual_display(true, "force", "resident", "auto", true, 0);
   EXPECT_FALSE(invalid_source.success);
   EXPECT_EQ(invalid_source.code, "invalid_steamos_session_source");
 
-  const auto invalid_pid = configuration.save_virtual_display(true, "force", "owned_private", false, -1);
+  const auto invalid_presentation = configuration.save_virtual_display(true, "force", "owned_private", "desktop", false, 0);
+  EXPECT_FALSE(invalid_presentation.success);
+  EXPECT_EQ(invalid_presentation.code, "invalid_steamos_local_presentation");
+
+  const auto invalid_pid = configuration.save_virtual_display(true, "force", "owned_private", "mirror", false, -1);
   EXPECT_FALSE(invalid_pid.success);
   EXPECT_EQ(invalid_pid.code, "invalid_steamos_existing_gamescope_pid");
 
-  const auto saved = configuration.save_virtual_display(true, "force", "owned_private", false, 4321);
+  const auto saved = configuration.save_virtual_display(true, "force", "owned_private", "mirror", false, 4321);
   EXPECT_TRUE(saved.success);
   EXPECT_EQ(saved.code, "restart_required");
   const auto persisted = file_handler::read_file(temporary_config.string().c_str());
@@ -176,12 +180,14 @@ TEST(WebServicesTest, PersistsVirtualDisplayPolicyForRestart) {
   EXPECT_NE(persisted.find("steamos_virtual_display_enabled = enabled"), std::string::npos);
   EXPECT_NE(persisted.find("steamos_virtual_display_mode = force"), std::string::npos);
   EXPECT_NE(persisted.find("steamos_session_source = owned_private"), std::string::npos);
+  EXPECT_NE(persisted.find("steamos_local_presentation = mirror"), std::string::npos);
   EXPECT_NE(persisted.find("steamos_keep_session_alive = disabled"), std::string::npos);
   EXPECT_NE(persisted.find("steamos_existing_gamescope_pid = 4321"), std::string::npos);
   const auto snapshot = configuration.snapshot();
   EXPECT_EQ(snapshot.at("steamos_virtual_display_enabled"), "enabled");
   EXPECT_EQ(snapshot.at("steamos_virtual_display_mode"), "force");
   EXPECT_EQ(snapshot.at("steamos_session_source"), "owned_private");
+  EXPECT_EQ(snapshot.at("steamos_local_presentation"), "mirror");
   EXPECT_EQ(snapshot.at("steamos_keep_session_alive"), "disabled");
   EXPECT_EQ(snapshot.at("steamos_existing_gamescope_pid"), "4321");
 

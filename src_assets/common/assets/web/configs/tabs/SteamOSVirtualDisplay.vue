@@ -38,6 +38,15 @@ const config = ref(props.config)
       <div class="form-text">Use 0 for automatic selection. A nonzero PID must be the uniquely verified current-user Game Mode Gamescope.</div>
     </div>
     <div class="mb-3">
+      <label class="form-label" for="steamos_local_presentation">Local Presentation</label>
+      <select id="steamos_local_presentation" v-model="config.steamos_local_presentation" class="form-select">
+        <option value="auto">Auto: mirror owned private sessions when a host display is available</option>
+        <option value="off">Off: remote streaming only</option>
+        <option value="mirror">Mirror SteamShine-owned private sessions locally</option>
+      </select>
+      <div class="form-text">Existing Game Mode retains its physical output and is never mirrored a second time.</div>
+    </div>
+    <div class="mb-3">
       <label class="form-label" for="steamos_virtual_display_mode">Virtual Display Mode</label>
       <select id="steamos_virtual_display_mode" class="form-select" v-model="config.steamos_virtual_display_mode">
         <option value="off">Off</option>

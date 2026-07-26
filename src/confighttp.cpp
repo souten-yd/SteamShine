@@ -1744,7 +1744,7 @@ namespace confighttp {
     if (!read_steamshine_json(response, request, input)) {
       return;
     }
-    const auto result = configuration_service.save_virtual_display(input.value("enabled", false), input.value("mode", ""), input.value("session_source", "auto"), input.value("keep_session_alive", true), input.value("existing_gamescope_pid", 0));
+    const auto result = configuration_service.save_virtual_display(input.value("enabled", false), input.value("mode", ""), input.value("session_source", "auto"), input.value("local_presentation", "auto"), input.value("keep_session_alive", true), input.value("existing_gamescope_pid", 0));
     send_steamshine_response(response, {{"status", result.success}, {"code", result.code}, {"message", result.message}});
   }
 

@@ -212,6 +212,7 @@ namespace web {
     const auto enabled = persisted.contains("steamos_virtual_display_enabled") ? persisted.at("steamos_virtual_display_enabled") : (config::steamos_virtual_display.enabled ? "enabled" : "disabled");
     const auto mode = persisted.contains("steamos_virtual_display_mode") ? persisted.at("steamos_virtual_display_mode") : std::string {steamos_virtual_session::to_string(config::steamos_virtual_display.mode)};
     const auto session_source = persisted.contains("steamos_session_source") ? persisted.at("steamos_session_source") : std::string {steamos_virtual_session::to_string(config::steamos_virtual_display.session_source)};
+    const auto local_presentation = persisted.contains("steamos_local_presentation") ? persisted.at("steamos_local_presentation") : std::string {steamos_virtual_session::to_string(config::steamos_virtual_display.local_presentation)};
     const auto keep_session_alive = persisted.contains("steamos_keep_session_alive") ? persisted.at("steamos_keep_session_alive") : (config::steamos_virtual_display.keep_session_alive ? "enabled" : "disabled");
     const auto existing_gamescope_pid = persisted.contains("steamos_existing_gamescope_pid") ? persisted.at("steamos_existing_gamescope_pid") : std::to_string(config::steamos_virtual_display.existing_gamescope_pid);
     return {
@@ -222,6 +223,7 @@ namespace web {
       {"steamos_virtual_display_enabled", enabled},
       {"steamos_virtual_display_mode", mode},
       {"steamos_session_source", session_source},
+      {"steamos_local_presentation", local_presentation},
       {"steamos_keep_session_alive", keep_session_alive},
       {"steamos_existing_gamescope_pid", existing_gamescope_pid},
     };
@@ -253,12 +255,15 @@ namespace web {
     };
   }
 
-  service_result_t ConfigurationService::save_virtual_display(const bool enabled, const std::string_view mode, const std::string_view session_source, const bool keep_session_alive, const int existing_gamescope_pid) const {
+  service_result_t ConfigurationService::save_virtual_display(const bool enabled, const std::string_view mode, const std::string_view session_source, const std::string_view local_presentation, const bool keep_session_alive, const int existing_gamescope_pid) const {
     if (!steamos_virtual_session::parse_virtual_display_mode(mode).has_value()) {
       return {false, "invalid_virtual_display_mode", "Virtual display mode must be off, auto, or force."};
     }
     if (!steamos_virtual_session::parse_session_source_policy(session_source).has_value()) {
       return {false, "invalid_steamos_session_source", "Gamescope source must be auto, existing_gamescope, or owned_private."};
+    }
+    if (!steamos_virtual_session::parse_local_presentation_policy(local_presentation).has_value()) {
+      return {false, "invalid_steamos_local_presentation", "Local presentation must be auto, off, or mirror."};
     }
     if (existing_gamescope_pid < 0) {
       return {false, "invalid_steamos_existing_gamescope_pid", "Gamescope PID must be zero or a positive process ID."};
@@ -269,6 +274,7 @@ namespace web {
       persisted["steamos_virtual_display_enabled"] = enabled ? "enabled" : "disabled";
       persisted["steamos_virtual_display_mode"] = std::string {mode};
       persisted["steamos_session_source"] = std::string {session_source};
+      persisted["steamos_local_presentation"] = std::string {local_presentation};
       persisted["steamos_keep_session_alive"] = keep_session_alive ? "enabled" : "disabled";
       persisted["steamos_existing_gamescope_pid"] = std::to_string(existing_gamescope_pid);
 
