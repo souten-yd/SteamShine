@@ -621,14 +621,18 @@ namespace steamos_virtual_session {
       struct stat socket_stat {};
       if (::lstat(socket_path.c_str(), &socket_stat) != 0) {
         failure = "Host PipeWire socket does not exist";
+        const int socket_error {errno};
+        BOOST_LOG(error) << "SESSION_EVENT pipewire_socket_missing runtime=" << runtime << " remote=" << remote << " socket=" << socket_path << " errno=" << socket_error << " message=" << std::strerror(socket_error) << " uid=" << ::getuid();
         return false;
       }
       if (!S_ISSOCK(socket_stat.st_mode)) {
         failure = "Host PipeWire path is not a UNIX socket";
+        BOOST_LOG(error) << "SESSION_EVENT pipewire_socket_wrong_type runtime=" << runtime << " remote=" << remote << " socket=" << socket_path << " mode=" << std::oct << socket_stat.st_mode << std::dec << " uid=" << ::getuid() << " socket_uid=" << socket_stat.st_uid;
         return false;
       }
       if (socket_stat.st_uid != ::getuid()) {
         failure = "Host PipeWire socket is owned by another user";
+        BOOST_LOG(error) << "SESSION_EVENT pipewire_socket_wrong_owner runtime=" << runtime << " remote=" << remote << " socket=" << socket_path << " uid=" << ::getuid() << " socket_uid=" << socket_stat.st_uid;
         return false;
       }
       if (socket_path.string().size() >= sizeof(sockaddr_un::sun_path)) {
