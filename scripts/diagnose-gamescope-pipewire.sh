@@ -8,15 +8,25 @@ set -Eeuo pipefail
   exit 2
 }
 
-runtime_dir="${STEAMSHINE_PIPEWIRE_RUNTIME:-${XDG_RUNTIME_DIR:?XDG_RUNTIME_DIR is required}}"
-remote_name="${STEAMSHINE_PIPEWIRE_REMOTE:-${PIPEWIRE_REMOTE:-pipewire-0}}"
+service_name="${STEAMSHINE_SERVICE_NAME:-steamshine.service}"
+config_file="${STEAMSHINE_CONFIG_FILE:-}"
+configured_runtime="${STEAMSHINE_PIPEWIRE_RUNTIME:-}"
+configured_remote="${STEAMSHINE_PIPEWIRE_REMOTE:-}"
+
+if [[ -n "${config_file}" && -r "${config_file}" ]]; then
+  configured_runtime="${configured_runtime:-$(sed -nE 's/^[[:space:]]*steamos_pipewire_runtime[[:space:]]*=[[:space:]]*(.*)[[:space:]]*$/\1/p' "${config_file}" | tail -n 1)}"
+  configured_remote="${configured_remote:-$(sed -nE 's/^[[:space:]]*steamos_pipewire_remote[[:space:]]*=[[:space:]]*(.*)[[:space:]]*$/\1/p' "${config_file}" | tail -n 1)}"
+fi
+
+runtime_dir="${configured_runtime:-${PIPEWIRE_RUNTIME_DIR:-${XDG_RUNTIME_DIR:?XDG_RUNTIME_DIR is required}}}"
+remote_name="${configured_remote:-${PIPEWIRE_REMOTE:-pipewire-0}}"
 socket_path="${runtime_dir}/${remote_name}"
-service_name="steamshine.service"
 
 section() { printf '\n=== %s ===\n' "$1"; }
 
 section 'Host PipeWire endpoint'
-printf 'runtime=%s\nremote=%s\nsocket=%s\n' "${runtime_dir}" "${remote_name}" "${socket_path}"
+printf 'configured_runtime=%s\nconfigured_remote=%s\nruntime=%s\nremote=%s\nsocket=%s\n' \
+  "${configured_runtime:-<unset>}" "${configured_remote:-<unset>}" "${runtime_dir}" "${remote_name}" "${socket_path}"
 printf 'canonical_runtime=%s\n' "$(realpath -e "${runtime_dir}" 2>/dev/null || printf 'unavailable')"
 stat -c 'path=%n type=%F uid=%u gid=%g mode=%a' "${runtime_dir}" "${socket_path}" 2>&1 || true
 
@@ -30,11 +40,12 @@ if [[ "${service_pid}" =~ ^[0-9]+$ ]] && [[ "${service_pid}" -gt 0 ]] && [[ -r "
 fi
 
 section 'Host PipeWire connection'
-if PIPEWIRE_RUNTIME_DIR="${runtime_dir}" PIPEWIRE_REMOTE="${remote_name}" pw-cli info 0 >/dev/null 2>&1; then
+if pipewire_connect_output="$(PIPEWIRE_RUNTIME_DIR="${runtime_dir}" PIPEWIRE_REMOTE="${remote_name}" pw-cli info 0 2>&1)"; then
   printf '%s\n' 'pipewire_socket_connected=true'
 else
   connection_status=$?
   printf 'pipewire_socket_connected=false exit_status=%s\n' "${connection_status}"
+  printf 'connect_detail=%s\n' "${pipewire_connect_output}"
 fi
 
 section 'Private Wayland runtimes'
@@ -44,8 +55,21 @@ section 'Owned Gamescope processes'
 pgrep -a gamescope 2>&1 || true
 for process in $(pgrep gamescope 2>/dev/null || true); do
   printf '\n--- pid=%s ---\n' "${process}"
-  tr '\0' '\n' <"/proc/${process}/environ" 2>/dev/null | grep -E '^(XDG_RUNTIME_DIR|PIPEWIRE_RUNTIME_DIR|PIPEWIRE_REMOTE|PULSE_RUNTIME_PATH)=' || true
+  (
+    tr '\0' '\n' <"/proc/${process}/environ"
+  ) 2>/dev/null | grep -E '^(XDG_RUNTIME_DIR|PIPEWIRE_RUNTIME_DIR|PIPEWIRE_REMOTE|PULSE_RUNTIME_PATH)=' || true
 done
+
+section 'Application child environment'
+if [[ "${service_pid}" =~ ^[0-9]+$ ]] && [[ "${service_pid}" -gt 0 ]]; then
+  for process in $(pgrep -P "${service_pid}" 2>/dev/null || true); do
+    printf '\n--- pid=%s ---\n' "${process}"
+    (
+      tr '\0' '\n' <"/proc/${process}/environ"
+    ) 2>/dev/null |
+      grep -E '^(SUNSHINE_APP_(ID|NAME)|XDG_RUNTIME_DIR|WAYLAND_DISPLAY|PIPEWIRE_RUNTIME_DIR|PIPEWIRE_REMOTE|PULSE_RUNTIME_PATH)=' || true
+  done
+fi
 
 section 'PipeWire nodes'
 pw-cli ls Node 2>&1 || true

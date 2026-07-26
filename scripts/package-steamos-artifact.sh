@@ -33,6 +33,7 @@ install -m 644 "${miniupnpc_library}" "${stage}/lib/"
 patchelf --set-rpath "\$ORIGIN/../lib" "${stage}/bin/steamshine"
 install -m 755 \
   "${root_dir}/scripts/collect-steamos-runtime-baseline.sh" \
+  "${root_dir}/scripts/diagnose-gamescope-pipewire.sh" \
   "${root_dir}/scripts/diagnose-steamos-virtual-display.sh" \
   "${root_dir}/scripts/test-steamos-virtual-display.sh" \
   "${root_dir}/scripts/test-steamos-reconnect.sh" \
