@@ -12,6 +12,7 @@
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace gamescope_source {
@@ -34,6 +35,15 @@ namespace gamescope_source {
    * @return Current process identity, or std::nullopt when it cannot be read safely.
    */
   std::optional<process_identity_t> read_process_identity(int pid);
+
+  /**
+   * @brief Validate procfs command evidence for a capability-restricted Gamescope.
+   *
+   * @param command_line Nul-separated `/proc/<pid>/cmdline` content.
+   * @param comm `/proc/<pid>/comm` content without its trailing newline.
+   * @return True only when both procfs fields identify a Gamescope executable.
+   */
+  bool has_gamescope_command_identity(std::string_view command_line, std::string_view comm);
 
   /**
    * @brief Verify that a source still identifies the originally discovered Gamescope process.

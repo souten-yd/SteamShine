@@ -273,6 +273,16 @@ namespace {
   }
 
   /**
+   * @brief Verify capability-restricted Gamescope identification requires both procfs fields.
+   */
+  TEST(SteamOSVirtualSessionCore, ValidatesCapabilityRestrictedGamescopeCommandIdentity) {
+    EXPECT_TRUE(gamescope_source::has_gamescope_command_identity("gamescope\0--backend\0headless", "gamescope-wl"));
+    EXPECT_TRUE(gamescope_source::has_gamescope_command_identity("/usr/bin/gamescope-wl\0--backend\0headless", "gamescope"));
+    EXPECT_FALSE(gamescope_source::has_gamescope_command_identity("gamescope-helper\0", "gamescope"));
+    EXPECT_FALSE(gamescope_source::has_gamescope_command_identity("gamescope\0", "unrelated"));
+  }
+
+  /**
    * @brief Verify Steam singleton placement uses target membership rather than a name alone.
    */
   TEST(SteamOSVirtualSessionCore, ClassifiesSteamInstanceLocation) {

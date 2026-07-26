@@ -70,14 +70,10 @@ namespace gamescope_source {
     std::optional<std::filesystem::path> gamescope_identity_from_command_line(const std::filesystem::path &process_directory) {
       std::ifstream command_file {process_directory / "cmdline", std::ios::binary};
       const std::string command {std::istreambuf_iterator<char> {command_file}, {}};
-      const auto command_end {command.find('\0')};
-      const std::filesystem::path command_name {command.substr(0, command_end)};
       std::ifstream comm_file {process_directory / "comm"};
       std::string comm;
       std::getline(comm_file, comm);
-      const bool command_is_gamescope {command_name.filename() == "gamescope" || command_name.filename() == "gamescope-wl"};
-      const bool comm_is_gamescope {comm == "gamescope" || comm == "gamescope-wl"};
-      return command_is_gamescope && comm_is_gamescope ? std::optional<std::filesystem::path> {"gamescope"} : std::nullopt;
+      return has_gamescope_command_identity(command, comm) ? std::optional<std::filesystem::path> {"gamescope"} : std::nullopt;
     }
 
     /**
@@ -524,6 +520,14 @@ namespace gamescope_source {
     (void) pid;
     return std::nullopt;
 #endif
+  }
+
+  bool has_gamescope_command_identity(const std::string_view command_line, const std::string_view comm) {
+    const auto command_end {command_line.find('\0')};
+    const std::filesystem::path command_name {command_line.substr(0, command_end)};
+    const bool command_is_gamescope {command_name.filename() == "gamescope" || command_name.filename() == "gamescope-wl"};
+    const bool comm_is_gamescope {comm == "gamescope" || comm == "gamescope-wl"};
+    return command_is_gamescope && comm_is_gamescope;
   }
 
   bool source_identity_is_current(const gamescope_source_t &source) {
