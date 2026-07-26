@@ -1,29 +1,27 @@
 /**
  * @file src/platform/linux/host_desktop_endpoint.cpp
- * @brief Immutable host desktop endpoint implementation.
+ * @brief Refreshable host desktop endpoint implementation.
  */
 #include "host_desktop_endpoint.h"
 
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
-#include <algorithm>
 #include <mutex>
 
 #if defined(SUNSHINE_BUILD_WAYLAND)
-  #include <xdg-shell.h>
-
-  #include <wayland-client.h>
-
   #include <sys/socket.h>
+  #include <sys/stat.h>
   #include <sys/un.h>
   #include <unistd.h>
+  #include <wayland-client.h>
+  #include <xdg-shell.h>
 #endif
 
 namespace host_desktop_endpoint {
   namespace {
-    std::mutex endpoint_mutex;  ///< Serializes the one-time endpoint capture.
-    endpoint_t endpoint;  ///< Immutable host endpoint after capture.
-    bool captured {};  ///< Whether the host endpoint was already captured.
+    std::mutex endpoint_mutex;  ///< Serializes endpoint refreshes.
+    endpoint_t endpoint;  ///< Latest complete host endpoint.
 
     /**
      * @brief Read an environment variable without retaining its process-owned pointer.
@@ -35,19 +33,60 @@ namespace host_desktop_endpoint {
       const auto *const value {std::getenv(name)};
       return value ? value : "";
     }
+
+#if defined(SUNSHINE_BUILD_WAYLAND)
+    /**
+     * @brief Validate and construct the current user's host Wayland socket path.
+     *
+     * @param host Candidate host endpoint.
+     * @param socket_path Receives the validated socket path.
+     * @param error Receives a human-readable rejection reason.
+     * @return True when the runtime and socket are current-user-owned and safe.
+     */
+    bool host_socket_path(const endpoint_t &host, std::string &socket_path, std::string &error) {
+      if (host.xdg_runtime_directory.empty() || host.wayland_display.empty() || host.wayland_display.find('/') != std::string::npos) {
+        error = "Captured host Wayland endpoint is unavailable";
+        return false;
+      }
+      socket_path = host.xdg_runtime_directory + "/" + host.wayland_display;
+      if (socket_path.size() >= sizeof(sockaddr_un {}.sun_path)) {
+        error = "Captured host Wayland socket path is too long";
+        return false;
+      }
+      struct stat runtime_status {};
+      struct stat socket_status {};
+      if (::lstat(host.xdg_runtime_directory.c_str(), &runtime_status) != 0 || !S_ISDIR(runtime_status.st_mode) || runtime_status.st_uid != ::geteuid()) {
+        error = "Captured host Wayland runtime is not a current-user-owned directory";
+        return false;
+      }
+      if (::lstat(socket_path.c_str(), &socket_status) != 0 || !S_ISSOCK(socket_status.st_mode) || socket_status.st_uid != ::geteuid()) {
+        error = "Captured host Wayland endpoint is not a current-user-owned UNIX socket";
+        return false;
+      }
+      return true;
+    }
+#endif
   }  // namespace
 
+  bool should_refresh(const endpoint_t &current, const endpoint_t &candidate) {
+    const bool candidate_complete {!candidate.xdg_runtime_directory.empty() && !candidate.wayland_display.empty()};
+    return candidate_complete &&
+           (current.xdg_runtime_directory != candidate.xdg_runtime_directory ||
+            current.wayland_display != candidate.wayland_display ||
+            current.x11_display != candidate.x11_display);
+  }
+
   void capture() {
-    std::scoped_lock lock {endpoint_mutex};
-    if (captured) {
-      return;
-    }
-    endpoint = {
+    const endpoint_t candidate {
       .xdg_runtime_directory = environment_value("XDG_RUNTIME_DIR"),
       .wayland_display = environment_value("WAYLAND_DISPLAY"),
       .x11_display = environment_value("DISPLAY"),
     };
-    captured = true;
+    std::scoped_lock lock {endpoint_mutex};
+    if (should_refresh(endpoint, candidate)) {
+      endpoint = candidate;
+      ++endpoint.generation;
+    }
   }
 
   endpoint_t current() {
@@ -58,13 +97,8 @@ namespace host_desktop_endpoint {
   bool supports_wayland_presentation(std::string &error) {
 #if defined(SUNSHINE_BUILD_WAYLAND)
     const auto host {current()};
-    if (host.xdg_runtime_directory.empty() || host.wayland_display.empty() || host.wayland_display.find('/') != std::string::npos) {
-      error = "Captured host Wayland endpoint is unavailable";
-      return false;
-    }
-    const auto socket_path {host.xdg_runtime_directory + "/" + host.wayland_display};
-    if (socket_path.size() >= sizeof(sockaddr_un {}.sun_path)) {
-      error = "Captured host Wayland socket path is too long";
+    std::string socket_path;
+    if (!host_socket_path(host, socket_path, error)) {
       return false;
     }
     const int fd {::socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0)};
@@ -86,17 +120,20 @@ namespace host_desktop_endpoint {
       error = "Failed to create a host Wayland client connection";
       return false;
     }
+
     struct registry_state_t {
       bool compositor {};  ///< Whether the host exposes `wl_compositor`.
       bool xdg_shell {};  ///< Whether the host exposes `xdg_wm_base`.
     } state;
+
     const wl_registry_listener listener {
       .global = [](void *data, wl_registry *, uint32_t, const char *interface, uint32_t) {
         auto &registry_state {*static_cast<registry_state_t *>(data)};
         registry_state.compositor = registry_state.compositor || std::strcmp(interface, wl_compositor_interface.name) == 0;
         registry_state.xdg_shell = registry_state.xdg_shell || std::strcmp(interface, xdg_wm_base_interface.name) == 0;
       },
-      .global_remove = [](void *, wl_registry *, uint32_t) {},
+      .global_remove = [](void *, wl_registry *, uint32_t) {
+      },
     };
     wl_registry *const registry {wl_display_get_registry(display)};
     wl_registry_add_listener(registry, &listener, &state);
@@ -114,6 +151,9 @@ namespace host_desktop_endpoint {
 #endif
   }
 
+  /**
+   * @brief Private host Wayland presentation objects.
+   */
   struct wayland_presentation_window_t::impl_t {
 #if defined(SUNSHINE_BUILD_WAYLAND)
     wl_display *display {nullptr};  ///< Dedicated host compositor connection.
@@ -137,13 +177,8 @@ namespace host_desktop_endpoint {
     stop();
 #if defined(SUNSHINE_BUILD_WAYLAND)
     const auto host {current()};
-    if (host.xdg_runtime_directory.empty() || host.wayland_display.empty() || host.wayland_display.find('/') != std::string::npos) {
-      error = "Captured host Wayland endpoint is unavailable";
-      return false;
-    }
-    const auto socket_path {host.xdg_runtime_directory + "/" + host.wayland_display};
-    if (socket_path.size() >= sizeof(sockaddr_un {}.sun_path)) {
-      error = "Captured host Wayland socket path is too long";
+    std::string socket_path;
+    if (!host_socket_path(host, socket_path, error)) {
       return false;
     }
     const int fd {::socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0)};
@@ -165,9 +200,11 @@ namespace host_desktop_endpoint {
       error = "Failed to create a host Wayland client connection";
       return false;
     }
+
     struct registry_state_t {
       wayland_presentation_window_t::impl_t *window;  ///< Window receiving bound globals.
     } state {impl_.get()};
+
     const wl_registry_listener registry_listener {
       .global = [](void *data, wl_registry *registry, uint32_t name, const char *interface, uint32_t version) {
         auto &window {*static_cast<registry_state_t *>(data)->window};
@@ -177,7 +214,8 @@ namespace host_desktop_endpoint {
           window.shell = static_cast<xdg_wm_base *>(wl_registry_bind(registry, name, &xdg_wm_base_interface, std::min(version, 1U)));
         }
       },
-      .global_remove = [](void *, wl_registry *, uint32_t) {},
+      .global_remove = [](void *, wl_registry *, uint32_t) {
+      },
     };
     wl_registry *const registry {wl_display_get_registry(impl_->display)};
     wl_registry_add_listener(registry, &registry_listener, &state);

@@ -314,6 +314,9 @@ endif()
 add_subdirectory("${CMAKE_SOURCE_DIR}/third-party/inputtino")
 list(APPEND SUNSHINE_EXTERNAL_LIBRARIES inputtino::libinputtino)
 file(GLOB_RECURSE INPUTTINO_SOURCES
+        ${CMAKE_SOURCE_DIR}/src/platform/linux/input/gamescope_eis_input.h
+        ${CMAKE_SOURCE_DIR}/src/platform/linux/input/gamescope_eis_input.cpp
+        ${CMAKE_SOURCE_DIR}/src/platform/linux/input/input_key_mapping.h
         ${CMAKE_SOURCE_DIR}/src/platform/linux/input/inputtino*.h
         ${CMAKE_SOURCE_DIR}/src/platform/linux/input/inputtino*.cpp)
 list(APPEND PLATFORM_TARGET_FILES ${INPUTTINO_SOURCES})

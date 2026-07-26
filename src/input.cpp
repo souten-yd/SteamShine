@@ -9,10 +9,15 @@ extern "C" {
 }
 
 // standard includes
+#include <algorithm>
+#include <atomic>
 #include <bitset>
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
+#include <iterator>
 #include <list>
+#include <mutex>
 #include <thread>
 #include <unordered_map>
 
@@ -36,6 +41,41 @@ constexpr int WHEEL_DELTA = 120;  ///< Standard Windows wheel delta used to norm
 using namespace std::literals;
 
 namespace input {
+
+  namespace {
+    std::atomic_uint64_t input_events_received {0};  ///< Input packets accepted from the control stream.
+    std::atomic_uint64_t input_events_injected {0};  ///< Packets sent to the platform input backend.
+    std::atomic_uint64_t input_motion_coalesced {0};  ///< Motion packets combined before injection.
+    std::atomic_uint64_t input_motion_dropped {0};  ///< Motion packets dropped by a bounded queue.
+    std::atomic_uint64_t input_queue_current {0};  ///< Current queue depth across the active stream.
+    std::atomic_uint64_t input_queue_max {0};  ///< Greatest queue depth across the active stream.
+    latency_diagnostics::fixed_ring_t<> input_queue_age;  ///< Fixed-memory T2-to-T3 latency samples.
+
+    /**
+     * @brief Publish an input queue depth and update its high-water mark.
+     *
+     * @param depth Number of packets waiting for input injection.
+     */
+    void record_input_queue_depth(const std::size_t depth) {
+      input_queue_current.store(depth, std::memory_order_relaxed);
+      auto maximum {input_queue_max.load(std::memory_order_relaxed)};
+      while (maximum < depth && !input_queue_max.compare_exchange_weak(maximum, depth, std::memory_order_relaxed)) {
+      }
+    }
+
+    /**
+     * @brief Reset aggregate diagnostics for a newly allocated stream input context.
+     */
+    void reset_input_diagnostics() {
+      input_events_received.store(0, std::memory_order_relaxed);
+      input_events_injected.store(0, std::memory_order_relaxed);
+      input_motion_coalesced.store(0, std::memory_order_relaxed);
+      input_motion_dropped.store(0, std::memory_order_relaxed);
+      input_queue_current.store(0, std::memory_order_relaxed);
+      input_queue_max.store(0, std::memory_order_relaxed);
+      input_queue_age.reset();
+    }
+  }  // namespace
 
   constexpr auto MAX_GAMEPADS = std::min((std::size_t) platf::MAX_GAMEPADS, sizeof(std::int16_t) * 8);  ///< Maximum gamepads representable by the active gamepad mask.
 /**
@@ -253,8 +293,7 @@ namespace input {
     safe::mail_raw_t::event_t<input::touch_port_t> touch_port_event;  ///< Touch port event.
     platf::feedback_queue_t feedback_queue;  ///< Queue used to deliver controller feedback to the platform backend.
 
-    std::list<std::vector<uint8_t>> input_queue;  ///< Pending raw input packets waiting for processing.
-    std::mutex input_queue_lock;  ///< Input queue lock.
+    packet_queue_t input_queue;  ///< Bounded decoded packets waiting for injection.
 
     thread_pool_util::ThreadPool::task_id_t mouse_left_button_timeout;  ///< Mouse left button timeout.
 
@@ -1452,10 +1491,10 @@ namespace input {
     short deltaY;
 
     // Batching is safe as long as the result doesn't overflow a 16-bit integer
-    if (!__builtin_add_overflow(util::endian::big(dest->deltaX), util::endian::big(src->deltaX), &deltaX)) {
+    if (__builtin_add_overflow(util::endian::big(dest->deltaX), util::endian::big(src->deltaX), &deltaX)) {
       return batch_result_e::terminate_batch;
     }
-    if (!__builtin_add_overflow(util::endian::big(dest->deltaY), util::endian::big(src->deltaY), &deltaY)) {
+    if (__builtin_add_overflow(util::endian::big(dest->deltaY), util::endian::big(src->deltaY), &deltaY)) {
       return batch_result_e::terminate_batch;
     }
 
@@ -1492,7 +1531,7 @@ namespace input {
     short scrollAmt;
 
     // Batching is safe as long as the result doesn't overflow a 16-bit integer
-    if (!__builtin_add_overflow(util::endian::big(dest->scrollAmt1), util::endian::big(src->scrollAmt1), &scrollAmt)) {
+    if (__builtin_add_overflow(util::endian::big(dest->scrollAmt1), util::endian::big(src->scrollAmt1), &scrollAmt)) {
       return batch_result_e::terminate_batch;
     }
 
@@ -1512,7 +1551,7 @@ namespace input {
     short scrollAmt;
 
     // Batching is safe as long as the result doesn't overflow a 16-bit integer
-    if (!__builtin_add_overflow(util::endian::big(dest->scrollAmount), util::endian::big(src->scrollAmount), &scrollAmt)) {
+    if (__builtin_add_overflow(util::endian::big(dest->scrollAmount), util::endian::big(src->scrollAmount), &scrollAmt)) {
       return batch_result_e::terminate_batch;
     }
 
@@ -1717,50 +1756,278 @@ namespace input {
     }
   }
 
+  namespace {
+    /**
+     * @brief Internal packet storage retaining its decode-complete timestamp.
+     */
+    struct packet_entry_t {
+      std::vector<std::uint8_t> data;  ///< Decoded protocol bytes.
+      std::chrono::steady_clock::time_point received_at;  ///< Queue insertion time.
+    };
+
+    /**
+     * @brief Return the concrete structure size for a batchable packet type.
+     *
+     * @param magic Host-endian input packet magic.
+     * @return Required packet bytes, or zero when the packet is not batchable.
+     */
+    std::size_t batchable_packet_size(const std::uint32_t magic) {
+      switch (magic) {
+        case MOUSE_MOVE_REL_MAGIC_GEN5:
+          return sizeof(NV_REL_MOUSE_MOVE_PACKET);
+        case MOUSE_MOVE_ABS_MAGIC:
+          return sizeof(NV_ABS_MOUSE_MOVE_PACKET);
+        case SCROLL_MAGIC_GEN5:
+          return sizeof(NV_SCROLL_PACKET);
+        case SS_HSCROLL_MAGIC:
+          return sizeof(SS_HSCROLL_PACKET);
+        case MULTI_CONTROLLER_MAGIC_GEN5:
+          return sizeof(NV_MULTI_CONTROLLER_PACKET);
+        case SS_TOUCH_MAGIC:
+          return sizeof(SS_TOUCH_PACKET);
+        case SS_PEN_MAGIC:
+          return sizeof(SS_PEN_PACKET);
+        case SS_CONTROLLER_TOUCH_MAGIC:
+          return sizeof(SS_CONTROLLER_TOUCH_PACKET);
+        case SS_CONTROLLER_MOTION_MAGIC:
+          return sizeof(SS_CONTROLLER_MOTION_PACKET);
+        default:
+          return 0;
+      }
+    }
+
+    /**
+     * @brief Safely batch two vector-backed packets.
+     *
+     * @param destination Packet updated when batching succeeds.
+     * @param source Later packet to combine.
+     * @return Batch decision without reading beyond either vector.
+     */
+    batch_result_e batch_packets(std::vector<std::uint8_t> &destination, const std::vector<std::uint8_t> &source) {
+      if (destination.size() < sizeof(NV_INPUT_HEADER) || source.size() < sizeof(NV_INPUT_HEADER)) {
+        return batch_result_e::terminate_batch;
+      }
+      auto *const destination_header {reinterpret_cast<PNV_INPUT_HEADER>(destination.data())};
+      const auto *const source_header {reinterpret_cast<const NV_INPUT_HEADER *>(source.data())};
+      if (destination_header->magic != source_header->magic) {
+        return batch_result_e::terminate_batch;
+      }
+      const auto required_size {batchable_packet_size(util::endian::little(destination_header->magic))};
+      if (required_size == 0 || destination.size() < required_size || source.size() < required_size) {
+        return batch_result_e::terminate_batch;
+      }
+      return batch(destination_header, const_cast<NV_INPUT_HEADER *>(source_header));
+    }
+
+    /**
+     * @brief Decide whether a packet is motion-only and safe to discard.
+     *
+     * @param packet Candidate decoded input packet.
+     * @return True only when the packet cannot contain a key, button, or touch edge.
+     */
+    bool is_intrinsically_droppable_motion(const std::vector<std::uint8_t> &packet) {
+      if (packet.size() < sizeof(NV_INPUT_HEADER)) {
+        return false;
+      }
+      const auto *const header {reinterpret_cast<const NV_INPUT_HEADER *>(packet.data())};
+      switch (util::endian::little(header->magic)) {
+        case MOUSE_MOVE_REL_MAGIC_GEN5:
+          return packet.size() >= sizeof(NV_REL_MOUSE_MOVE_PACKET);
+        case MOUSE_MOVE_ABS_MAGIC:
+          return packet.size() >= sizeof(NV_ABS_MOUSE_MOVE_PACKET);
+        case SS_TOUCH_MAGIC:
+          {
+            if (packet.size() < sizeof(SS_TOUCH_PACKET)) {
+              return false;
+            }
+            const auto *const touch {reinterpret_cast<const SS_TOUCH_PACKET *>(packet.data())};
+            return touch->eventType == LI_TOUCH_EVENT_MOVE || touch->eventType == LI_TOUCH_EVENT_HOVER;
+          }
+        case SS_CONTROLLER_TOUCH_MAGIC:
+          {
+            if (packet.size() < sizeof(SS_CONTROLLER_TOUCH_PACKET)) {
+              return false;
+            }
+            const auto *const touch {reinterpret_cast<const SS_CONTROLLER_TOUCH_PACKET *>(packet.data())};
+            return touch->eventType == LI_TOUCH_EVENT_MOVE || touch->eventType == LI_TOUCH_EVENT_HOVER;
+          }
+        case SS_CONTROLLER_MOTION_MAGIC:
+          return packet.size() >= sizeof(SS_CONTROLLER_MOTION_PACKET);
+        default:
+          return false;
+      }
+    }
+  }  // namespace
+
+  /**
+   * @brief Private bounded packet queue implementation.
+   */
+  class packet_queue_t::impl_t {
+  public:
+    /**
+     * @brief Construct queue state with a validated positive bound.
+     *
+     * @param capacity Maximum retained packet count.
+     */
+    explicit impl_t(const std::size_t capacity):
+        capacity {std::max<std::size_t>(capacity, 1)} {
+    }
+
+    std::size_t capacity;  ///< Maximum retained packet count.
+    std::list<packet_entry_t> packets;  ///< Ordered decoded input packets.
+    bool accepting {true};  ///< Whether producers may add packets.
+    bool worker_scheduled {false};  ///< Whether exactly one worker owns future draining.
+    mutable std::mutex mutex;  ///< Protects all queue state.
+    std::condition_variable space_available;  ///< Wakes an edge producer after a consumer pop.
+  };
+
+  packet_queue_t::packet_queue_t(const std::size_t capacity):
+      impl_ {std::make_unique<impl_t>(capacity)} {
+  }
+
+  packet_queue_t::~packet_queue_t() = default;
+
+  packet_enqueue_result_t packet_queue_t::push(std::vector<std::uint8_t> &&packet) {
+    packet_enqueue_result_t result;
+    std::unique_lock lock {impl_->mutex};
+    if (!impl_->accepting) {
+      return result;
+    }
+
+    for (auto position = impl_->packets.rbegin(); position != impl_->packets.rend(); ++position) {
+      const auto batch_result {batch_packets(position->data, packet)};
+      if (batch_result == batch_result_e::batched) {
+        result.accepted = true;
+        ++result.coalesced;
+        return result;
+      }
+      if (batch_result == batch_result_e::terminate_batch) {
+        break;
+      }
+    }
+
+    while (impl_->packets.size() >= impl_->capacity) {
+      bool made_room {false};
+
+      for (auto position = impl_->packets.begin(); position != impl_->packets.end() && !made_room; ++position) {
+        auto later = std::next(position);
+        auto combined {position->data};
+        for (; later != impl_->packets.end(); ++later) {
+          const auto batch_result {batch_packets(combined, later->data)};
+          if (batch_result == batch_result_e::batched) {
+            later->data = std::move(combined);
+            later->received_at = std::min(position->received_at, later->received_at);
+            impl_->packets.erase(position);
+            ++result.coalesced;
+            made_room = true;
+            break;
+          }
+          if (batch_result == batch_result_e::terminate_batch) {
+            break;
+          }
+        }
+      }
+
+      if (!made_room) {
+        const auto stale_motion = std::find_if(impl_->packets.begin(), impl_->packets.end(), [](const packet_entry_t &entry) {
+          return is_intrinsically_droppable_motion(entry.data);
+        });
+        if (stale_motion != impl_->packets.end()) {
+          impl_->packets.erase(stale_motion);
+          ++result.dropped;
+          made_room = true;
+        }
+      }
+
+      if (!made_room) {
+        impl_->space_available.wait(lock, [this]() {
+          return !impl_->accepting || impl_->packets.size() < impl_->capacity;
+        });
+        if (!impl_->accepting) {
+          return result;
+        }
+      }
+    }
+
+    impl_->packets.push_back({
+      .data = std::move(packet),
+      .received_at = std::chrono::steady_clock::now(),
+    });
+    result.accepted = true;
+    if (!impl_->worker_scheduled) {
+      impl_->worker_scheduled = true;
+      result.schedule_worker = true;
+    }
+    return result;
+  }
+
+  std::optional<queued_packet_t> packet_queue_t::pop() {
+    std::lock_guard lock {impl_->mutex};
+    if (impl_->packets.empty()) {
+      return std::nullopt;
+    }
+
+    packet_entry_t entry {std::move(impl_->packets.front())};
+    impl_->packets.pop_front();
+    std::uint64_t coalesced {};
+
+    for (auto position = impl_->packets.begin(); position != impl_->packets.end();) {
+      const auto batch_result {batch_packets(entry.data, position->data)};
+      if (batch_result == batch_result_e::batched) {
+        position = impl_->packets.erase(position);
+        ++coalesced;
+      } else if (batch_result == batch_result_e::terminate_batch) {
+        break;
+      } else {
+        ++position;
+      }
+    }
+
+    impl_->space_available.notify_all();
+    return queued_packet_t {
+      .data = std::move(entry.data),
+      .received_at = entry.received_at,
+      .coalesced = coalesced,
+    };
+  }
+
+  bool packet_queue_t::worker_finished() {
+    std::lock_guard lock {impl_->mutex};
+    if (!impl_->accepting || impl_->packets.empty()) {
+      impl_->worker_scheduled = false;
+      return false;
+    }
+    return true;
+  }
+
+  void packet_queue_t::stop() {
+    std::lock_guard lock {impl_->mutex};
+    impl_->accepting = false;
+    impl_->packets.clear();
+    impl_->space_available.notify_all();
+  }
+
+  std::size_t packet_queue_t::size() const {
+    std::lock_guard lock {impl_->mutex};
+    return impl_->packets.size();
+  }
+
   /**
    * @brief Called on a thread pool thread to process an input message.
    * @param input The input context pointer.
    */
   void passthrough_next_message(std::shared_ptr<input_t> input) {
     // 'entry' backs the 'payload' pointer, so they must remain in scope together
-    std::vector<uint8_t> entry;
-    PNV_INPUT_HEADER payload;
-
-    // Lock the input queue while batching, but release it before sending
-    // the input to the OS. This avoids potentially lengthy lock contention
-    // in the control stream thread while input is being processed by the OS.
-    {
-      std::lock_guard<std::mutex> lg(input->input_queue_lock);
-
-      // If all entries have already been processed, nothing to do
-      if (input->input_queue.empty()) {
-        return;
-      }
-
-      // Pop off the first entry, which we will send
-      entry = input->input_queue.front();
-      payload = (PNV_INPUT_HEADER) entry.data();
-      input->input_queue.pop_front();
-
-      // Try to batch with remaining items on the queue
-      auto i = input->input_queue.begin();
-      while (i != input->input_queue.end()) {
-        auto batchable_entry = *i;
-        auto batchable_payload = (PNV_INPUT_HEADER) batchable_entry.data();
-
-        auto batch_result = batch(payload, batchable_payload);
-        if (batch_result == batch_result_e::terminate_batch) {
-          // Stop batching
-          break;
-        } else if (batch_result == batch_result_e::batched) {
-          // Erase this entry since it was batched
-          i = input->input_queue.erase(i);
-        } else {
-          // We couldn't batch this entry, but try to batch later entries.
-          i++;
-        }
-      }
+    auto queued_packet {input->input_queue.pop()};
+    if (!queued_packet) {
+      input->input_queue.worker_finished();
+      record_input_queue_depth(input->input_queue.size());
+      return;
     }
+    auto entry {std::move(queued_packet->data)};
+    auto *const payload {reinterpret_cast<PNV_INPUT_HEADER>(entry.data())};
+    input_motion_coalesced.fetch_add(queued_packet->coalesced, std::memory_order_relaxed);
+    record_input_queue_depth(input->input_queue.size());
 
     // Print the final input packet
     input::print((void *) payload);
@@ -1812,6 +2079,14 @@ namespace input {
         passthrough(input, (PSS_CONTROLLER_BATTERY_PACKET) payload);
         break;
     }
+    input_events_injected.fetch_add(1, std::memory_order_relaxed);
+    input_queue_age.record(std::chrono::steady_clock::now() - queued_packet->received_at);
+
+    const bool reschedule {input->input_queue.worker_finished()};
+    record_input_queue_depth(input->input_queue.size());
+    if (reschedule) {
+      task_pool.push(passthrough_next_message, std::move(input));
+    }
   }
 
   /**
@@ -1820,11 +2095,14 @@ namespace input {
    * @param input_data The input message.
    */
   void passthrough(std::shared_ptr<input_t> &input, std::vector<std::uint8_t> &&input_data) {
-    {
-      std::lock_guard<std::mutex> lg(input->input_queue_lock);
-      input->input_queue.push_back(std::move(input_data));
+    input_events_received.fetch_add(1, std::memory_order_relaxed);
+    const auto result {input->input_queue.push(std::move(input_data))};
+    input_motion_coalesced.fetch_add(result.coalesced, std::memory_order_relaxed);
+    input_motion_dropped.fetch_add(result.dropped, std::memory_order_relaxed);
+    record_input_queue_depth(input->input_queue.size());
+    if (result.schedule_worker) {
+      task_pool.push(passthrough_next_message, input);
     }
-    task_pool.push(passthrough_next_message, input);
   }
 
   /**
@@ -1833,6 +2111,8 @@ namespace input {
   void reset(std::shared_ptr<input_t> &input) {
     task_pool.cancel(key_press_repeat_id);
     task_pool.cancel(input->mouse_left_button_timeout);
+    input->input_queue.stop();
+    record_input_queue_depth(0);
 
     // Ensure input is synchronous, by using the task_pool
     task_pool.push([]() {
@@ -1894,6 +2174,7 @@ namespace input {
    * @brief Allocate and initialize platform input state for a stream.
    */
   std::shared_ptr<input_t> alloc(safe::mail_t mail) {
+    reset_input_diagnostics();
     auto input = std::make_shared<input_t>(
       mail->event<input::touch_port_t>(mail::touch_port),
       mail->queue<platf::gamepad_feedback_msg_t>(mail::gamepad_feedback)
@@ -1907,5 +2188,20 @@ namespace input {
                           100ms);
 
     return input;
+  }
+
+  diagnostics_snapshot_t diagnostics_snapshot() {
+    const auto route {platf::input_route_diagnostics(platf_input)};
+    return {
+      .events_received = input_events_received.load(std::memory_order_relaxed),
+      .events_injected = input_events_injected.load(std::memory_order_relaxed),
+      .motion_coalesced = input_motion_coalesced.load(std::memory_order_relaxed),
+      .motion_dropped = input_motion_dropped.load(std::memory_order_relaxed),
+      .queue_current = input_queue_current.load(std::memory_order_relaxed),
+      .queue_max = input_queue_max.load(std::memory_order_relaxed),
+      .queue_age_ms = input_queue_age.snapshot(),
+      .route_target = route.target,
+      .route_error = route.error,
+    };
   }
 }  // namespace input

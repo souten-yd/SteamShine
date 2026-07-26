@@ -53,7 +53,7 @@ proc_snapshot() {
         BEGIN {
           elapsed = (finished - started) / 1000000000;
           if (elapsed > 0 && ticks > 0) {
-            printf "proc_cpu_delta pid=%s cpu_ticks=%d elapsed_seconds=%.3f cpu_percent=%.2f\\n", pid, after - before, elapsed, ((after - before) / ticks) * 100 / elapsed;
+            printf "proc_cpu_delta pid=%s cpu_ticks=%d elapsed_seconds=%.3f cpu_percent=%.2f\n", pid, after - before, elapsed, ((after - before) / ticks) * 100 / elapsed;
           } else {
             print "proc_cpu_delta unavailable";
           }

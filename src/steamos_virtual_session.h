@@ -46,6 +46,10 @@ namespace steamos_virtual_session {
     std::string source_executable;  ///< Verified Gamescope executable path.
     uint64_t source_process_start_time {0};  ///< Verified Gamescope `/proc` start time.
     std::string steam_location;  ///< Steam singleton location relative to the selected Gamescope.
+    bool migration_required {false};  ///< Whether an explicitly confirmed Desktop Steam migration is required.
+    std::string app_launch_rejected_reason;  ///< Stable machine-readable reason for the latest rejected application launch.
+    std::string app_launch_rejected_message;  ///< Safe operator-facing detail for the latest rejected application launch.
+    std::string selection_reason;  ///< Stable reason for selecting Desktop capture or a Gamescope source.
     presentation_e presentation {presentation_e::remote_only};  ///< Desired remote/local presentation paths.
     bool local_presenter_active {false};  ///< Whether a local presenter has attached successfully.
     uint64_t local_presented_frames {0};  ///< Frames shown by the local presenter.
@@ -102,6 +106,24 @@ namespace steamos_virtual_session {
    * @return True when the opt-in SteamOS virtual-display feature is enabled.
    */
   bool capture_backend_required();
+
+  /**
+   * @brief Check whether a physical DRM connector is connected.
+   *
+   * @return True when a non-writeback physical connector reports connected.
+   */
+  bool physical_output_connected();
+
+  /**
+   * @brief Publish whether the compositor exposed a physical Desktop capture source.
+   *
+   * Linux platform initialization calls this after KWin and Portal
+   * enumeration so the later Moonlight launch decision uses the same source
+   * evidence as encoder probing.
+   *
+   * @param available Whether a compositor capture source is currently available.
+   */
+  void set_physical_compositor_capture_available(bool available);
 
   /**
    * @brief Remove stale runtime sessions that are provably owned by SteamShine.
@@ -172,10 +194,10 @@ namespace steamos_virtual_session {
    * run normally.
    *
    * @param command Configured application command.
-   * @param error Human-readable rejection reason.
+   * @param error_message Human-readable rejection reason.
    * @return True when the command is safe to execute.
    */
-  bool steam_command_allowed(std::string_view command, std::string &error);
+  bool steam_command_allowed(std::string_view command, std::string &error_message);
 
   /**
    * @brief Return the absolute path to the owned Wayland socket for capture.
@@ -216,6 +238,26 @@ namespace steamos_virtual_session {
    * @return True only while an active session can use its host PipeWire endpoint.
    */
   bool gamescope_pipewire_endpoint(std::string &runtime_directory, std::string &remote_name, int &gamescope_pid);
+
+  /**
+   * @brief Test whether input must be isolated to a selected Gamescope source.
+   *
+   * @return True while an owned or attached Gamescope session is streamable.
+   */
+  bool gamescope_input_required();
+
+  /**
+   * @brief Resolve the EIS input socket owned by the selected verified Gamescope process.
+   *
+   * The socket is accepted only when its inode is held by the selected PID,
+   * its path remains inside the selected runtime, and it is a current-user
+   * UNIX-domain socket.
+   *
+   * @param socket_path Receives the absolute EIS socket path.
+   * @param error Receives a stable failure reason without credentials.
+   * @return True when input can be bound to the selected Gamescope session.
+   */
+  bool gamescope_input_endpoint(std::string &socket_path, std::string &error);
 
   /**
    * @brief Open one dedicated PipeWire connection for the verified source.

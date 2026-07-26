@@ -18,6 +18,14 @@
 
 namespace safe {
   /**
+   * @brief Capacity behavior for a bounded message queue.
+   */
+  enum class queue_overflow_e {
+    clear_pending,  ///< Discard all pending values before accepting the newest value.
+    block_producer,  ///< Preserve order by waiting until a consumer makes room.
+  };
+
+  /**
    * @brief Thread-safe event value that blocks readers until a value is raised.
    */
   template<class T>
@@ -35,11 +43,23 @@ namespace safe {
      */
     template<class... Args>
     void raise(Args &&...args) {
+      (void) raise_replacing(std::forward<Args>(args)...);
+    }
+
+    /**
+     * @brief Store a new event and report whether it replaced a pending value.
+     *
+     * @param args Arguments forwarded to the stored value.
+     * @return True when an unread value was replaced.
+     */
+    template<class... Args>
+    bool raise_replacing(Args &&...args) {
       std::lock_guard lg {_lock};
       if (!_continue) {
-        return;
+        return false;
       }
 
+      const bool replaced {static_cast<bool>(_status)};
       if constexpr (std::is_same_v<std::optional<T>, status_t>) {
         _status = std::make_optional<T>(std::forward<Args>(args)...);
       } else {
@@ -47,6 +67,7 @@ namespace safe {
       }
 
       _cv.notify_all();
+      return replaced;
     }
 
     /**
@@ -167,6 +188,7 @@ namespace safe {
      * @return True when a value is available to inspect.
      */
     bool peek() {
+      std::lock_guard lock {_lock};
       return _continue && (bool) _status;
     }
 
@@ -198,6 +220,7 @@ namespace safe {
      * @return True while the queue accepts producers and consumers.
      */
     [[nodiscard]] bool running() const {
+      std::lock_guard lock {_lock};
       return _continue;
     }
 
@@ -206,7 +229,7 @@ namespace safe {
     status_t _status {util::false_v<status_t>};
 
     std::condition_variable _cv;
-    std::mutex _lock;
+    mutable std::mutex _lock;
   };
 
   /**
@@ -398,32 +421,45 @@ namespace safe {
     /**
      * @brief Construct a bounded blocking queue.
      *
-     * @param max_elements Maximum number of queued elements before producers block.
+     * @param max_elements Maximum number of queued elements.
+     * @param overflow Capacity behavior used when the queue is full.
      */
-    queue_t(std::uint32_t max_elements = 32):
-        _max_elements {max_elements} {
+    queue_t(std::uint32_t max_elements = 32, const queue_overflow_e overflow = queue_overflow_e::clear_pending):
+        _max_elements {std::max(max_elements, 1U)},
+        _overflow {overflow} {
     }
 
     /**
      * @brief Notify waiters that a new event value is available.
      *
      * @param args Arguments forwarded to the callable or parser.
+     * @return True when the value was accepted before queue shutdown.
      */
     template<class... Args>
-    void raise(Args &&...args) {
-      std::lock_guard ul {_lock};
+    bool raise(Args &&...args) {
+      std::unique_lock ul {_lock};
 
       if (!_continue) {
-        return;
+        return false;
       }
 
       if (_queue.size() == _max_elements) {
-        _queue.clear();
+        if (_overflow == queue_overflow_e::clear_pending) {
+          _queue.clear();
+        } else {
+          _cv.wait(ul, [this]() {
+            return !_continue || _queue.size() < _max_elements;
+          });
+          if (!_continue) {
+            return false;
+          }
+        }
       }
 
       _queue.emplace_back(std::forward<Args>(args)...);
 
       _cv.notify_all();
+      return true;
     }
 
     /**
@@ -432,6 +468,7 @@ namespace safe {
      * @return True when a value is available to inspect.
      */
     bool peek() {
+      std::lock_guard lock {_lock};
       return _continue && !_queue.empty();
     }
 
@@ -457,6 +494,7 @@ namespace safe {
 
       auto val = std::move(_queue.front());
       _queue.erase(std::begin(_queue));
+      _cv.notify_all();
 
       return val;
     }
@@ -483,6 +521,7 @@ namespace safe {
 
       auto val = std::move(_queue.front());
       _queue.erase(std::begin(_queue));
+      _cv.notify_all();
 
       return val;
     }
@@ -513,14 +552,35 @@ namespace safe {
      * @return True while the queue accepts producers and consumers.
      */
     [[nodiscard]] bool running() const {
+      std::lock_guard lock {_lock};
       return _continue;
+    }
+
+    /**
+     * @brief Return the current queue occupancy.
+     *
+     * @return Number of retained elements.
+     */
+    [[nodiscard]] std::size_t size() const {
+      std::lock_guard lock {_lock};
+      return _queue.size();
+    }
+
+    /**
+     * @brief Return the fixed queue capacity.
+     *
+     * @return Maximum retained elements.
+     */
+    [[nodiscard]] std::uint32_t capacity() const {
+      return _max_elements;
     }
 
   private:
     bool _continue {true};
     std::uint32_t _max_elements;
+    queue_overflow_e _overflow;
 
-    std::mutex _lock;
+    mutable std::mutex _lock;
     std::condition_variable _cv;
 
     std::vector<T> _queue;
@@ -821,10 +881,16 @@ namespace safe {
      * @brief Create a typed queue channel from the raw mailbox.
      *
      * @param id Identifier for the controller, session, display, or resource.
+     * @param max_elements Maximum queue capacity used when the channel is first created.
+     * @param overflow Capacity behavior used when the channel is first created.
      * @return Typed queue channel associated with the supplied identifier.
      */
     template<class T>
-    queue_t<T> queue(const std::string_view &id) {
+    queue_t<T> queue(
+      const std::string_view &id,
+      const std::uint32_t max_elements = 32,
+      const queue_overflow_e overflow = queue_overflow_e::clear_pending
+    ) {
       std::lock_guard lg {mutex};
 
       auto it = id_to_post.find(id);
@@ -832,7 +898,7 @@ namespace safe {
         return lock<queue_t<T>>(it->second);
       }
 
-      auto post = std::make_shared<typename queue_t<T>::element_type>(shared_from_this(), 32);
+      auto post = std::make_shared<typename queue_t<T>::element_type>(shared_from_this(), max_elements, overflow);
       id_to_post.emplace(std::pair<std::string, std::weak_ptr<void>> {std::string {id}, post});
 
       return post;

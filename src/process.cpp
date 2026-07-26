@@ -46,6 +46,20 @@ namespace proc {
 
   proc_t proc;  ///< Global process registry used to track and terminate child processes.
 
+  std::string select_effective_command(
+    const std::string_view app_command,
+    const bool owned_virtual_display,
+    const std::string_view virtual_desktop_command
+  ) {
+    if (!app_command.empty() || !owned_virtual_display) {
+      return std::string {app_command};
+    }
+    if (!virtual_desktop_command.empty()) {
+      return std::string {virtual_desktop_command};
+    }
+    return "plasmawindowed org.kde.plasma.folder";
+  }
+
   /**
    * @brief RAII helper that runs shutdown cleanup when destroyed.
    */
@@ -167,11 +181,20 @@ namespace proc {
     _app_prep_begin = std::begin(_app.prep_cmds);
     _app_prep_it = _app_prep_begin;
 
+    const auto virtual_status {steamos_virtual_session::status_snapshot()};
+    const bool launch_owned_virtual_desktop {
+      _app.cmd.empty() &&
+      virtual_status.origin == steamos_virtual_session::session_origin_e::owned_private
+    };
+    const std::string effective_command {
+      select_effective_command(_app.cmd, launch_owned_virtual_desktop, config::steamos_virtual_display.virtual_desktop_command)
+    };
+
     std::string steam_command_error;
     const auto steam_command_is_allowed {[&steam_command_error](const std::string &command) {
       return steamos_virtual_session::steam_command_allowed(command, steam_command_error);
     }};
-    bool all_steam_commands_allowed {steam_command_is_allowed(_app.cmd)};
+    bool all_steam_commands_allowed {steam_command_is_allowed(effective_command)};
     for (const auto &command : _app.detached) {
       all_steam_commands_allowed = all_steam_commands_allowed && steam_command_is_allowed(command);
     }
@@ -291,17 +314,21 @@ namespace proc {
       }
     }
 
-    if (_app.cmd.empty()) {
+    if (effective_command.empty()) {
       BOOST_LOG(info) << "Executing [Desktop]"sv;
       placebo = true;
     } else {
       boost::filesystem::path working_dir = _app.working_dir.empty() ?
-                                              find_working_directory(_app.cmd, _env) :
+                                              find_working_directory(effective_command, _env) :
                                               boost::filesystem::path(_app.working_dir);
-      BOOST_LOG(info) << "Executing: ["sv << _app.cmd << "] in ["sv << working_dir << ']';
-      _process = platf::run_command(_app.elevated, true, _app.cmd, working_dir, _env, _pipe.get(), ec, &_process_group);
+      if (launch_owned_virtual_desktop) {
+        BOOST_LOG(info) << "Executing [SteamOS virtual Desktop]: ["sv << effective_command << "] in ["sv << working_dir << ']';
+      } else {
+        BOOST_LOG(info) << "Executing: ["sv << effective_command << "] in ["sv << working_dir << ']';
+      }
+      _process = platf::run_command(_app.elevated, true, effective_command, working_dir, _env, _pipe.get(), ec, &_process_group);
       if (ec) {
-        BOOST_LOG(warning) << "Couldn't run ["sv << _app.cmd << "]: System: "sv << ec.message();
+        BOOST_LOG(warning) << "Couldn't run ["sv << effective_command << "]: System: "sv << ec.message();
         return -1;
       }
     }

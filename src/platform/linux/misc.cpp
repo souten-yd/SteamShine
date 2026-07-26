@@ -1131,6 +1131,67 @@ namespace platf {
 
   static std::bitset<source::MAX_FLAGS> sources;
 
+  /**
+   * @brief Report whether a verified compositor can capture the physical Desktop.
+   *
+   * @return True when either KWin ScreenCast or XDG Portal is available.
+   */
+  bool physical_compositor_capture_available() {
+    bool available {false};
+#ifdef SUNSHINE_BUILD_KWIN
+    available = available || sources[source::KWIN];
+#endif
+#ifdef SUNSHINE_BUILD_PORTAL
+    available = available || sources[source::PORTAL];
+#endif
+    return available;
+  }
+
+  /**
+   * @brief Decide whether capture must remain on the private Wayland backend.
+   *
+   * @return True when no preferred physical Desktop compositor source can be used.
+   */
+  bool use_steamos_virtual_capture_backend() {
+    return steamos_virtual_session::use_virtual_capture_backend(
+      steamos_virtual_session::capture_backend_required(),
+      steamos_virtual_session::physical_output_connected(),
+      physical_compositor_capture_available(),
+      config::video.capture == "wlr"
+    );
+  }
+
+  /**
+   * @brief Decide whether verified KWin capture must take physical Desktop priority.
+   *
+   * @return True when automatic capture can use KWin for a connected output.
+   */
+  bool prefer_physical_desktop_kwin() {
+#ifdef SUNSHINE_BUILD_KWIN
+    return config::video.capture.empty() &&
+           steamos_virtual_session::physical_output_connected() &&
+           sources[source::KWIN];
+#else
+    return false;
+#endif
+  }
+
+  /**
+   * @brief Decide whether a verified physical Desktop portal must take priority.
+   *
+   * @return True when automatic virtual capture was superseded by a working
+   * physical Desktop portal source.
+   */
+  bool prefer_physical_desktop_portal() {
+    bool portal_capture_available {false};
+#ifdef SUNSHINE_BUILD_PORTAL
+    portal_capture_available = sources[source::PORTAL];
+#endif
+    return config::video.capture.empty() &&
+           steamos_virtual_session::physical_output_connected() &&
+           portal_capture_available;
+  }
+
 #ifdef SUNSHINE_BUILD_CUDA
   std::vector<std::string> nvfbc_display_names();
   std::shared_ptr<display_t> nvfbc_display(mem_type_e hwdevice_type, const std::string &display_name, const video::config_t &config);
@@ -1222,7 +1283,7 @@ namespace platf {
     // A virtual session has no desktop output until the Moonlight launch
     // creates its owned Gamescope socket. Keep discovery on Wayland so it
     // cannot enumerate an unrelated KMS/X11/portal source first.
-    if (steamos_virtual_session::capture_backend_required()) {
+    if (use_steamos_virtual_capture_backend()) {
       return wl_display_names();
     }
 #endif
@@ -1230,6 +1291,16 @@ namespace platf {
     // display using NvFBC only supports mem_type_e::cuda
     if (sources[source::NVFBC] && hwdevice_type == mem_type_e::cuda) {
       return nvfbc_display_names();
+    }
+#endif
+#ifdef SUNSHINE_BUILD_KWIN
+    if (prefer_physical_desktop_kwin()) {
+      return kwin_display_names();
+    }
+#endif
+#ifdef SUNSHINE_BUILD_PORTAL
+    if (prefer_physical_desktop_portal()) {
+      return portal_display_names();
     }
 #endif
 #ifdef SUNSHINE_BUILD_WAYLAND
@@ -1285,11 +1356,23 @@ namespace platf {
       return gamescope_pipewire_display(hwdevice_type, display_name, config);
     }
 #endif
+#ifdef SUNSHINE_BUILD_KWIN
+    if (prefer_physical_desktop_kwin()) {
+      BOOST_LOG(info) << "Screencasting with preferred physical Desktop KWin ScreenCast"sv;
+      return kwin_display(hwdevice_type, display_name, config);
+    }
+#endif
+#ifdef SUNSHINE_BUILD_PORTAL
+    if (prefer_physical_desktop_portal()) {
+      BOOST_LOG(info) << "Screencasting with preferred physical Desktop XDG portal"sv;
+      return portal_display(hwdevice_type, display_name, config);
+    }
+#endif
 #ifdef SUNSHINE_BUILD_WAYLAND
     // The owned socket is selected inside wl::display_t::init(). This must
     // precede KMS so monitorless virtual sessions never fall back to a
     // physical or cross-GPU capture path.
-    if (steamos_virtual_session::capture_backend_required()) {
+    if (use_steamos_virtual_capture_backend()) {
       BOOST_LOG(info) << "Screencasting with SteamOS owned Wayland protocol"sv;
       return wl_display(hwdevice_type, display_name, config);
     }
@@ -1400,16 +1483,27 @@ namespace platf {
       sources[source::X11] = true;
     }
 #endif
-#ifdef SUNSHINE_BUILD_PORTAL
-    if ((config::video.capture.empty() || config::video.capture == "portal") && verify_portal()) {
-      sources[source::PORTAL] = true;
-    }
-#endif
 #ifdef SUNSHINE_BUILD_KWIN
-    if (((config::video.capture.empty() && sources.none()) || config::video.capture == "kwin") && verify_kwin()) {
+    if (((config::video.capture.empty() && steamos_virtual_session::physical_output_connected()) || config::video.capture == "kwin") && verify_kwin()) {
       sources[source::KWIN] = true;
     }
 #endif
+#ifdef SUNSHINE_BUILD_PORTAL
+    if (steamos_virtual_session::should_probe_physical_portal(
+          config::video.capture.empty(),
+          config::video.capture == "portal",
+          steamos_virtual_session::physical_output_connected(),
+  #ifdef SUNSHINE_BUILD_KWIN
+          sources[source::KWIN]
+  #else
+          false
+  #endif
+        ) &&
+        verify_portal()) {
+      sources[source::PORTAL] = true;
+    }
+#endif
+    steamos_virtual_session::set_physical_compositor_capture_available(physical_compositor_capture_available());
 
     if (sources.none()) {
       BOOST_LOG(error) << "Unable to initialize capture method"sv;

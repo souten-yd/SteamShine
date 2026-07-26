@@ -188,6 +188,9 @@ namespace gamescope_presenter {
     };
   }  // namespace
 
+  /**
+   * @brief Private ownership shared between the presenter and frame releases.
+   */
   struct local_pipewire_consumer_t::impl_t {
     std::shared_ptr<connection_t> connection;  ///< State retained while a frame owns a PipeWire buffer.
   };

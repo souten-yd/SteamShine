@@ -14,6 +14,22 @@
 
 namespace fs = std::filesystem;
 
+TEST(ProcessCommandSelectionTest, KeepsConfiguredApplicationCommand) {
+  EXPECT_EQ(proc::select_effective_command("game --launch", true, "virtual-desktop"), "game --launch");
+}
+
+TEST(ProcessCommandSelectionTest, KeepsPhysicalDesktopAsCaptureOnly) {
+  EXPECT_TRUE(proc::select_effective_command("", false, "virtual-desktop").empty());
+}
+
+TEST(ProcessCommandSelectionTest, LaunchesConfiguredOwnedVirtualDesktop) {
+  EXPECT_EQ(proc::select_effective_command("", true, "virtual-desktop"), "virtual-desktop");
+}
+
+TEST(ProcessCommandSelectionTest, RestoresSafeOwnedVirtualDesktopDefault) {
+  EXPECT_EQ(proc::select_effective_command("", true, ""), "plasmawindowed org.kde.plasma.folder");
+}
+
 class ProcessPNGTest: public BaseTest {
 protected:
   void SetUp() override {

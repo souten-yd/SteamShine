@@ -145,6 +145,7 @@ namespace {
       ASSERT_EQ(::setenv("XDG_RUNTIME_DIR", (root / "runtime").c_str(), 1), 0);
       create_pipewire_socket();
       config::steamos_virtual_display.enabled = true;
+      config::steamos_virtual_display.mode = steamos_virtual_session::virtual_display_mode_e::force;
       config::steamos_virtual_display.gamescope_path = make_fake_gamescope(root).string();
       config::steamos_virtual_display.game_gpu = "1002:9999";
       config::steamos_virtual_display.runtime_directory = (root / "runtime" / "steamshine").string();
@@ -206,6 +207,7 @@ TEST_F(SteamOSVirtualSessionTest, OffModePreservesNormalLaunch) {
  * @brief Verify an explicit resident-Gamescope policy fails closed without spawning one.
  */
 TEST_F(SteamOSVirtualSessionTest, ExistingGamescopePolicyDoesNotCreateOwnedFallback) {
+  config::steamos_virtual_display.mode = steamos_virtual_session::virtual_display_mode_e::auto_detect;
   config::steamos_virtual_display.session_source = steamos_virtual_session::session_source_policy_e::existing_gamescope;
   rtsp_stream::launch_session_t launch {};
   std::string error;
@@ -396,6 +398,30 @@ TEST_F(SteamOSVirtualSessionTest, RetainsVirtualDisplayAcrossStreamDisconnect) {
   steamos_virtual_session::mark_streaming();
   steamos_virtual_session::mark_captured_frame();
   EXPECT_EQ(steamos_virtual_session::status_snapshot().captured_frames, 2U);
+}
+
+/**
+ * @brief Verify a compatible reconnect reuses the retained owned Gamescope process.
+ */
+TEST_F(SteamOSVirtualSessionTest, ReusesCompatibleOwnedDisplayOnReconnect) {
+  rtsp_stream::launch_session_t launch {};
+  launch.width = 1920;
+  launch.height = 1080;
+  launch.fps = 60;
+  std::string error;
+
+  ASSERT_TRUE(steamos_virtual_session::prepare(launch, error)) << error;
+  steamos_virtual_session::mark_capture_ready();
+  steamos_virtual_session::mark_streaming();
+  steamos_virtual_session::mark_streaming_disconnected();
+  const auto retained {steamos_virtual_session::status_snapshot()};
+  ASSERT_GT(retained.gamescope_pid, 0);
+
+  ASSERT_TRUE(steamos_virtual_session::prepare(launch, error)) << error;
+  const auto reused {steamos_virtual_session::status_snapshot()};
+  EXPECT_EQ(reused.gamescope_pid, retained.gamescope_pid);
+  EXPECT_EQ(reused.selection_reason, "retained_owned_private");
+  EXPECT_EQ(reused.state, steamos_virtual_session::state_e::Ready);
 }
 
 /**

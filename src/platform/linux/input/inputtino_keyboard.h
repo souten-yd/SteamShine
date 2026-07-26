@@ -10,6 +10,7 @@
 #include <libevdev/libevdev.h>
 
 // local includes
+#include "input_key_mapping.h"
 #include "inputtino_common.h"
 
 using namespace std::literals;

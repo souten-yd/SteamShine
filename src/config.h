@@ -303,6 +303,7 @@ namespace config {
     bool keep_session_alive {true};  ///< Retain a prepared owned session after Moonlight disconnect.
     int existing_gamescope_pid {0};  ///< Optional administrator-selected resident Gamescope PID; zero selects automatically.
     std::string gamescope_path {"gamescope"};  ///< Gamescope executable used for owned sessions.
+    std::string virtual_desktop_command {"plasmawindowed org.kde.plasma.folder"};  ///< Non-singleton desktop surface launched for an empty Desktop app inside an owned session.
     std::string runtime_directory;  ///< Base directory for owned runtime state.
     std::string game_gpu;  ///< Preferred game render GPU PCI BDF or render node.
     std::string capture_gpu;  ///< Preferred capture GPU PCI BDF or render node.

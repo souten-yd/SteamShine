@@ -27,6 +27,12 @@ namespace {
 
   constexpr const char REQUEST_PREFIX[] = "/org/freedesktop/portal/desktop/request/";
   constexpr const char SESSION_PREFIX[] = "/org/freedesktop/portal/desktop/session/";
+
+  constexpr gint PORTAL_DBUS_TIMEOUT_MS = 5000;
+  constexpr gint PORTAL_REQUEST_CLOSE_TIMEOUT_MS = 1000;
+  constexpr gint PORTAL_SESSION_CLOSE_TIMEOUT_MS = 1000;
+  constexpr gint PORTAL_SESSION_CHECK_TIMEOUT_MS = 1000;
+  constexpr guint PORTAL_RESPONSE_TIMEOUT_MS = 20000;
 }  // namespace
 
 using namespace std::literals;
@@ -108,9 +114,13 @@ namespace portal {
    * @brief DBus response loop and response variant for portal calls.
    */
   struct dbus_response_t {
-    GMainLoop *loop;  ///< GLib main loop waiting for a portal response signal.
-    GVariant *response;  ///< DBus response payload returned by the portal.
-    guint subscription_id;  ///< Subscription ID.
+    GMainLoop *loop {nullptr};  ///< GLib main loop waiting for a portal response signal.
+    GVariant *response {nullptr};  ///< DBus response payload returned by the portal.
+    GDBusConnection *connection {nullptr};  ///< Connection owning the response subscription.
+    std::string request_path;  ///< Portal request path to close if the response times out.
+    guint subscription_id {0};  ///< Response signal subscription ID.
+    guint timeout_source_id {0};  ///< GLib source ID for the bounded response wait.
+    bool timed_out {false};  ///< Whether the response wait reached its deadline.
   };
 
   /**
@@ -170,7 +180,7 @@ namespace portal {
             nullptr,
             nullptr,
             G_DBUS_CALL_FLAGS_NONE,
-            -1,
+            PORTAL_SESSION_CLOSE_TIMEOUT_MS,
             nullptr,
             &err
           );
@@ -236,7 +246,8 @@ namespace portal {
       g_autofree gchar *session_token = nullptr;
       create_session_path(conn, nullptr, &session_token);
 
-      // Try combined RemoteDesktop + ScreenCast session first
+      // Try combined RemoteDesktop + ScreenCast first because its persisted
+      // permission also restores KDE monitor selection without a chooser.
       bool use_screencast_only = !try_remote_desktop_session(loop, &session_path, session_token);
 
       // Fall back to ScreenCast-only if RemoteDesktop failed
@@ -327,7 +338,7 @@ namespace portal {
           g_variant_new("(ss)", "org.freedesktop.portal.Session", "version"),
           G_VARIANT_TYPE("(v)"),
           G_DBUS_CALL_FLAGS_NONE,
-          -1,
+          PORTAL_SESSION_CHECK_TIMEOUT_MS,
           nullptr,
           &err
         );
@@ -342,23 +353,23 @@ namespace portal {
     }
 
     std::vector<pipewire_streaminfo_t> pipewire_streams;  ///< Pipewire streams.
-    int pipewire_fd;  ///< Pipewire fd.
+    int pipewire_fd {-1};  ///< Pipewire fd.
 
   private:
-    GDBusConnection *conn;
-    GDBusProxy *screencast_proxy;
-    GDBusProxy *remote_desktop_proxy;
+    GDBusConnection *conn {nullptr};
+    GDBusProxy *screencast_proxy {nullptr};
+    GDBusProxy *remote_desktop_proxy {nullptr};
     std::string session_handle;
 
     int create_portal_session(GMainLoop *loop, gchar **session_path_out, const gchar *session_token, bool use_screencast) {
       GDBusProxy *proxy = use_screencast ? screencast_proxy : remote_desktop_proxy;
       const char *session_type = use_screencast ? "ScreenCast" : "RemoteDesktop";
 
-      dbus_response_t response = {
-        nullptr,
-      };
+      dbus_response_t response;
+      g_autofree gchar *expected_request_path = nullptr;
       g_autofree gchar *request_token = nullptr;
-      create_request_path(conn, nullptr, &request_token);
+      create_request_path(conn, &expected_request_path, &request_token);
+      dbus_response_init(&response, loop, conn, expected_request_path);
 
       GVariantBuilder builder;
       g_variant_builder_init(&builder, G_VARIANT_TYPE("(a{sv})"));
@@ -368,16 +379,26 @@ namespace portal {
       g_variant_builder_close(&builder);
 
       g_autoptr(GError) err = nullptr;
-      g_autoptr(GVariant) reply = g_dbus_proxy_call_sync(proxy, "CreateSession", g_variant_builder_end(&builder), G_DBUS_CALL_FLAGS_NONE, -1, nullptr, &err);
+      g_autoptr(GVariant) reply = g_dbus_proxy_call_sync(proxy, "CreateSession", g_variant_builder_end(&builder), G_DBUS_CALL_FLAGS_NONE, PORTAL_DBUS_TIMEOUT_MS, nullptr, &err);
 
       if (err) {
+        dbus_response_cleanup(&response);
         BOOST_LOG(error) << "[portalgrab] Could not create "sv << session_type << " session: "sv << err->message;
+        return -1;
+      }
+      if (!reply) {
+        dbus_response_cleanup(&response);
+        BOOST_LOG(error) << "[portalgrab] Could not create "sv << session_type << " session: empty D-Bus reply"sv;
         return -1;
       }
 
       const gchar *request_path = nullptr;
       g_variant_get(reply, "(o)", &request_path);
-      dbus_response_init(&response, loop, conn, request_path);
+      if (g_strcmp0(request_path, expected_request_path) != 0) {
+        dbus_response_cleanup(&response);
+        BOOST_LOG(error) << "[portalgrab] "sv << session_type << " CreateSession returned unexpected request path"sv;
+        return -1;
+      }
 
       g_autoptr(GVariant) create_response = dbus_response_wait(&response);
 
@@ -417,11 +438,11 @@ namespace portal {
     }
 
     int select_remote_desktop_devices(GMainLoop *loop, const gchar *session_path) {
-      dbus_response_t response = {
-        nullptr,
-      };
+      dbus_response_t response;
+      g_autofree gchar *expected_request_path = nullptr;
       g_autofree gchar *request_token = nullptr;
-      create_request_path(conn, nullptr, &request_token);
+      create_request_path(conn, &expected_request_path, &request_token);
+      dbus_response_init(&response, loop, conn, expected_request_path);
 
       GVariantBuilder builder;
       g_variant_builder_init(&builder, G_VARIANT_TYPE("(oa{sv})"));
@@ -436,16 +457,26 @@ namespace portal {
       g_variant_builder_close(&builder);
 
       g_autoptr(GError) err = nullptr;
-      g_autoptr(GVariant) reply = g_dbus_proxy_call_sync(remote_desktop_proxy, "SelectDevices", g_variant_builder_end(&builder), G_DBUS_CALL_FLAGS_NONE, -1, nullptr, &err);
+      g_autoptr(GVariant) reply = g_dbus_proxy_call_sync(remote_desktop_proxy, "SelectDevices", g_variant_builder_end(&builder), G_DBUS_CALL_FLAGS_NONE, PORTAL_DBUS_TIMEOUT_MS, nullptr, &err);
 
       if (err) {
+        dbus_response_cleanup(&response);
         BOOST_LOG(error) << "[portalgrab] Could not select devices: "sv << err->message;
+        return -1;
+      }
+      if (!reply) {
+        dbus_response_cleanup(&response);
+        BOOST_LOG(error) << "[portalgrab] Could not select devices: empty D-Bus reply"sv;
         return -1;
       }
 
       const gchar *request_path = nullptr;
       g_variant_get(reply, "(o)", &request_path);
-      dbus_response_init(&response, loop, conn, request_path);
+      if (g_strcmp0(request_path, expected_request_path) != 0) {
+        dbus_response_cleanup(&response);
+        BOOST_LOG(error) << "[portalgrab] SelectDevices returned unexpected request path"sv;
+        return -1;
+      }
 
       g_autoptr(GVariant) devices_response = dbus_response_wait(&response);
 
@@ -467,11 +498,11 @@ namespace portal {
     }
 
     int select_screencast_sources(GMainLoop *loop, const gchar *session_path, bool persist) {
-      dbus_response_t response = {
-        nullptr,
-      };
+      dbus_response_t response;
+      g_autofree gchar *expected_request_path = nullptr;
       g_autofree gchar *request_token = nullptr;
-      create_request_path(conn, nullptr, &request_token);
+      create_request_path(conn, &expected_request_path, &request_token);
+      dbus_response_init(&response, loop, conn, expected_request_path);
 
       GVariantBuilder builder;
       g_variant_builder_init(&builder, G_VARIANT_TYPE("(oa{sv})"));
@@ -490,15 +521,25 @@ namespace portal {
       g_variant_builder_close(&builder);
 
       g_autoptr(GError) err = nullptr;
-      g_autoptr(GVariant) reply = g_dbus_proxy_call_sync(screencast_proxy, "SelectSources", g_variant_builder_end(&builder), G_DBUS_CALL_FLAGS_NONE, -1, nullptr, &err);
+      g_autoptr(GVariant) reply = g_dbus_proxy_call_sync(screencast_proxy, "SelectSources", g_variant_builder_end(&builder), G_DBUS_CALL_FLAGS_NONE, PORTAL_DBUS_TIMEOUT_MS, nullptr, &err);
       if (err) {
+        dbus_response_cleanup(&response);
         BOOST_LOG(error) << "[portalgrab] Could not select sources: "sv << err->message;
+        return -1;
+      }
+      if (!reply) {
+        dbus_response_cleanup(&response);
+        BOOST_LOG(error) << "[portalgrab] Could not select sources: empty D-Bus reply"sv;
         return -1;
       }
 
       const gchar *request_path = nullptr;
       g_variant_get(reply, "(o)", &request_path);
-      dbus_response_init(&response, loop, conn, request_path);
+      if (g_strcmp0(request_path, expected_request_path) != 0) {
+        dbus_response_cleanup(&response);
+        BOOST_LOG(error) << "[portalgrab] SelectSources returned unexpected request path"sv;
+        return -1;
+      }
 
       g_autoptr(GVariant) sources_response = dbus_response_wait(&response);
 
@@ -523,11 +564,11 @@ namespace portal {
       GDBusProxy *proxy = use_screencast ? screencast_proxy : remote_desktop_proxy;
       const char *session_type = use_screencast ? "ScreenCast" : "RemoteDesktop";
 
-      dbus_response_t response = {
-        nullptr,
-      };
+      dbus_response_t response;
+      g_autofree gchar *expected_request_path = nullptr;
       g_autofree gchar *request_token = nullptr;
-      create_request_path(conn, nullptr, &request_token);
+      create_request_path(conn, &expected_request_path, &request_token);
+      dbus_response_init(&response, loop, conn, expected_request_path);
 
       GVariantBuilder builder;
       g_variant_builder_init(&builder, G_VARIANT_TYPE("(osa{sv})"));
@@ -538,15 +579,25 @@ namespace portal {
       g_variant_builder_close(&builder);
 
       g_autoptr(GError) err = nullptr;
-      g_autoptr(GVariant) reply = g_dbus_proxy_call_sync(proxy, "Start", g_variant_builder_end(&builder), G_DBUS_CALL_FLAGS_NONE, -1, nullptr, &err);
+      g_autoptr(GVariant) reply = g_dbus_proxy_call_sync(proxy, "Start", g_variant_builder_end(&builder), G_DBUS_CALL_FLAGS_NONE, PORTAL_DBUS_TIMEOUT_MS, nullptr, &err);
       if (err) {
+        dbus_response_cleanup(&response);
         BOOST_LOG(error) << "[portalgrab] Could not start "sv << session_type << " session: "sv << err->message;
+        return -1;
+      }
+      if (!reply) {
+        dbus_response_cleanup(&response);
+        BOOST_LOG(error) << "[portalgrab] Could not start "sv << session_type << " session: empty D-Bus reply"sv;
         return -1;
       }
 
       const gchar *request_path = nullptr;
       g_variant_get(reply, "(o)", &request_path);
-      dbus_response_init(&response, loop, conn, request_path);
+      if (g_strcmp0(request_path, expected_request_path) != 0) {
+        dbus_response_cleanup(&response);
+        BOOST_LOG(error) << "[portalgrab] "sv << session_type << " Start returned unexpected request path"sv;
+        return -1;
+      }
 
       g_autoptr(GVariant) start_response = dbus_response_wait(&response);
 
@@ -635,9 +686,13 @@ namespace portal {
       g_autoptr(GVariant) msg = g_variant_ref_sink(g_variant_new("(oa{sv})", session_path, nullptr));
 
       g_autoptr(GError) err = nullptr;
-      g_autoptr(GVariant) reply = g_dbus_proxy_call_with_unix_fd_list_sync(screencast_proxy, "OpenPipeWireRemote", msg, G_DBUS_CALL_FLAGS_NONE, -1, nullptr, &fd_list, nullptr, &err);
+      g_autoptr(GVariant) reply = g_dbus_proxy_call_with_unix_fd_list_sync(screencast_proxy, "OpenPipeWireRemote", msg, G_DBUS_CALL_FLAGS_NONE, PORTAL_DBUS_TIMEOUT_MS, nullptr, &fd_list, nullptr, &err);
       if (err) {
         BOOST_LOG(error) << "[portalgrab] Could not open pipewire remote: "sv << err->message;
+        return -1;
+      }
+      if (!reply) {
+        BOOST_LOG(error) << "[portalgrab] Could not open pipewire remote: empty D-Bus reply"sv;
         return -1;
       }
 
@@ -649,8 +704,25 @@ namespace portal {
 
     static void on_response_received_cb([[maybe_unused]] GDBusConnection *connection, [[maybe_unused]] const gchar *sender_name, [[maybe_unused]] const gchar *object_path, [[maybe_unused]] const gchar *interface_name, [[maybe_unused]] const gchar *signal_name, GVariant *parameters, gpointer user_data) {
       auto *response = static_cast<dbus_response_t *>(user_data);
+      if (response->response) {
+        return;
+      }
       response->response = g_variant_ref_sink(parameters);
       g_main_loop_quit(response->loop);
+    }
+
+    /**
+     * @brief End a portal response wait when its bounded deadline expires.
+     *
+     * @param user_data Pointer to the response state associated with the wait.
+     * @return `G_SOURCE_REMOVE` so GLib removes the one-shot timeout source.
+     */
+    static gboolean on_response_timeout_cb(gpointer user_data) {
+      auto *response = static_cast<dbus_response_t *>(user_data);
+      response->timeout_source_id = 0;
+      response->timed_out = true;
+      g_main_loop_quit(response->loop);
+      return G_SOURCE_REMOVE;
     }
 
     static gchar *get_sender_string(GDBusConnection *conn) {
@@ -691,13 +763,73 @@ namespace portal {
       }
     }
 
-    static void dbus_response_init(struct dbus_response_t *response, GMainLoop *loop, GDBusConnection *conn, const char *request_path) {
+    /**
+     * @brief Subscribe to a portal response before issuing its D-Bus method call.
+     *
+     * @param response Response state to initialize.
+     * @param loop GLib main loop used to dispatch the response signal.
+     * @param conn D-Bus connection which owns the signal subscription.
+     * @param request_path Predicted portal request object path.
+     */
+    static void dbus_response_init(dbus_response_t *response, GMainLoop *loop, GDBusConnection *conn, const char *request_path) {
       response->loop = loop;
+      response->connection = conn;
+      response->request_path = request_path;
+      response->timed_out = false;
       response->subscription_id = g_dbus_connection_signal_subscribe(conn, PORTAL_NAME, REQUEST_IFACE, "Response", request_path, nullptr, G_DBUS_SIGNAL_FLAGS_NONE, on_response_received_cb, response, nullptr);
     }
 
-    static GVariant *dbus_response_wait(struct dbus_response_t *response) {
-      g_main_loop_run(response->loop);
+    /**
+     * @brief Remove response wait sources and the D-Bus signal subscription.
+     *
+     * @param response Response state to clean.
+     */
+    static void dbus_response_cleanup(dbus_response_t *response) {
+      if (response->timeout_source_id != 0) {
+        g_source_remove(response->timeout_source_id);
+        response->timeout_source_id = 0;
+      }
+      if (response->connection && response->subscription_id != 0) {
+        g_dbus_connection_signal_unsubscribe(response->connection, response->subscription_id);
+        response->subscription_id = 0;
+      }
+      if (response->timed_out && response->connection && !response->request_path.empty()) {
+        g_autoptr(GError) error = nullptr;
+        g_dbus_connection_call_sync(
+          response->connection,
+          PORTAL_NAME,
+          response->request_path.c_str(),
+          REQUEST_IFACE,
+          "Close",
+          nullptr,
+          nullptr,
+          G_DBUS_CALL_FLAGS_NONE,
+          PORTAL_REQUEST_CLOSE_TIMEOUT_MS,
+          nullptr,
+          &error
+        );
+        if (error) {
+          BOOST_LOG(warning) << "[portalgrab] Failed to close timed-out portal request: "sv << error->message;
+        }
+      }
+    }
+
+    /**
+     * @brief Wait for one portal response with a finite deadline.
+     *
+     * @param response Initialized response subscription state.
+     * @return Owned response variant, or nullptr when the deadline expires.
+     */
+    static GVariant *dbus_response_wait(dbus_response_t *response) {
+      if (!response->response) {
+        response->timeout_source_id = g_timeout_add(PORTAL_RESPONSE_TIMEOUT_MS, on_response_timeout_cb, response);
+        g_main_loop_run(response->loop);
+      }
+      dbus_response_cleanup(response);
+      if (response->timed_out) {
+        BOOST_LOG(error) << "[portalgrab] Portal response timed out after "sv << PORTAL_RESPONSE_TIMEOUT_MS << " ms"sv;
+        return nullptr;
+      }
       return response->response;
     }
   };

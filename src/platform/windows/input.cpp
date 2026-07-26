@@ -780,6 +780,11 @@ namespace platf {
     return std::make_unique<client_input_raw_t>(input);
   }
 
+  input_route_diagnostics_t input_route_diagnostics(input_t &input) {
+    (void) input;
+    return {"desktop", ""};
+  }
+
   /**
    * @brief Compacts the touch slots into a contiguous block and updates the active count.
    * @details Since this swaps entries around, all slot pointers/references are invalid after compaction.

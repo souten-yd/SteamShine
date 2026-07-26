@@ -1735,6 +1735,7 @@ namespace config {
     bool_f(vars, "steamos_keep_session_alive", steamos_virtual_display.keep_session_alive);
     int_between_f(vars, "steamos_existing_gamescope_pid", steamos_virtual_display.existing_gamescope_pid, {0, INT_MAX});
     string_f(vars, "steamos_gamescope_path", steamos_virtual_display.gamescope_path);
+    string_f(vars, "steamos_virtual_desktop_command", steamos_virtual_display.virtual_desktop_command);
     path_f(vars, "steamos_runtime_directory", steamos_virtual_display.runtime_directory);
     string_f(vars, "steamos_game_gpu", steamos_virtual_display.game_gpu);
     string_f(vars, "steamos_capture_gpu", steamos_virtual_display.capture_gpu);

@@ -2,6 +2,7 @@
  * @file tests/unit/test_steamos_virtual_session_core.cpp
  * @brief Tests for standalone SteamOS virtual-session request helpers.
  */
+#include <array>
 #include <cstdlib>
 #include <gtest/gtest.h>
 #include <src/platform/linux/gamescope_presenter.h>
@@ -119,9 +120,77 @@ namespace {
     EXPECT_FALSE(decide_virtual_display({false, virtual_display_mode_e::force, true, true, true, false, true}).required);
     EXPECT_FALSE(decide_virtual_display({true, virtual_display_mode_e::off, false, false, false, false, true}).required);
     EXPECT_TRUE(decide_virtual_display({true, virtual_display_mode_e::force, true, true, true, false, true}).required);
+    EXPECT_EQ(
+      decide_virtual_display({true, virtual_display_mode_e::force, true, true, true, true, true}).reason,
+      "owned_session_active"
+    );
     EXPECT_TRUE(decide_virtual_display({true, virtual_display_mode_e::force, false, false, true, false, true}).required);
     EXPECT_TRUE(decide_virtual_display({true, virtual_display_mode_e::auto_detect, false, false, false, false, true}).required);
     EXPECT_FALSE(decide_virtual_display({true, virtual_display_mode_e::auto_detect, true, true, true, false, true}).required);
+    EXPECT_EQ(
+      decide_virtual_display({true, virtual_display_mode_e::auto_detect, true, true, true, true, true, false, false}).reason,
+      "capturable_output_present"
+    );
+    EXPECT_EQ(
+      decide_virtual_display({true, virtual_display_mode_e::auto_detect, false, false, false, true, true, false, false}).reason,
+      "owned_session_active"
+    );
+    EXPECT_EQ(
+      decide_virtual_display({true, virtual_display_mode_e::auto_detect, true, true, true, true, true, true, false}).reason,
+      "verified_existing_gamescope"
+    );
+    EXPECT_EQ(
+      decide_virtual_display({true, virtual_display_mode_e::auto_detect, true, true, true, false, true, false, true}).reason,
+      "existing_gamescope_required"
+    );
+  }
+
+  /**
+   * @brief Verify a working physical Desktop portal outranks automatic virtual capture.
+   */
+  TEST(SteamOSVirtualSessionCore, PrefersPhysicalDesktopCompositorCapture) {
+    using steamos_virtual_session::physical_desktop_capturable;
+    using steamos_virtual_session::should_probe_physical_portal;
+    using steamos_virtual_session::use_virtual_capture_backend;
+
+    EXPECT_TRUE(physical_desktop_capturable(true, true, false));
+    EXPECT_TRUE(physical_desktop_capturable(true, false, true));
+    EXPECT_FALSE(physical_desktop_capturable(true, false, false));
+    EXPECT_FALSE(physical_desktop_capturable(false, true, true));
+    EXPECT_FALSE(use_virtual_capture_backend(true, true, true, false));
+    EXPECT_TRUE(use_virtual_capture_backend(true, true, false, false));
+    EXPECT_TRUE(use_virtual_capture_backend(true, false, true, false));
+    EXPECT_TRUE(use_virtual_capture_backend(true, true, true, true));
+    EXPECT_FALSE(use_virtual_capture_backend(false, false, false, false));
+    EXPECT_TRUE(should_probe_physical_portal(true, false, true, false));
+    EXPECT_FALSE(should_probe_physical_portal(true, false, true, true));
+    EXPECT_FALSE(should_probe_physical_portal(true, false, false, false));
+    EXPECT_FALSE(should_probe_physical_portal(false, false, true, false));
+    EXPECT_TRUE(should_probe_physical_portal(false, true, false, true));
+  }
+
+  /**
+   * @brief Verify an EIS socket is accepted only when the selected Gamescope PID owns it.
+   */
+  TEST(SteamOSVirtualSessionCore, SelectsProducerOwnedContainedEisSocket) {
+    const std::string sockets {
+      "Num RefCount Protocol Flags Type St Inode Path\n"
+      "0001: 00000002 00000000 00010000 0001 01 111 /run/user/1000/gamescope-0-ei\n"
+      "0002: 00000002 00000000 00010000 0001 01 222 /run/user/1000/other.sock\n"
+      "0003: 00000002 00000000 00010000 0001 01 333 /tmp/gamescope-1-ei\n"
+    };
+    const std::array<std::uint64_t, 1> owned {111};
+
+    EXPECT_EQ(
+      steamos_virtual_session::select_gamescope_eis_socket("/run/user/1000", sockets, owned),
+      std::filesystem::path {"/run/user/1000/gamescope-0-ei"}
+    );
+    const std::array<std::uint64_t, 2> ambiguous {111, 444};
+    const auto ambiguous_sockets {
+      sockets + "0004: 00000002 00000000 00010000 0001 01 444 /run/user/1000/gamescope-1-ei\n"
+    };
+    EXPECT_FALSE(steamos_virtual_session::select_gamescope_eis_socket("/run/user/1000", ambiguous_sockets, ambiguous).has_value());
+    EXPECT_FALSE(steamos_virtual_session::select_gamescope_eis_socket("/run/user/1000", sockets, std::array<std::uint64_t, 1> {333}).has_value());
   }
 
   /**
@@ -374,35 +443,29 @@ namespace {
   }
 
   /**
-   * @brief Verify the local presenter endpoint cannot be replaced by later child setup.
+   * @brief Verify endpoint refresh accepts a later complete desktop environment only.
    */
-  TEST(SteamOSVirtualSessionCore, CapturesHostDesktopEndpointOnlyOnce) {
-    const auto *const original_runtime {std::getenv("XDG_RUNTIME_DIR")};
-    const auto *const original_wayland {std::getenv("WAYLAND_DISPLAY")};
-    const bool had_runtime {original_runtime != nullptr};
-    const bool had_wayland {original_wayland != nullptr};
-    const std::string saved_runtime {original_runtime ? original_runtime : ""};
-    const std::string saved_wayland {original_wayland ? original_wayland : ""};
-    host_desktop_endpoint::capture();
-    const auto original {host_desktop_endpoint::current()};
+  TEST(SteamOSVirtualSessionCore, RefreshesHostDesktopEndpointWhenItBecomesAvailable) {
+    const host_desktop_endpoint::endpoint_t empty {};
+    const host_desktop_endpoint::endpoint_t complete {
+      .xdg_runtime_directory = "/run/user/1000",
+      .wayland_display = "wayland-0",
+      .x11_display = ":0",
+    };
+    const host_desktop_endpoint::endpoint_t partial {
+      .xdg_runtime_directory = "/run/user/1000",
+    };
 
-    ASSERT_EQ(::setenv("XDG_RUNTIME_DIR", "/tmp/steamshine-private-runtime", 1), 0);
-    ASSERT_EQ(::setenv("WAYLAND_DISPLAY", "gamescope-0", 1), 0);
-    host_desktop_endpoint::capture();
+    EXPECT_TRUE(host_desktop_endpoint::should_refresh(empty, complete));
+    EXPECT_FALSE(host_desktop_endpoint::should_refresh(empty, partial));
+    EXPECT_FALSE(host_desktop_endpoint::should_refresh(complete, complete));
 
-    const auto retained {host_desktop_endpoint::current()};
-    EXPECT_EQ(retained.xdg_runtime_directory, original.xdg_runtime_directory);
-    EXPECT_EQ(retained.wayland_display, original.wayland_display);
-    EXPECT_EQ(retained.x11_display, original.x11_display);
-    if (had_runtime) {
-      ASSERT_EQ(::setenv("XDG_RUNTIME_DIR", saved_runtime.c_str(), 1), 0);
-    } else {
-      ASSERT_EQ(::unsetenv("XDG_RUNTIME_DIR"), 0);
-    }
-    if (had_wayland) {
-      ASSERT_EQ(::setenv("WAYLAND_DISPLAY", saved_wayland.c_str(), 1), 0);
-    } else {
-      ASSERT_EQ(::unsetenv("WAYLAND_DISPLAY"), 0);
-    }
+    auto changed {complete};
+    changed.wayland_display = "wayland-1";
+    EXPECT_TRUE(host_desktop_endpoint::should_refresh(complete, changed));
+
+    auto next {complete};
+    ++next.generation;
+    EXPECT_EQ(next.generation, complete.generation + 1);
   }
 }  // namespace

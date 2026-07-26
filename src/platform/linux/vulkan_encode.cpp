@@ -312,12 +312,32 @@ namespace vk {
         }
       }
 
-      // Import new DMA-BUF as VkImage when capture sequence changes
-      if (descriptor.sequence == 0) {
-        // Dummy frame — clear the target
-        return 0;
+      // Setup Y/UV image views for the encoder target (once)
+      if (!target.views_created) {
+        if (!create_target_views()) {
+          return -1;
+        }
+        target.views_created = true;
+        descriptors_dirty = true;
       }
 
+      // Dummy frames use the initialized one-pixel black image as the source so
+      // the normal colorspace shader writes deterministic black YUV values.
+      if (descriptor.sequence == 0) {
+        push.src_offset = {0, 0};
+        push.src_size = {1, 1};
+        push.dst_offset = {0, 0};
+        push.dst_size = {frame->width, frame->height};
+        push.dst_full_size = {frame->width, frame->height};
+        push.cursor_size = {0, 0};
+        push.y_invert = 0;
+        update_descriptors(true);
+        const int status {dispatch_compute(true)};
+        descriptors_dirty = true;
+        return status;
+      }
+
+      // Import new DMA-BUF as VkImage when capture sequence changes
       if (descriptor.sequence > sequence) {
         sequence = descriptor.sequence;
         if (!import_dmabuf(descriptor.sd)) {
@@ -329,15 +349,6 @@ namespace vk {
 
       if (src.image == VK_NULL_HANDLE) {
         return -1;
-      }
-
-      // Setup Y/UV image views for the encoder target (once)
-      if (!target.views_created) {
-        if (!create_target_views()) {
-          return -1;
-        }
-        target.views_created = true;
-        descriptors_dirty = true;
       }
 
       // Update descriptor set only when source or target changed
@@ -394,6 +405,16 @@ namespace vk {
     }
 
   private:
+    /**
+     * @brief Host-initialized image sampled by the conversion shader.
+     */
+    struct sample_image_t {
+      VkImage image = VK_NULL_HANDLE;
+      VkDeviceMemory mem = VK_NULL_HANDLE;
+      VkImageView view = VK_NULL_HANDLE;
+      bool needs_transition = false;
+    };
+
     bool create_compute_pipeline() {
       // Shader module
       VkShaderModuleCreateInfo shader_ci = {VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
@@ -458,6 +479,9 @@ namespace vk {
       VK_CHECK_BOOL(vkCreateSampler(vk_dev.dev, &sampler_ci, nullptr, &compute.sampler));
 
       if (!create_cursor_image(1, 1, nullptr)) {
+        return false;
+      }
+      if (!create_black_source_image()) {
         return false;
       }
 
@@ -660,8 +684,17 @@ namespace vk {
       return true;
     }
 
-    bool create_cursor_image(int w, int h, const uint8_t *pixels) {
-      destroy_cursor_image();
+    /**
+     * @brief Allocate and initialize a linear sampled image.
+     *
+     * @param image Destination image state.
+     * @param w Image width.
+     * @param h Image height.
+     * @param pixels Optional BGRA pixels; null initializes opaque-independent black.
+     * @return True when the image, memory, and view were created.
+     */
+    bool create_sample_image(sample_image_t &image, const int w, const int h, const uint8_t *pixels) {
+      destroy_sample_image(image);
 
       VkImageCreateInfo img_ci = {VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
       img_ci.imageType = VK_IMAGE_TYPE_2D;
@@ -673,53 +706,83 @@ namespace vk {
       img_ci.tiling = VK_IMAGE_TILING_LINEAR;
       img_ci.usage = VK_IMAGE_USAGE_SAMPLED_BIT;
       img_ci.initialLayout = VK_IMAGE_LAYOUT_PREINITIALIZED;
-      VK_CHECK_BOOL(vkCreateImage(vk_dev.dev, &img_ci, nullptr, &cursor.image));
+      VK_CHECK_BOOL(vkCreateImage(vk_dev.dev, &img_ci, nullptr, &image.image));
 
       VkMemoryRequirements mem_req;
-      vkGetImageMemoryRequirements(vk_dev.dev, cursor.image, &mem_req);
+      vkGetImageMemoryRequirements(vk_dev.dev, image.image, &mem_req);
       VkMemoryAllocateInfo alloc = {VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
       alloc.allocationSize = mem_req.size;
       alloc.memoryTypeIndex = find_memory_type(mem_req.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-      VK_CHECK_BOOL(vkAllocateMemory(vk_dev.dev, &alloc, nullptr, &cursor.mem));
-      VK_CHECK_BOOL(vkBindImageMemory(vk_dev.dev, cursor.image, cursor.mem, 0));
+      VK_CHECK_BOOL(vkAllocateMemory(vk_dev.dev, &alloc, nullptr, &image.mem));
+      VK_CHECK_BOOL(vkBindImageMemory(vk_dev.dev, image.image, image.mem, 0));
 
-      if (pixels) {
-        void *mapped;
-        VK_CHECK_BOOL(vkMapMemory(vk_dev.dev, cursor.mem, 0, VK_WHOLE_SIZE, 0, &mapped));
-        VkImageSubresource subres = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0};
-        VkSubresourceLayout layout;
-        vkGetImageSubresourceLayout(vk_dev.dev, cursor.image, &subres, &layout);
-        for (int y = 0; y < h; y++) {
-          memcpy((uint8_t *) mapped + layout.offset + y * layout.rowPitch, pixels + y * w * 4, w * 4);
+      void *mapped;
+      VK_CHECK_BOOL(vkMapMemory(vk_dev.dev, image.mem, 0, VK_WHOLE_SIZE, 0, &mapped));
+      VkImageSubresource subres = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0};
+      VkSubresourceLayout layout;
+      vkGetImageSubresourceLayout(vk_dev.dev, image.image, &subres, &layout);
+      for (int y = 0; y < h; y++) {
+        auto *const destination {static_cast<uint8_t *>(mapped) + layout.offset + y * layout.rowPitch};
+        if (pixels) {
+          memcpy(destination, pixels + y * w * 4, w * 4);
+        } else {
+          std::fill_n(destination, static_cast<std::size_t>(w) * 4, uint8_t {});
         }
-        vkUnmapMemory(vk_dev.dev, cursor.mem);
       }
+      vkUnmapMemory(vk_dev.dev, image.mem);
 
       VkImageViewCreateInfo view_ci = {VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
-      view_ci.image = cursor.image;
+      view_ci.image = image.image;
       view_ci.viewType = VK_IMAGE_VIEW_TYPE_2D;
       view_ci.format = VK_FORMAT_B8G8R8A8_UNORM;
       view_ci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-      VK_CHECK_BOOL(vkCreateImageView(vk_dev.dev, &view_ci, nullptr, &cursor.view));
+      VK_CHECK_BOOL(vkCreateImageView(vk_dev.dev, &view_ci, nullptr, &image.view));
 
-      cursor.needs_transition = true;
+      image.needs_transition = true;
       descriptors_dirty = true;
       return true;
     }
 
-    void destroy_cursor_image() {
-      if (cursor.view) {
-        vkDestroyImageView(vk_dev.dev, cursor.view, nullptr);
-        cursor.view = VK_NULL_HANDLE;
+    /**
+     * @brief Create or replace the sampled cursor image.
+     *
+     * @param w Cursor width.
+     * @param h Cursor height.
+     * @param pixels Optional BGRA cursor pixels.
+     * @return True when the cursor image is ready.
+     */
+    bool create_cursor_image(const int w, const int h, const uint8_t *pixels) {
+      return create_sample_image(cursor, w, h, pixels);
+    }
+
+    /**
+     * @brief Create the immutable one-pixel black fallback source.
+     *
+     * @return True when the black source image is ready.
+     */
+    bool create_black_source_image() {
+      return create_sample_image(black, 1, 1, nullptr);
+    }
+
+    /**
+     * @brief Destroy a sampled image and release its Vulkan resources.
+     *
+     * @param image Image state to destroy.
+     */
+    void destroy_sample_image(sample_image_t &image) {
+      if (image.view) {
+        vkDestroyImageView(vk_dev.dev, image.view, nullptr);
+        image.view = VK_NULL_HANDLE;
       }
-      if (cursor.image) {
-        vkDestroyImage(vk_dev.dev, cursor.image, nullptr);
-        cursor.image = VK_NULL_HANDLE;
+      if (image.image) {
+        vkDestroyImage(vk_dev.dev, image.image, nullptr);
+        image.image = VK_NULL_HANDLE;
       }
-      if (cursor.mem) {
-        vkFreeMemory(vk_dev.dev, cursor.mem, nullptr);
-        cursor.mem = VK_NULL_HANDLE;
+      if (image.mem) {
+        vkFreeMemory(vk_dev.dev, image.mem, nullptr);
+        image.mem = VK_NULL_HANDLE;
       }
+      image.needs_transition = false;
     }
 
     bool create_target_views() {
@@ -769,8 +832,17 @@ namespace vk {
       return true;
     }
 
-    void update_descriptors() {
-      VkDescriptorImageInfo src_info = {compute.sampler, src.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    /**
+     * @brief Update the compute bindings for a captured or deterministic black source.
+     *
+     * @param use_black_source Whether to sample the initialized one-pixel black image.
+     */
+    void update_descriptors(const bool use_black_source = false) {
+      VkDescriptorImageInfo src_info = {
+        compute.sampler,
+        use_black_source ? black.view : src.view,
+        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+      };
       VkDescriptorImageInfo y_info = {VK_NULL_HANDLE, target.y_view, VK_IMAGE_LAYOUT_GENERAL};
       VkDescriptorImageInfo uv_info = {VK_NULL_HANDLE, target.uv_view, VK_IMAGE_LAYOUT_GENERAL};
       VkDescriptorImageInfo cursor_info = {compute.sampler, cursor.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
@@ -783,7 +855,33 @@ namespace vk {
       vkUpdateDescriptorSets(vk_dev.dev, writes.size(), writes.data(), 0, nullptr);
     }
 
-    int dispatch_compute() {
+    /**
+     * @brief Transition a host-initialized sampled image for compute shader reads.
+     *
+     * @param command_buffer Command buffer receiving the barrier.
+     * @param image Sampled image to transition once.
+     */
+    void transition_sample_image(VkCommandBuffer command_buffer, sample_image_t &image) {
+      VkImageMemoryBarrier barrier = {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+      barrier.srcAccessMask = VK_ACCESS_HOST_WRITE_BIT;
+      barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+      barrier.oldLayout = VK_IMAGE_LAYOUT_PREINITIALIZED;
+      barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+      barrier.image = image.image;
+      barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+      barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+      barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+      vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_HOST_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+      image.needs_transition = false;
+    }
+
+    /**
+     * @brief Submit the RGB-to-YUV compute pass for a captured or black source.
+     *
+     * @param use_black_source Whether to sample the dedicated one-pixel black source.
+     * @return Zero on success; negative one when command recording or submission fails.
+     */
+    int dispatch_compute(const bool use_black_source = false) {
       auto *vk_frame = (AVVkFrame *) frame->data[0];
       int num_imgs = 0;
       for (int i = 0; i < AV_NUM_DATA_POINTERS && vk_frame->img[i]; i++) {
@@ -801,32 +899,29 @@ namespace vk {
       begin_ci.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
       VK_CHECK(vkBeginCommandBuffer(cmd_buf, &begin_ci));
 
-      // Transition source image to SHADER_READ_ONLY
-      VkImageMemoryBarrier src_barrier = {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
-      src_barrier.srcAccessMask = 0;
-      src_barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-      src_barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-      src_barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-      src_barrier.image = src.image;
-      src_barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-      src_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_EXTERNAL;
-      src_barrier.dstQueueFamilyIndex = vk_dev.compute_qf;
+      // A real capture imports an external image for each new sequence. The
+      // black source shares the cursor allocation and its transition below.
+      if (!use_black_source) {
+        VkImageMemoryBarrier src_barrier = {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+        src_barrier.srcAccessMask = 0;
+        src_barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        src_barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        src_barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        src_barrier.image = src.image;
+        src_barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        src_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_EXTERNAL;
+        src_barrier.dstQueueFamilyIndex = vk_dev.compute_qf;
 
-      vkCmdPipelineBarrier(cmd_buf, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &src_barrier);
+        vkCmdPipelineBarrier(cmd_buf, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &src_barrier);
+      }
+
+      if (use_black_source && black.needs_transition) {
+        transition_sample_image(cmd_buf, black);
+      }
 
       // Transition cursor image if needed
       if (cursor.needs_transition) {
-        VkImageMemoryBarrier cursor_barrier = {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
-        cursor_barrier.srcAccessMask = VK_ACCESS_HOST_WRITE_BIT;
-        cursor_barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-        cursor_barrier.oldLayout = VK_IMAGE_LAYOUT_PREINITIALIZED;
-        cursor_barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        cursor_barrier.image = cursor.image;
-        cursor_barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-        cursor_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        cursor_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        vkCmdPipelineBarrier(cmd_buf, VK_PIPELINE_STAGE_HOST_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &cursor_barrier);
-        cursor.needs_transition = false;
+        transition_sample_image(cmd_buf, cursor);
       }
 
       // Transition target planes to GENERAL for storage writes
@@ -973,7 +1068,8 @@ namespace vk {
       if (target.uv_view) {
         vkDestroyImageView(vk_dev.dev, target.uv_view, nullptr);
       }
-      destroy_cursor_image();
+      destroy_sample_image(cursor);
+      destroy_sample_image(black);
       if (cmd.pool) {
         vkDestroyCommandPool(vk_dev.dev, cmd.pool, nullptr);
       }
@@ -1072,13 +1168,8 @@ namespace vk {
 
     bool descriptors_dirty = false;
 
-    // Cursor image
-    struct {
-      VkImage image = VK_NULL_HANDLE;
-      VkDeviceMemory mem = VK_NULL_HANDLE;
-      VkImageView view = VK_NULL_HANDLE;
-      bool needs_transition = false;
-    } cursor = {};
+    sample_image_t cursor = {};  ///< Current cursor texture sampled above the captured image.
+    sample_image_t black = {};  ///< Immutable one-pixel black source used by dummy frames.
 
     unsigned long cursor_serial = 0;
 

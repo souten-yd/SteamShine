@@ -1,9 +1,10 @@
 /**
  * @file src/platform/linux/host_desktop_endpoint.h
- * @brief Immutable host desktop endpoint retained for local presentation.
+ * @brief Refreshable host desktop endpoint retained for local presentation.
  */
 #pragma once
 
+#include <cstdint>
 #include <memory>
 #include <string>
 
@@ -15,18 +16,31 @@ namespace host_desktop_endpoint {
     std::string xdg_runtime_directory;  ///< Original host `XDG_RUNTIME_DIR`.
     std::string wayland_display;  ///< Original host `WAYLAND_DISPLAY`.
     std::string x11_display;  ///< Original host `DISPLAY`.
+    std::uint64_t generation {};  ///< Monotonically increasing accepted endpoint generation.
   };
 
   /**
-   * @brief Capture the current process desktop endpoint exactly once.
+   * @brief Capture a complete current process desktop endpoint when available.
    *
-   * The result is intentionally independent from any child Gamescope
-   * environment. Repeated calls preserve the first captured host endpoint.
+   * Empty or partial environments never replace a complete endpoint. This
+   * permits a user service that began before the desktop to acquire its first
+   * valid endpoint later. SteamShine never modifies its own environment for
+   * private Gamescope children, so those child values cannot overwrite this
+   * process-owned endpoint.
    */
   void capture();
 
   /**
-   * @brief Return the immutable host desktop endpoint.
+   * @brief Decide whether a candidate may replace the current endpoint.
+   *
+   * @param current Endpoint currently retained by SteamShine.
+   * @param candidate Newly observed desktop endpoint.
+   * @return True when the candidate is complete and materially different.
+   */
+  bool should_refresh(const endpoint_t &current, const endpoint_t &candidate);
+
+  /**
+   * @brief Return the latest accepted host desktop endpoint.
    *
    * @return Values captured by @ref capture, or empty fields before capture.
    */
@@ -35,8 +49,9 @@ namespace host_desktop_endpoint {
   /**
    * @brief Verify that the captured host endpoint supports native Wayland presentation.
    *
-   * The probe connects directly to the captured runtime socket and never
-   * modifies the process environment used by private Gamescope children.
+   * The probe validates the runtime directory and socket type/owner on every
+   * call, then connects directly without modifying the process environment
+   * used by private Gamescope children.
    *
    * @param error Human-readable reason when host presentation is unavailable.
    * @return True only when both `wl_compositor` and `xdg_wm_base` are advertised.

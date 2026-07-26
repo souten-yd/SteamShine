@@ -17,11 +17,13 @@
 #include "crypto.h"
 #include "file_handler.h"
 #include "httpcommon.h"
+#include "input.h"
 #include "nvhttp.h"
 #include "platform/linux/gamescope_source.h"
 #include "process.h"
 #include "rtsp.h"
 #include "steamos_virtual_session.h"
+#include "video.h"
 #include "web_services.h"
 
 namespace web {
@@ -69,6 +71,52 @@ namespace web {
     std::shared_ptr<PairingClientBackend> default_pairing_client_backend() {
       static const auto backend = std::make_shared<NvHttpPairingClientBackend>();
       return backend;
+    }
+
+    /**
+     * @brief Serialize fixed-memory latency statistics for the status API.
+     *
+     * @param statistics Aggregate and percentile values to expose.
+     * @return Stable JSON object with millisecond units.
+     */
+    nlohmann::json latency_statistics_json(const latency_diagnostics::statistics_t &statistics) {
+      return {
+        {"count", statistics.count},
+        {"window_count", statistics.window_count},
+        {"average", statistics.average_ms},
+        {"p50", statistics.p50_ms},
+        {"p95", statistics.p95_ms},
+        {"p99", statistics.p99_ms},
+        {"max", statistics.max_ms},
+      };
+    }
+
+    /**
+     * @brief Cached 500 ms diagnostics aggregation used only by status readers.
+     */
+    struct diagnostics_aggregation_t {
+      std::mutex mutex;  ///< Serializes infrequent Web snapshot refreshes.
+      std::chrono::steady_clock::time_point refreshed_at {};  ///< Last atomic/ring aggregation time.
+      input::diagnostics_snapshot_t input;  ///< Cached input counters and percentiles.
+      video::pipeline_diagnostics_t video;  ///< Cached video counters and percentiles.
+    };
+
+    /**
+     * @brief Refresh diagnostics at most once per 500 ms status interval.
+     *
+     * @return Copies of the current input and video aggregate snapshots.
+     */
+    std::pair<input::diagnostics_snapshot_t, video::pipeline_diagnostics_t> aggregated_diagnostics() {
+      static diagnostics_aggregation_t aggregation;
+      constexpr auto aggregation_interval = std::chrono::milliseconds {500};
+      std::scoped_lock lock {aggregation.mutex};
+      const auto now {std::chrono::steady_clock::now()};
+      if (aggregation.refreshed_at.time_since_epoch().count() == 0 || now - aggregation.refreshed_at >= aggregation_interval) {
+        aggregation.input = input::diagnostics_snapshot();
+        aggregation.video = video::pipeline_diagnostics_snapshot();
+        aggregation.refreshed_at = now;
+      }
+      return {aggregation.input, aggregation.video};
     }
   }  // namespace
 
@@ -301,7 +349,12 @@ namespace web {
     std::string render_node;
     const bool render_node_ready = steamos_virtual_session::encoder_render_node(render_node);
     const auto virtual_session {steamos_virtual_session::status_snapshot()};
+    const auto [input_diagnostics, video_diagnostics] {aggregated_diagnostics()};
+    const auto *const launch_mode {std::getenv("STEAMSHINE_LAUNCH_MODE")};
     return {
+      {"service_binary_commit", PROJECT_VERSION_COMMIT},
+      {"service_config_path", config::sunshine.config_file},
+      {"service_launch_mode", launch_mode && *launch_mode ? launch_mode : "manual"},
       {"active_streams", rtsp_stream::session_count()},
       {"application_running", proc::proc.running() > 0},
       {"gamescope_active", steamos_virtual_session::active()},
@@ -325,6 +378,10 @@ namespace web {
       {"virtual_display_source_executable", virtual_session.source_executable},
       {"virtual_display_source_process_start_time", virtual_session.source_process_start_time},
       {"steam_location", virtual_session.steam_location},
+      {"migration_required", virtual_session.migration_required},
+      {"app_launch_rejected_reason", virtual_session.app_launch_rejected_reason},
+      {"app_launch_rejected_message", virtual_session.app_launch_rejected_message},
+      {"capture_selection_reason", virtual_session.selection_reason},
       {"presentation", std::string {steamos_virtual_session::to_string(virtual_session.presentation)}},
       {"local_presenter_active", virtual_session.local_presenter_active},
       {"local_presented_frames", virtual_session.local_presented_frames},
@@ -340,6 +397,34 @@ namespace web {
       {"encoded_packets", virtual_session.encoded_packets},
       {"encoded_bytes", virtual_session.encoded_bytes},
       {"idr_packets", virtual_session.idr_packets},
+      {"input_events_received", input_diagnostics.events_received},
+      {"input_events_injected", input_diagnostics.events_injected},
+      {"input_motion_coalesced", input_diagnostics.motion_coalesced},
+      {"input_motion_dropped", input_diagnostics.motion_dropped},
+      {"input_queue_current", input_diagnostics.queue_current},
+      {"input_queue_max", input_diagnostics.queue_max},
+      {"input_queue_age_ms", latency_statistics_json(input_diagnostics.queue_age_ms)},
+      {"input_route_target", input_diagnostics.route_target},
+      {"input_route_error", input_diagnostics.route_error},
+      {"capture_queue_current", video_diagnostics.capture_queue_current},
+      {"capture_queue_max", video_diagnostics.capture_queue_max},
+      {"capture_frames_replaced", video_diagnostics.capture_frames_replaced},
+      {"encoder_queue_current", video_diagnostics.encoder_queue_current},
+      {"encoder_queue_max", video_diagnostics.encoder_queue_max},
+      {"network_queue_bytes", video_diagnostics.network_queue_bytes},
+      {"network_queue_frames", video_diagnostics.network_queue_frames},
+      {"network_queue_frames_max", video_diagnostics.network_queue_frames_max},
+      {"socket_outq_bytes", video_diagnostics.socket_outq_bytes},
+      {"socket_outq_bytes_max", video_diagnostics.socket_outq_bytes_max},
+      {"idr_requests", video_diagnostics.idr_requests},
+      {"idr_emitted", video_diagnostics.idr_emitted},
+      {"idr_reason_client_request", video_diagnostics.idr_reason_client_request},
+      {"idr_reason_recovery", video_diagnostics.idr_reason_recovery},
+      {"idr_reason_periodic", video_diagnostics.idr_reason_periodic},
+      {"idr_reason_reconnect", video_diagnostics.idr_reason_reconnect},
+      {"frame_age_at_capture_ms", latency_statistics_json(video_diagnostics.frame_age_at_capture_ms)},
+      {"frame_age_at_encode_ms", latency_statistics_json(video_diagnostics.frame_age_at_encode_ms)},
+      {"frame_age_at_network_ms", latency_statistics_json(video_diagnostics.frame_age_at_network_ms)},
     };
   }
 

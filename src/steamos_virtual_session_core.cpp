@@ -5,6 +5,9 @@
 #include "steamos_virtual_session_core.h"
 
 #include <algorithm>
+#include <array>
+#include <charconv>
+#include <sstream>
 #include <string_view>
 
 namespace steamos_virtual_session {
@@ -135,15 +138,97 @@ namespace steamos_virtual_session {
       return {false, "mode_off"};
     }
     if (input.mode == virtual_display_mode_e::force) {
+      if (input.existing_owned_session) {
+        return {true, "owned_session_active"};
+      }
       return {true, input.host_supported ? "config_force" : "config_force_host_unsupported"};
     }
-    if (input.existing_owned_session) {
-      return {true, "owned_session_active"};
+    if (input.verified_existing_gamescope_present) {
+      return {true, "verified_existing_gamescope"};
+    }
+    if (input.existing_gamescope_required) {
+      return {true, "existing_gamescope_required"};
     }
     if (input.capturable_output_present) {
       return {false, "capturable_output_present"};
     }
+    if (input.existing_owned_session) {
+      return {true, "owned_session_active"};
+    }
     return {true, input.host_supported ? "no_capturable_output" : "no_capturable_output_host_unsupported"};
+  }
+
+  bool physical_desktop_capturable(
+    const bool physical_output_connected,
+    const bool active_crtc_present,
+    const bool compositor_capture_available
+  ) {
+    return physical_output_connected && (active_crtc_present || compositor_capture_available);
+  }
+
+  bool use_virtual_capture_backend(
+    const bool virtual_display_required,
+    const bool physical_output_connected,
+    const bool compositor_capture_available,
+    const bool wlr_capture_forced
+  ) {
+    return virtual_display_required &&
+           (wlr_capture_forced || !physical_output_connected || !compositor_capture_available);
+  }
+
+  bool should_probe_physical_portal(
+    const bool automatic_capture,
+    const bool portal_explicitly_requested,
+    const bool physical_output_connected,
+    const bool higher_priority_available
+  ) {
+    return portal_explicitly_requested ||
+           (automatic_capture && physical_output_connected && !higher_priority_available);
+  }
+
+  std::optional<std::filesystem::path> select_gamescope_eis_socket(
+    const std::filesystem::path &runtime_directory,
+    const std::string_view unix_socket_table,
+    const std::span<const std::uint64_t> producer_socket_inodes
+  ) {
+    if (runtime_directory.empty() || !runtime_directory.is_absolute() || producer_socket_inodes.empty()) {
+      return std::nullopt;
+    }
+    std::vector<std::filesystem::path> matches;
+    std::istringstream lines {std::string {unix_socket_table}};
+    std::string line;
+    while (std::getline(lines, line)) {
+      std::istringstream fields {line};
+      std::array<std::string, 8> values;
+      bool complete {true};
+      for (auto &value : values) {
+        if (!(fields >> value)) {
+          complete = false;
+          break;
+        }
+      }
+      if (!complete) {
+        continue;
+      }
+      std::uint64_t inode {};
+      const auto conversion {std::from_chars(values[6].data(), values[6].data() + values[6].size(), inode)};
+      if (conversion.ec != std::errc {} || conversion.ptr != values[6].data() + values[6].size() ||
+          std::ranges::find(producer_socket_inodes, inode) == producer_socket_inodes.end()) {
+        continue;
+      }
+      const std::filesystem::path candidate {values[7]};
+      const auto filename {candidate.filename().string()};
+      if (!candidate.is_absolute() ||
+          candidate.lexically_normal().parent_path() != runtime_directory.lexically_normal() ||
+          !filename.starts_with("gamescope-") ||
+          !filename.ends_with("-ei")) {
+        continue;
+      }
+      matches.emplace_back(candidate.lexically_normal());
+    }
+    std::ranges::sort(matches);
+    matches.erase(std::unique(matches.begin(), matches.end()), matches.end());
+    return matches.size() == 1 ? std::optional<std::filesystem::path> {matches.front()} : std::nullopt;
   }
 
   display_request_t normalize_display_request(const int requested_width, const int requested_height, const int requested_fps, const int default_width, const int default_height, const int default_fps) {

@@ -4,7 +4,10 @@
  */
 #pragma once
 
+#include <cstdint>
+#include <filesystem>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -140,6 +143,8 @@ namespace steamos_virtual_session {
     bool capturable_output_present;  ///< Whether a normal capture target is available.
     bool existing_owned_session;  ///< Whether SteamShine already owns a compatible session.
     bool host_supported;  ///< Whether the host can create an owned Gamescope session.
+    bool verified_existing_gamescope_present {false};  ///< Whether a verified resident Game Mode source must take precedence.
+    bool existing_gamescope_required {false};  ///< Whether policy requires attachment instead of normal desktop capture.
   };
 
   /**
@@ -160,6 +165,75 @@ namespace steamos_virtual_session {
    * @return Deterministic requirement and diagnostic reason.
    */
   virtual_display_decision_t decide_virtual_display(const virtual_display_decision_input_t &input);
+
+  /**
+   * @brief Determine whether the physical Desktop has a usable capture path.
+   *
+   * A compositor can expose the connected output through KWin ScreenCast or
+   * XDG Portal while sysfs reports its DRM CRTC disabled. Either an active
+   * CRTC or a verified compositor source is sufficient, but a physical
+   * connector is always required.
+   *
+   * @param physical_output_connected Whether a physical DRM connector is connected.
+   * @param active_crtc_present Whether sysfs reports an enabled physical CRTC.
+   * @param compositor_capture_available Whether a compositor exposed a capture source.
+   * @return True when automatic policy can keep the physical Desktop.
+   */
+  bool physical_desktop_capturable(
+    bool physical_output_connected,
+    bool active_crtc_present,
+    bool compositor_capture_available
+  );
+
+  /**
+   * @brief Decide whether capture must use the private virtual compositor.
+   *
+   * @param virtual_display_required Whether policy initially requested a virtual display.
+   * @param physical_output_connected Whether a physical DRM connector is connected.
+   * @param compositor_capture_available Whether the host compositor exposed a capture source.
+   * @param wlr_capture_forced Whether the user explicitly selected the WLR backend.
+   * @return True when capture must remain on the private virtual compositor.
+   */
+  bool use_virtual_capture_backend(
+    bool virtual_display_required,
+    bool physical_output_connected,
+    bool compositor_capture_available,
+    bool wlr_capture_forced
+  );
+
+  /**
+   * @brief Decide whether initialization should probe XDG Portal capture.
+   *
+   * Automatic capture probes Portal only for a connected physical output and
+   * only when a higher-priority compositor backend was not verified. An
+   * explicit Portal selection remains authoritative without a physical output.
+   *
+   * @param automatic_capture Whether no capture backend was explicitly selected.
+   * @param portal_explicitly_requested Whether the user selected the Portal backend.
+   * @param physical_output_connected Whether a physical DRM connector is connected.
+   * @param higher_priority_available Whether KWin or another preferred backend is ready.
+   * @return True when Portal discovery should run.
+   */
+  bool should_probe_physical_portal(
+    bool automatic_capture,
+    bool portal_explicitly_requested,
+    bool physical_output_connected,
+    bool higher_priority_available
+  );
+
+  /**
+   * @brief Select a Gamescope EIS socket owned by the verified producer process.
+   *
+   * @param runtime_directory Trusted current-user runtime directory.
+   * @param unix_socket_table Contents of `/proc/net/unix`.
+   * @param producer_socket_inodes Socket inodes held by the verified Gamescope PID.
+   * @return Contained `gamescope-*-ei` path, or no value when none is unique.
+   */
+  std::optional<std::filesystem::path> select_gamescope_eis_socket(
+    const std::filesystem::path &runtime_directory,
+    std::string_view unix_socket_table,
+    std::span<const std::uint64_t> producer_socket_inodes
+  );
 
   /**
    * @brief A validated nested Gamescope display request.

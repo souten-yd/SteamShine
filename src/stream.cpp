@@ -4,14 +4,24 @@
  */
 
 // standard includes
+#include <atomic>
+#include <chrono>
+#include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <future>
 #include <queue>
 
 // lib includes
 #include <boost/endian/arithmetic.hpp>
+#include <nlohmann/json.hpp>
 #include <openssl/err.h>
 #include <rs.h>
+
+#if defined(__linux__)
+  #include <linux/sockios.h>
+  #include <sys/ioctl.h>
+#endif
 
 extern "C" {
   // clang-format off
@@ -79,6 +89,142 @@ using asio::ip::udp;
 using namespace std::literals;
 
 namespace stream {
+  namespace {
+    std::atomic_uint64_t diagnostics_report_sequence {0};  ///< Prevents report-name collisions within one process.
+
+    /**
+     * @brief Serialize latency statistics into the session report schema.
+     *
+     * @param statistics Fixed-memory statistics snapshot.
+     * @return JSON object containing count, average, percentiles, and maximum.
+     */
+    nlohmann::json latency_statistics_json(const latency_diagnostics::statistics_t &statistics) {
+      return {
+        {"count", statistics.count},
+        {"window_count", statistics.window_count},
+        {"average", statistics.average_ms},
+        {"p50", statistics.p50_ms},
+        {"p95", statistics.p95_ms},
+        {"p99", statistics.p99_ms},
+        {"max", statistics.max_ms},
+      };
+    }
+
+    /**
+     * @brief Resolve the per-user state directory without modifying process environment.
+     *
+     * @return Absolute SteamShine state path, or an empty path when unavailable.
+     */
+    std::filesystem::path diagnostics_state_directory() {
+      if (const auto *const state_home {std::getenv("XDG_STATE_HOME")}; state_home && *state_home) {
+        const std::filesystem::path path {state_home};
+        if (path.is_absolute()) {
+          return path / "steamshine" / "session-diagnostics";
+        }
+      }
+      if (const auto *const home {std::getenv("HOME")}; home && *home) {
+        const std::filesystem::path path {home};
+        if (path.is_absolute()) {
+          return path / ".local" / "state" / "steamshine" / "session-diagnostics";
+        }
+      }
+      return {};
+    }
+
+    /**
+     * @brief Persist one bounded aggregate report after the final stream worker exits.
+     *
+     * This function performs the only diagnostics disk write in a stream
+     * lifecycle. Event and frame paths update atomics and fixed RAM rings only.
+     *
+     * @param stream_config Negotiated stream configuration to report.
+     * @param started_at Monotonic stream start time.
+     */
+    void write_session_diagnostics(const config_t &stream_config, const std::chrono::steady_clock::time_point started_at) {
+#if defined(__linux__)
+      try {
+        const auto directory {diagnostics_state_directory()};
+        if (directory.empty()) {
+          BOOST_LOG(warning) << "SESSION_DIAGNOSTICS_SKIPPED reason=state_directory_unavailable";
+          return;
+        }
+        std::error_code error;
+        std::filesystem::create_directories(directory, error);
+        if (error) {
+          BOOST_LOG(warning) << "SESSION_DIAGNOSTICS_SKIPPED reason=create_directory_failed error=" << error.message();
+          return;
+        }
+
+        const auto input_diagnostics {input::diagnostics_snapshot()};
+        const auto video_diagnostics {video::pipeline_diagnostics_snapshot()};
+        const auto virtual_session {steamos_virtual_session::status_snapshot()};
+        const auto ended_at {std::chrono::system_clock::now()};
+        const auto ended_at_milliseconds {std::chrono::duration_cast<std::chrono::milliseconds>(ended_at.time_since_epoch()).count()};
+        const auto duration_milliseconds {std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started_at).count()};
+        const auto sequence {diagnostics_report_sequence.fetch_add(1, std::memory_order_relaxed)};
+        const auto path {directory / ("session-" + std::to_string(ended_at_milliseconds) + "-" + std::to_string(sequence) + ".json")};
+
+        const nlohmann::json report {
+          {"schema_version", 1},
+          {"ended_at_unix_ms", ended_at_milliseconds},
+          {"duration_ms", std::max<std::int64_t>(duration_milliseconds, 0)},
+          {"service_binary_commit", PROJECT_VERSION_COMMIT},
+          {"service_config_path", config::sunshine.config_file},
+          {"capture_selection_reason", virtual_session.selection_reason},
+          {"virtual_display_origin", std::string {steamos_virtual_session::to_string(virtual_session.origin)}},
+          {"gamescope_pid", virtual_session.gamescope_pid},
+          {"render_node", virtual_session.render_node},
+          {"width", stream_config.monitor.width},
+          {"height", stream_config.monitor.height},
+          {"fps", stream_config.monitor.framerate},
+          {"codec", stream_config.monitor.videoFormat},
+          {"dynamic_range", stream_config.monitor.dynamicRange},
+          {"bitrate_kbps", stream_config.monitor.bitrate},
+          {"input_events_received", input_diagnostics.events_received},
+          {"input_events_injected", input_diagnostics.events_injected},
+          {"input_motion_coalesced", input_diagnostics.motion_coalesced},
+          {"input_motion_dropped", input_diagnostics.motion_dropped},
+          {"input_queue_current", input_diagnostics.queue_current},
+          {"input_queue_max", input_diagnostics.queue_max},
+          {"input_queue_age_ms", latency_statistics_json(input_diagnostics.queue_age_ms)},
+          {"input_route_target", input_diagnostics.route_target},
+          {"input_route_error", input_diagnostics.route_error},
+          {"capture_queue_current", video_diagnostics.capture_queue_current},
+          {"capture_queue_max", video_diagnostics.capture_queue_max},
+          {"capture_frames_replaced", video_diagnostics.capture_frames_replaced},
+          {"encoder_queue_current", video_diagnostics.encoder_queue_current},
+          {"encoder_queue_max", video_diagnostics.encoder_queue_max},
+          {"network_queue_bytes", video_diagnostics.network_queue_bytes},
+          {"network_queue_frames", video_diagnostics.network_queue_frames},
+          {"network_queue_frames_max", video_diagnostics.network_queue_frames_max},
+          {"socket_outq_bytes", video_diagnostics.socket_outq_bytes},
+          {"socket_outq_bytes_max", video_diagnostics.socket_outq_bytes_max},
+          {"frame_age_at_capture_ms", latency_statistics_json(video_diagnostics.frame_age_at_capture_ms)},
+          {"frame_age_at_encode_ms", latency_statistics_json(video_diagnostics.frame_age_at_encode_ms)},
+          {"frame_age_at_network_ms", latency_statistics_json(video_diagnostics.frame_age_at_network_ms)},
+          {"idr_requests", video_diagnostics.idr_requests},
+          {"idr_emitted", video_diagnostics.idr_emitted},
+          {"idr_reason_client_request", video_diagnostics.idr_reason_client_request},
+          {"idr_reason_recovery", video_diagnostics.idr_reason_recovery},
+          {"idr_reason_periodic", video_diagnostics.idr_reason_periodic},
+          {"idr_reason_reconnect", video_diagnostics.idr_reason_reconnect},
+        };
+        std::ofstream output {path, std::ios::binary | std::ios::trunc};
+        output << report.dump(2) << '\n';
+        if (!output) {
+          BOOST_LOG(warning) << "SESSION_DIAGNOSTICS_SKIPPED reason=write_failed path=" << path;
+          return;
+        }
+        BOOST_LOG(info) << "SESSION_DIAGNOSTICS_WRITTEN path=" << path;
+      } catch (const std::exception &exception) {
+        BOOST_LOG(warning) << "SESSION_DIAGNOSTICS_SKIPPED reason=exception message=" << exception.what();
+      }
+#else
+      (void) stream_config;
+      (void) started_at;
+#endif
+    }
+  }  // namespace
 
   /**
    * @brief Enumerates supported socket options.
@@ -482,6 +628,7 @@ namespace stream {
     std::jthread videoThread;  ///< Video thread.
 
     std::chrono::steady_clock::time_point pingTimeout;  ///< Deadline for receiving the next client ping.
+    std::chrono::steady_clock::time_point diagnostics_started_at {std::chrono::steady_clock::now()};  ///< Start time used by the final aggregate report.
 
     safe::shared_t<broadcast_ctx_t>::ptr_t broadcast_ref;  ///< Shared broadcast context retained while the session is active.
 
@@ -496,7 +643,7 @@ namespace stream {
       std::optional<crypto::cipher::gcm_t> cipher;
       std::uint64_t gcm_iv_counter;
 
-      safe::mail_raw_t::event_t<bool> idr_events;
+      safe::mail_raw_t::event_t<video::idr_reason_e> idr_events;
       safe::mail_raw_t::event_t<std::pair<int64_t, int64_t>> invalidate_ref_frames_events;
 
       std::unique_ptr<platf::deinit_t> qos;
@@ -1139,7 +1286,9 @@ namespace stream {
     server->map(packetTypes[IDX_REQUEST_IDR_FRAME], [&](session_t *session, const std::string_view &payload) {
       BOOST_LOG(debug) << "type [IDX_REQUEST_IDR_FRAME]"sv;
 
-      session->video.idr_events->raise(true);
+      if (video::record_idr_request(video::idr_reason_e::client_request)) {
+        session->video.idr_events->raise(video::idr_reason_e::client_request);
+      }
     });
 
     server->map(packetTypes[IDX_INVALIDATE_REF_FRAMES], [&](session_t *session, const std::string_view &payload) {
@@ -1468,7 +1617,11 @@ namespace stream {
    */
   void videoBroadcastThread(udp::socket &sock) {
     auto shutdown_event = mail::man->event<bool>(mail::broadcast_shutdown);
-    auto packets = mail::man->queue<video::packet_t>(mail::video_packets);
+    auto packets = mail::man->queue<video::packet_t>(
+      mail::video_packets,
+      video::NETWORK_QUEUE_FRAME_LIMIT,
+      safe::queue_overflow_e::block_producer
+    );
     auto video_epoch = std::chrono::steady_clock::now();
 
     // Video traffic is sent on this thread
@@ -1492,6 +1645,7 @@ namespace stream {
     auto ratecontrol_next_frame_start = std::chrono::steady_clock::now();
 
     while (auto packet = packets->pop()) {
+      video::record_network_dequeued(packet->data_size(), packets->size(), packet->frame_timestamp);
       if (shutdown_event->peek()) {
         break;
       }
@@ -1781,6 +1935,12 @@ namespace stream {
         });
 
         session->video.lowseq = lowseq;
+#if defined(__linux__)
+        int output_queue_bytes {};
+        if (::ioctl(sock.native_handle(), SIOCOUTQ, &output_queue_bytes) == 0 && output_queue_bytes >= 0) {
+          video::record_socket_outq(static_cast<std::uint64_t>(output_queue_bytes));
+        }
+#endif
       } catch (const std::exception &e) {
         BOOST_LOG(error) << "Broadcast video failed "sv << e.what();
         std::this_thread::sleep_for(100ms);
@@ -1978,7 +2138,11 @@ namespace stream {
 
     broadcast_shutdown_event->raise(true);
 
-    auto video_packets = mail::man->queue<video::packet_t>(mail::video_packets);
+    auto video_packets = mail::man->queue<video::packet_t>(
+      mail::video_packets,
+      video::NETWORK_QUEUE_FRAME_LIMIT,
+      safe::queue_overflow_e::block_producer
+    );
     auto audio_packets = mail::man->queue<audio::packet_t>(mail::audio_packets);
 
     // Minimize delay stopping video/audio threads
@@ -2191,6 +2355,7 @@ namespace stream {
         // Moonlight's /resume path; only an explicit /cancel or service stop
         // tears them down.
         steamos_virtual_session::mark_streaming_disconnected();
+        write_session_diagnostics(session.config, session.diagnostics_started_at);
         bool revert_display_config {config::video.dd.config_revert_on_disconnect};
         if (proc::proc.running()) {
 #if defined SUNSHINE_TRAY && SUNSHINE_TRAY >= 1
@@ -2279,7 +2444,7 @@ namespace stream {
         false
       };
 
-      session->video.idr_events = mail->event<bool>(mail::idr);
+      session->video.idr_events = mail->event<video::idr_reason_e>(mail::idr);
       session->video.invalidate_ref_frames_events = mail->event<std::pair<int64_t, int64_t>>(mail::invalidate_ref_frames);
       session->video.lowseq = 0;
       session->video.ping_payload = launch_session.av_ping_payload;

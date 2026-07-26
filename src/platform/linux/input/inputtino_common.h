@@ -13,6 +13,8 @@
 #include "src/config.h"
 #include "src/logging.h"
 #include "src/platform/common.h"
+#include "src/platform/linux/input/gamescope_eis_input.h"
+#include "src/platform/linux/input/gamescope_pointer_state.h"
 #include "src/platform/linux/input/inputtino_seat.h"
 #include "src/utility.h"
 
@@ -72,6 +74,7 @@ namespace platf {
           .product_id = 0xDEAD,
           .version = 0x111,
         })),
+        gamescope_eis {},
         gamepads(MAX_GAMEPADS) {
       if (!mouse) {
         BOOST_LOG(warning) << "Unable to create virtual mouse: " << mouse.getErrorMessage();
@@ -86,6 +89,7 @@ namespace platf {
     // All devices are wrapped in Result because it might be that we aren't able to create them (ex: udev permission denied)
     inputtino::Result<inputtino::Mouse> mouse;  ///< Shared inputtino virtual mouse device.
     inputtino::Result<inputtino::Keyboard> keyboard;  ///< inputtino virtual keyboard device.
+    gamescope_eis_input_t gamescope_eis;  ///< Sender isolated to the selected Gamescope session.
 
     /**
      * A list of gamepads that are currently connected.
@@ -125,7 +129,17 @@ namespace platf {
       }
     }
 
+    /**
+     * @brief Release EIS pointer state before destroying per-client devices.
+     */
+    ~client_input_raw_t() override {
+      if (global && gamescope_pointer_state.reset()) {
+        global->gamescope_eis.button(BTN_LEFT, false);
+      }
+    }
+
     input_raw_t *global;  ///< Shared inputtino device set owned by the global input context.
+    gamescope_pointer_state_t gamescope_pointer_state;  ///< Combined touch/pen EIS button state.
 
     // Device state and handles for pen and touch input must be stored in the per-client
     // input context, because each connected client may be sending their own independent

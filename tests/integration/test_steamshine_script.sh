@@ -63,6 +63,7 @@ fi
 # mistaken for a parent-directory traversal by the immutable artifact installer.
 mkdir -p "${test_root}/stage/bin" "${test_root}/home/run"
 install -m 755 /bin/true "${test_root}/stage/bin/steamshine"
+install -m 755 /bin/true "${test_root}/stage/bin/steamshine-input-visualizer"
 printf '{"target_architecture":"x86_64"}\n' >"${test_root}/stage/BUILD_INFO.json"
 printf '{}\n' >"${test_root}/stage/STEAMOS_BASELINE.json"
 tar --zstd -C "${test_root}/stage" -cf "${test_root}/steamshine-steamos-x86_64-test.tar.zst" .
@@ -111,6 +112,7 @@ cp "${test_root}/steamshine-steamos-x86_64-test.tar.zst" "${test_root}/pr-home/.
 FIXTURE_ARTIFACT="${test_root}/steamshine-steamos-x86_64-test.tar.zst" HOME="${test_root}/pr-home" XDG_RUNTIME_DIR="${test_root}/pr-home/run" PATH="${test_root}/mock-bin:${PATH}" \
   "${root_dir}/steamshine.sh" install --channel pr --pr 6 --no-service --non-interactive --yes
 test -x "${test_root}/pr-home/.local/bin/steamshine"
+test -x "${test_root}/pr-home/.local/bin/steamshine-input-visualizer"
 test -f "${test_root}/pr-home/.cache/steamshine/artifacts/800/steamshine-steamos-x86_64-deadbeef/steamshine-steamos-x86_64-deadbeef.tar.zst"
 
 # The service passes Sunshine's configuration file as its positional argument.
@@ -119,6 +121,8 @@ test -f "${test_root}/pr-home/.cache/steamshine/artifacts/800/steamshine-steamos
 mkdir -p "${test_root}/mock-bin"
 cat >"${test_root}/mock-bin/systemctl" <<'EOF'
 #!/usr/bin/env bash
+[[ -n "${SYSTEMCTL_LOG:-}" ]] && printf '%q ' "$@" >>"${SYSTEMCTL_LOG}"
+[[ -n "${SYSTEMCTL_LOG:-}" ]] && printf '\n' >>"${SYSTEMCTL_LOG}"
 exit 0
 EOF
 chmod 755 "${test_root}/mock-bin/systemctl"
@@ -126,11 +130,25 @@ HOME="${test_root}/home" XDG_RUNTIME_DIR="${test_root}/home/run" PATH="${test_ro
   "${root_dir}/steamshine.sh" install --artifact "${test_root}/steamshine-steamos-x86_64-test.tar.zst" --non-interactive --yes
 service_unit="${test_root}/home/.config/systemd/user/steamshine.service"
 grep -Fq "ExecStart=${test_root}/home/.local/bin/steamshine ${test_root}/home/.config/steamshine/sunshine.conf" "${service_unit}"
+grep -Fq 'PassEnvironment=XDG_RUNTIME_DIR WAYLAND_DISPLAY DISPLAY DBUS_SESSION_BUS_ADDRESS PIPEWIRE_REMOTE' "${service_unit}"
+grep -Fq 'Environment=STEAMSHINE_LAUNCH_MODE=systemd_user_service' "${service_unit}"
 if grep -Fq -- '--config' "${service_unit}"; then
   echo 'The generated service must not pass an unsupported --config option.' >&2
   exit 1
 fi
 test -x "${test_root}/home/.local/bin/steamshine"
+test -x "${test_root}/home/.local/bin/steamshine-input-visualizer"
+grep -Fq 'steamos_virtual_desktop_command = plasmawindowed org.kde.plasma.folder' "${test_root}/home/.config/steamshine/sunshine.conf"
+# A graphical launcher imports only non-empty desktop values before service
+# activation, preserving an existing manager environment when a value is absent.
+systemctl_log="${test_root}/systemctl.log"
+env -u DISPLAY -u DBUS_SESSION_BUS_ADDRESS -u PIPEWIRE_REMOTE HOME="${test_root}/home" XDG_RUNTIME_DIR="${test_root}/home/run" WAYLAND_DISPLAY="wayland-0" PATH="${test_root}/mock-bin:${PATH}" SYSTEMCTL_LOG="${systemctl_log}" \
+  "${root_dir}/steamshine.sh" start --non-interactive --yes
+grep -Fq -- '--user import-environment XDG_RUNTIME_DIR WAYLAND_DISPLAY' "${systemctl_log}"
+if grep -Eq '(^|[[:space:]])DISPLAY([[:space:]]|$)' "${systemctl_log}"; then
+  echo 'The launcher must not import an empty desktop variable.' >&2
+  exit 1
+fi
 HOME="${test_root}/home" XDG_RUNTIME_DIR="${test_root}/home/run" \
   "${root_dir}/steamshine.sh" install --artifact "${test_root}/steamshine-steamos-x86_64-test.tar.zst" --no-service --non-interactive --yes
 
@@ -147,6 +165,7 @@ fi
 # the version store even when the archive otherwise has the required layout.
 mkdir -p "${test_root}/linked-stage/bin"
 install -m 755 /bin/true "${test_root}/linked-stage/bin/steamshine"
+install -m 755 /bin/true "${test_root}/linked-stage/bin/steamshine-input-visualizer"
 printf '{"target_architecture":"x86_64"}\n' >"${test_root}/linked-stage/BUILD_INFO.json"
 printf '{}\n' >"${test_root}/linked-stage/STEAMOS_BASELINE.json"
 ln -s /etc/passwd "${test_root}/linked-stage/unsafe-link"
@@ -161,6 +180,7 @@ fi
 # Metadata architecture is checked after extraction before the version switch.
 mkdir -p "${test_root}/wrong-arch-stage/bin"
 install -m 755 /bin/true "${test_root}/wrong-arch-stage/bin/steamshine"
+install -m 755 /bin/true "${test_root}/wrong-arch-stage/bin/steamshine-input-visualizer"
 printf '{"target_architecture":"aarch64"}\n' >"${test_root}/wrong-arch-stage/BUILD_INFO.json"
 printf '{}\n' >"${test_root}/wrong-arch-stage/STEAMOS_BASELINE.json"
 tar --zstd -C "${test_root}/wrong-arch-stage" -cf "${test_root}/steamshine-steamos-aarch64-test.tar.zst" .
@@ -191,6 +211,7 @@ printf 'keep\n' >"${test_root}/home/.local/state/steamshine/diagnostics.log"
 HOME="${test_root}/home" XDG_RUNTIME_DIR="${test_root}/home/run" \
   "${root_dir}/steamshine.sh" uninstall --build-dir "${test_root}/cmake-build-steamos" --no-service --non-interactive --yes
 test ! -e "${test_root}/home/.local/bin/steamshine"
+test ! -e "${test_root}/home/.local/bin/steamshine-input-visualizer"
 test ! -e "${test_root}/home/.local/share/steamshine/current"
 test ! -d "${test_root}/home/.cache/steamshine"
 test -f "${test_root}/home/.config/steamshine/sunshine.conf"

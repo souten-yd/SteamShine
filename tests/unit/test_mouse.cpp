@@ -6,6 +6,38 @@
 
 #include <src/input.h>
 
+#if defined(__linux__) || defined(__FreeBSD__)
+  #include <linux/input-event-codes.h>
+  #include <src/platform/linux/input/gamescope_pointer_state.h>
+  #include <src/platform/linux/input/input_key_mapping.h>
+#endif
+
+#if defined(__linux__) || defined(__FreeBSD__)
+TEST(GamescopeInputMappingTest, ConvertsSupportedVirtualKeysToLinuxCodes) {
+  EXPECT_EQ(platf::keyboard::linux_keycode(0x41), KEY_A);
+  EXPECT_EQ(platf::keyboard::linux_keycode(0x10), KEY_LEFTSHIFT);
+  EXPECT_EQ(platf::keyboard::linux_keycode(0x12), KEY_LEFTALT);
+  EXPECT_EQ(platf::keyboard::linux_keycode(0x6C), KEY_KPCOMMA);
+  EXPECT_FALSE(platf::keyboard::linux_keycode(0xFFFF).has_value());
+}
+
+/**
+ * @brief Verify touch and pen share one releasable Gamescope pointer button.
+ */
+TEST(GamescopeInputMappingTest, ReleasesCombinedPointerStateOnDisconnect) {
+  platf::gamescope_pointer_state_t state;
+
+  ASSERT_EQ(state.update(platf::gamescope_pointer_source_e::touch, true), true);
+  EXPECT_FALSE(state.update(platf::gamescope_pointer_source_e::pen, true).has_value());
+  EXPECT_FALSE(state.update(platf::gamescope_pointer_source_e::touch, false).has_value());
+  ASSERT_EQ(state.update(platf::gamescope_pointer_source_e::pen, false), false);
+
+  ASSERT_EQ(state.update(platf::gamescope_pointer_source_e::touch, true), true);
+  EXPECT_TRUE(state.reset());
+  EXPECT_FALSE(state.reset());
+}
+#endif
+
 struct MouseHIDTest: PlatformTestSuite, testing::WithParamInterface<util::point_t> {
   void SetUp() override {
     BaseTest::SetUp();

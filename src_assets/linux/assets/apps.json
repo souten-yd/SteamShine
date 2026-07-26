@@ -8,6 +8,11 @@
       "image-path": "desktop.png"
     },
     {
+      "name": "Input Latency Visualizer",
+      "cmd": "steamshine-input-visualizer",
+      "image-path": "desktop.png"
+    },
+    {
       "name": "Low Res Desktop",
       "image-path": "desktop.png",
       "prep-cmd": [

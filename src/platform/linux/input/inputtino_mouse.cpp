@@ -23,6 +23,9 @@ namespace platf::mouse {
    * @brief Apply a relative pointer movement to the virtual mouse.
    */
   void move(input_raw_t *raw, int deltaX, int deltaY) {
+    if (raw->gamescope_eis.move(deltaX, deltaY) != gamescope_input_result_e::desktop) {
+      return;
+    }
     if (raw->mouse) {
       (*raw->mouse).move(deltaX, deltaY);
     }
@@ -32,6 +35,9 @@ namespace platf::mouse {
    * @brief Move abs using the backend coordinate system.
    */
   void move_abs(input_raw_t *raw, const touch_port_t &touch_port, float x, float y) {
+    if (raw->gamescope_eis.move_absolute(x, y) != gamescope_input_result_e::desktop) {
+      return;
+    }
     if (raw->mouse) {
       (*raw->mouse).move_abs(x, y, touch_port.width, touch_port.height);
     }
@@ -41,6 +47,30 @@ namespace platf::mouse {
    * @brief Press or release a virtual mouse button.
    */
   void button(input_raw_t *raw, int button, bool release) {
+    std::uint32_t linux_button {};
+    switch (button) {
+      case BUTTON_LEFT:
+        linux_button = BTN_LEFT;
+        break;
+      case BUTTON_MIDDLE:
+        linux_button = BTN_MIDDLE;
+        break;
+      case BUTTON_RIGHT:
+        linux_button = BTN_RIGHT;
+        break;
+      case BUTTON_X1:
+        linux_button = BTN_SIDE;
+        break;
+      case BUTTON_X2:
+        linux_button = BTN_EXTRA;
+        break;
+      default:
+        BOOST_LOG(warning) << "Unknown mouse button: " << button;
+        return;
+    }
+    if (raw->gamescope_eis.button(linux_button, !release) != gamescope_input_result_e::desktop) {
+      return;
+    }
     if (raw->mouse) {
       inputtino::Mouse::MOUSE_BUTTON btn_type;
       switch (button) {
@@ -75,6 +105,9 @@ namespace platf::mouse {
    * @brief Apply a vertical scroll event to the virtual mouse.
    */
   void scroll(input_raw_t *raw, int high_res_distance) {
+    if (raw->gamescope_eis.scroll(0, high_res_distance) != gamescope_input_result_e::desktop) {
+      return;
+    }
     if (raw->mouse) {
       (*raw->mouse).vertical_scroll(high_res_distance);
     }
@@ -84,6 +117,9 @@ namespace platf::mouse {
    * @brief Apply a horizontal scroll event to the virtual mouse.
    */
   void hscroll(input_raw_t *raw, int high_res_distance) {
+    if (raw->gamescope_eis.scroll(high_res_distance, 0) != gamescope_input_result_e::desktop) {
+      return;
+    }
     if (raw->mouse) {
       (*raw->mouse).horizontal_scroll(high_res_distance);
     }
