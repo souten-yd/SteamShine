@@ -461,6 +461,10 @@ namespace gamescope_source {
 
   std::vector<gamescope_source_t> discover_gamescope_sources(const std::string &runtime_directory, const std::string_view remote_name, const std::chrono::milliseconds timeout, std::string &error) {
 #if defined(SUNSHINE_BUILD_PIPEWIRE)
+    // PipeWire registry discovery owns a separate client connection and can
+    // run before any capture backend has initialized the process-wide library.
+    // pw_init() is idempotent, so initialize it for this independent path.
+    pw_init(nullptr, nullptr);
     auto connection {pipewire_connection_t::connect(runtime_directory, remote_name, error)};
     if (!connection) {
       return {};
