@@ -209,6 +209,10 @@ TEST(WebServicesTest, StatusSnapshotIncludesPipeWireDiagnostics) {
   EXPECT_TRUE(snapshot.contains("virtual_display_source_description"));
   EXPECT_TRUE(snapshot.contains("virtual_display_source_executable"));
   EXPECT_TRUE(snapshot.contains("steam_location"));
+  EXPECT_TRUE(snapshot.contains("presentation"));
+  EXPECT_TRUE(snapshot.contains("local_presenter_active"));
+  EXPECT_TRUE(snapshot.contains("local_presented_frames"));
+  EXPECT_TRUE(snapshot.contains("local_dropped_frames"));
   EXPECT_TRUE(snapshot.contains("pipewire_remote"));
   EXPECT_TRUE(snapshot.contains("pipewire_node_id"));
   EXPECT_TRUE(snapshot.contains("pipewire_object_serial"));

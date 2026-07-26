@@ -45,6 +45,10 @@ namespace steamos_virtual_session {
     std::string source_executable;  ///< Verified Gamescope executable path.
     uint64_t source_process_start_time {0};  ///< Verified Gamescope `/proc` start time.
     std::string steam_location;  ///< Steam singleton location relative to the selected Gamescope.
+    presentation_e presentation {presentation_e::remote_only};  ///< Desired remote/local presentation paths.
+    bool local_presenter_active {false};  ///< Whether a local presenter has attached successfully.
+    uint64_t local_presented_frames {0};  ///< Frames shown by the local presenter.
+    uint64_t local_dropped_frames {0};  ///< Latest-frame-wins drops by the local presenter.
     std::string runtime_directory;  ///< Owned runtime directory, when active.
     std::string socket_path;  ///< Private Gamescope Wayland socket, when ready.
     std::string pci_bdf;  ///< Selected AMD PCI BDF, when available.

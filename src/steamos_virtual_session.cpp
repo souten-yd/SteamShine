@@ -7,6 +7,7 @@
 #include "config.h"
 #include "logging.h"
 #include "platform/linux/gamescope_source.h"
+#include "platform/linux/host_desktop_endpoint.h"
 #include "platform/linux/steam_session.h"
 #include "rtsp.h"
 
@@ -54,6 +55,10 @@ namespace steamos_virtual_session {
       std::string source_executable;  ///< Verified Gamescope executable path.
       uint64_t source_process_start_time {0};  ///< Verified Gamescope process start time.
       std::string steam_location {"unknown"};  ///< Steam singleton location relative to the selected Gamescope.
+      presentation_e presentation {presentation_e::remote_only};  ///< Desired remote/local presentation paths.
+      bool local_presenter_active {false};  ///< Whether a local presenter has attached successfully.
+      std::atomic_uint64_t local_presented_frames {0};  ///< Frames displayed locally.
+      std::atomic_uint64_t local_dropped_frames {0};  ///< Latest-frame-wins drops locally.
       std::string pipewire_runtime;  ///< Host PipeWire runtime retained for owned children.
       std::string pipewire_remote;  ///< Host PipeWire remote retained for owned children.
       std::optional<uint32_t> pipewire_node_id;  ///< Verified current-core Gamescope PipeWire node ID.
@@ -242,6 +247,10 @@ namespace steamos_virtual_session {
       manager.source_executable.clear();
       manager.source_process_start_time = 0;
       manager.steam_location = "unknown";
+      manager.presentation = presentation_e::remote_only;
+      manager.local_presenter_active = false;
+      manager.local_presented_frames.store(0, std::memory_order_relaxed);
+      manager.local_dropped_frames.store(0, std::memory_order_relaxed);
       manager.pipewire_runtime.clear();
       manager.pipewire_remote.clear();
       manager.pipewire_node_id.reset();
@@ -550,6 +559,41 @@ namespace steamos_virtual_session {
       }
       const auto *runtime {std::getenv("XDG_RUNTIME_DIR")};
       return runtime ? std::filesystem::path {runtime} / "steamshine" : std::filesystem::path {};
+    }
+
+    /**
+     * @brief Check whether a physical DRM connector is currently connected.
+     *
+     * @return True when a non-writeback DRM connector reports `connected`.
+     */
+    bool host_physical_output_connected() {
+#if defined(__linux__)
+      std::error_code error;
+      for (const auto &entry : std::filesystem::directory_iterator {"/sys/class/drm", error}) {
+        const auto name {entry.path().filename().string()};
+        if (error || name.find('-') == std::string::npos || name.find("Writeback") != std::string::npos) {
+          continue;
+        }
+        std::ifstream status {entry.path() / "status"};
+        std::string value;
+        std::getline(status, value);
+        if (value == "connected") {
+          return true;
+        }
+      }
+#endif
+      return false;
+    }
+
+    /**
+     * @brief Decide whether the selected session may use a local mirror.
+     *
+     * @param origin Ownership origin selected for the session.
+     * @return Safe desired presentation paths.
+     */
+    presentation_e desired_presentation(const session_origin_e origin) {
+      const auto endpoint {host_desktop_endpoint::current()};
+      return decide_presentation(config::steamos_virtual_display.local_presentation, origin, !endpoint.xdg_runtime_directory.empty() && !endpoint.wayland_display.empty(), host_physical_output_connected());
     }
 
     /**
@@ -872,6 +916,7 @@ namespace steamos_virtual_session {
         manager.source_description = selected->node_description.empty() ? selected->application_name : selected->node_description;
         manager.source_executable = selected->executable;
         manager.source_process_start_time = selected->producer_start_time;
+        manager.presentation = desired_presentation(manager.origin);
         manager.steam_location = std::string {steam_session::to_string(steam_session::classify_current_user_instance({
           .gamescope_pid = selected->producer_pid,
           .cgroup = steam_session::cgroup_for_process(selected->producer_pid),
@@ -899,6 +944,7 @@ namespace steamos_virtual_session {
     manager.origin = session_origin_e::owned_private;
     manager.process_owned = true;
     manager.runtime_owned = true;
+    manager.presentation = desired_presentation(manager.origin);
     manager.source_description = "SteamShine-owned private Gamescope";
     manager.source_executable = config::steamos_virtual_display.gamescope_path;
     manager.source_process_start_time = 0;
@@ -1092,6 +1138,10 @@ namespace steamos_virtual_session {
     snapshot.source_executable = manager.source_executable;
     snapshot.source_process_start_time = manager.source_process_start_time;
     snapshot.steam_location = manager.steam_location;
+    snapshot.presentation = manager.presentation;
+    snapshot.local_presenter_active = manager.local_presenter_active;
+    snapshot.local_presented_frames = manager.local_presented_frames.load(std::memory_order_relaxed);
+    snapshot.local_dropped_frames = manager.local_dropped_frames.load(std::memory_order_relaxed);
     snapshot.runtime_directory = manager.runtime_directory.string();
     snapshot.pci_bdf = manager.pci_bdf;
     snapshot.render_node = manager.render_node;
