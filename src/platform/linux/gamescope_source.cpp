@@ -228,6 +228,26 @@ namespace gamescope_source {
     }
 
     /**
+     * @brief Parse the first valid integer from an ordered PipeWire property list.
+     *
+     * PipeWire commonly exposes both a human-readable user name and a numeric
+     * security UID. A present but nonnumeric preferred property must therefore
+     * not prevent use of a later numeric identity property.
+     *
+     * @param properties PipeWire global properties.
+     * @param keys Keys to inspect in priority order.
+     * @return First valid integer property, or std::nullopt when none is valid.
+     */
+    std::optional<unsigned long long> integer_property(const spa_dict *properties, const std::initializer_list<const char *> keys) {
+      for (const auto *key : keys) {
+        if (const auto parsed {parse_property_integer(spa_dict_lookup(properties, key))}) {
+          return parsed;
+        }
+      }
+      return std::nullopt;
+    }
+
+    /**
      * @brief Check strict Game Mode evidence without using a process name alone.
      *
      * @param identity Verified Gamescope process identity.
@@ -305,7 +325,7 @@ namespace gamescope_source {
         while (std::chrono::steady_clock::now() < deadline) {
           {
             std::scoped_lock lock {mutex_};
-            if (!sources_.empty() && !clients_.empty()) {
+            if (has_joined_gamescope_source()) {
               break;
             }
           }
@@ -338,6 +358,25 @@ namespace gamescope_source {
 
     private:
       /**
+       * @brief Check whether registry data contains a joined Gamescope source.
+       *
+       * The PipeWire registry may announce unrelated clients and sources before
+       * Gamescope publishes its capture node. Waiting for a joined Gamescope
+       * pair prevents those globals from ending discovery prematurely.
+       *
+       * @return True when a Video/Source node is joined to a live Gamescope client.
+       */
+      bool has_joined_gamescope_source() const {
+        return std::any_of(sources_.begin(), sources_.end(), [this](const gamescope_source_t &source) {
+          const auto client {std::find_if(clients_.begin(), clients_.end(), [&source](const pipewire_client_t &candidate) {
+            return candidate.id == source.client_id && candidate.uid == static_cast<int>(::getuid());
+          })};
+          const auto identity {client == clients_.end() ? std::nullopt : read_process_identity(client->pid)};
+          return identity && identity->uid == client->uid && identity->executable.filename() == "gamescope";
+        });
+      }
+
+      /**
        * @brief Handle one PipeWire registry global announcement.
        *
        * @param data Registry receiver.
@@ -353,8 +392,8 @@ namespace gamescope_source {
         }
         auto *self {static_cast<pipewire_registry_t *>(data)};
         if (std::string_view {type} == PW_TYPE_INTERFACE_Client) {
-          const auto pid {parse_property_integer(property(properties, {"application.process.id", "pipewire.sec.pid", "process.id"}))};
-          const auto uid {parse_property_integer(property(properties, {"application.process.user", "pipewire.sec.uid", "process.user"}))};
+          const auto pid {integer_property(properties, {"application.process.id", "pipewire.sec.pid", "process.id"})};
+          const auto uid {integer_property(properties, {"application.process.user", "pipewire.sec.uid", "process.user"})};
           if (!pid || !uid || *pid > INT_MAX || *uid > INT_MAX) {
             return;
           }
