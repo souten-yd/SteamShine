@@ -82,12 +82,15 @@ namespace {
   TEST(SteamOSVirtualSessionCore, UsesLatestFrameWinsPresentationQueue) {
     gamescope_presenter::latest_frame_queue_t queue;
     uint64_t released_sequence {};
+    const auto dma_buf {std::make_shared<gamescope_presenter::dma_buf_frame_t>()};
+    dma_buf->width = 1280;
+    dma_buf->height = 720;
 
     EXPECT_FALSE(queue.publish({.sequence = 1, .release = [&released_sequence] {
                                   released_sequence = 1;
                                 }})
                    .replaced_pending_frame);
-    EXPECT_TRUE(queue.publish({.sequence = 2, .release = [&released_sequence] {
+    EXPECT_TRUE(queue.publish({.sequence = 2, .dma_buf = dma_buf, .release = [&released_sequence] {
                                  released_sequence = 2;
                                }})
                   .replaced_pending_frame);
@@ -97,6 +100,9 @@ namespace {
     const auto frame {queue.take_latest()};
     ASSERT_TRUE(frame.has_value());
     EXPECT_EQ(frame->sequence, 2U);
+    ASSERT_EQ(frame->dma_buf, dma_buf);
+    EXPECT_EQ(frame->dma_buf->width, 1280U);
+    EXPECT_EQ(frame->dma_buf->height, 720U);
     EXPECT_EQ(queue.pending_count(), 0U);
     frame->release();
     EXPECT_EQ(released_sequence, 2U);

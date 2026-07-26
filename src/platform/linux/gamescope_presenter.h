@@ -96,6 +96,7 @@ namespace gamescope_presenter {
    */
   struct frame_t {
     uint64_t sequence {0};  ///< Monotonically increasing source-frame sequence.
+    std::shared_ptr<dma_buf_frame_t> dma_buf;  ///< Borrowed DMA-BUF held until the renderer returns its source buffer.
     std::function<void()> release;  ///< Returns the source buffer when dropped or unused.
   };
 
