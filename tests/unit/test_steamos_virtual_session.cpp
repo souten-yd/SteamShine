@@ -330,6 +330,20 @@ TEST_F(SteamOSVirtualSessionTest, SeparatesPrivateWaylandAndHostPipeWireRuntimes
 }
 
 /**
+ * @brief Verify an unset optional PipeWire runtime retains the original login runtime.
+ */
+TEST_F(SteamOSVirtualSessionTest, UnsetPipeWireRuntimeUsesOriginalXdgRuntime) {
+  config::steamos_virtual_display.pipewire_runtime.clear();
+  rtsp_stream::launch_session_t launch {};
+  std::string error;
+
+  ASSERT_TRUE(steamos_virtual_session::prepare(launch, error)) << error;
+  const auto snapshot {steamos_virtual_session::status_snapshot()};
+  EXPECT_EQ(snapshot.pipewire_runtime, (root / "runtime").string());
+  EXPECT_EQ(snapshot.pipewire_remote, "pipewire-0");
+}
+
+/**
  * @brief Verify an external host PipeWire runtime is rejected before Gamescope starts.
  */
 TEST_F(SteamOSVirtualSessionTest, RejectsHostPipeWireRuntimeOutsideLoginRuntime) {

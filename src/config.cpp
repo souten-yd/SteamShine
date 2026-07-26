@@ -1712,7 +1712,12 @@ namespace config {
     string_f(vars, "steamos_game_gpu", steamos_virtual_display.game_gpu);
     string_f(vars, "steamos_capture_gpu", steamos_virtual_display.capture_gpu);
     string_f(vars, "steamos_encoder_gpu", steamos_virtual_display.encoder_gpu);
-    path_f(vars, "steamos_pipewire_runtime", steamos_virtual_display.pipewire_runtime);
+    // This is an optional runtime endpoint rather than a file managed by
+    // SteamShine.  In particular, an unset value must remain empty so that
+    // the session manager retains the original login XDG runtime.  path_f()
+    // normalizes an empty path below the application data directory, which
+    // would incorrectly select that directory as the host PipeWire runtime.
+    string_f(vars, "steamos_pipewire_runtime", steamos_virtual_display.pipewire_runtime);
     string_f(vars, "steamos_pipewire_remote", steamos_virtual_display.pipewire_remote);
     int_between_f(vars, "steamos_pipewire_node_timeout_ms", steamos_virtual_display.pipewire_node_timeout_milliseconds, {1000, 60000});
     int_between_f(vars, "steamos_startup_timeout_seconds", steamos_virtual_display.startup_timeout_seconds, {1, 60});
