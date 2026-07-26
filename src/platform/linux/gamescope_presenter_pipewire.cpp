@@ -48,6 +48,7 @@ namespace gamescope_presenter {
      * @brief Shared PipeWire state retained by frames until their release.
      */
     struct connection_t {
+      std::mutex lifecycle_mutex;  ///< Prevents buffer returns from racing PipeWire-loop destruction.
       std::mutex mutex;  ///< Serializes stream destruction and buffer returns.
       struct pw_thread_loop *loop {nullptr};  ///< Dedicated PipeWire thread loop.
       struct pw_context *context {nullptr};  ///< PipeWire context for this consumer.
@@ -70,7 +71,8 @@ namespace gamescope_presenter {
        * @param buffer PipeWire buffer acquired by this consumer.
        */
       void release_buffer(struct pw_buffer *buffer) {
-        if (!buffer || !loop) {
+        std::scoped_lock lifecycle_lock {lifecycle_mutex};
+        if (!buffer || !loop || !active.load(std::memory_order_acquire)) {
           return;
         }
         const bool lock_needed {!pw_thread_loop_in_thread(loop)};
@@ -263,6 +265,7 @@ namespace gamescope_presenter {
     if (!connection || !connection->loop) {
       return;
     }
+    std::scoped_lock lifecycle_lock {connection->lifecycle_mutex};
     pw_thread_loop_lock(connection->loop);
     connection->active.store(false, std::memory_order_release);
     {
