@@ -1721,7 +1721,7 @@ namespace confighttp {
    * @brief Save the selected SteamOS virtual-display policy for the next restart.
    *
    * @param response HTTPS response to populate.
-   * @param request CSRF-protected HTTPS request carrying enabled and mode fields.
+   * @param request CSRF-protected HTTPS request carrying virtual-display policy fields.
    */
   void steamshine_save_virtual_display_config(const resp_https_t &response, const req_https_t &request) {
     if (require_steamshine_mutation(response, request).empty()) {
@@ -1731,7 +1731,7 @@ namespace confighttp {
     if (!read_steamshine_json(response, request, input)) {
       return;
     }
-    const auto result = configuration_service.save_virtual_display(input.value("enabled", false), input.value("mode", ""));
+    const auto result = configuration_service.save_virtual_display(input.value("enabled", false), input.value("mode", ""), input.value("session_source", "auto"), input.value("keep_session_alive", true));
     send_steamshine_response(response, {{"status", result.success}, {"code", result.code}, {"message", result.message}});
   }
 

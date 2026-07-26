@@ -17,6 +17,22 @@ const config = ref(props.config)
       <div class="form-text">Create a SteamShine-managed display when the selected policy requires it.</div>
     </div>
     <div class="mb-3">
+      <label class="form-label" for="steamos_session_source">Gamescope Session Source</label>
+      <select id="steamos_session_source" v-model="config.steamos_session_source" class="form-select">
+        <option value="auto">Auto: verified Game Mode first, then private</option>
+        <option value="existing_gamescope">Existing Game Mode only</option>
+        <option value="owned_private">SteamShine private session only</option>
+      </select>
+      <div class="form-text">Existing Game Mode is accepted only after process, PipeWire node, and GPU checks succeed.</div>
+    </div>
+    <div class="mb-3">
+      <div class="form-check">
+        <input id="steamos_keep_session_alive" v-model="config.steamos_keep_session_alive" class="form-check-input" type="checkbox" true-value="enabled" false-value="disabled" />
+        <label class="form-check-label" for="steamos_keep_session_alive">Keep a SteamShine-owned session after disconnect</label>
+      </div>
+      <div class="form-text">Disconnect preserves the owned session for reconnect. Explicit stop destroys only SteamShine-owned resources.</div>
+    </div>
+    <div class="mb-3">
       <label class="form-label" for="steamos_virtual_display_mode">Virtual Display Mode</label>
       <select id="steamos_virtual_display_mode" class="form-select" v-model="config.steamos_virtual_display_mode">
         <option value="off">Off</option>

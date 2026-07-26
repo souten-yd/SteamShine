@@ -208,6 +208,8 @@ namespace web {
     auto persisted = config::parse_config(file_handler::read_file(config::sunshine.config_file.c_str()));
     const auto enabled = persisted.contains("steamos_virtual_display_enabled") ? persisted.at("steamos_virtual_display_enabled") : (config::steamos_virtual_display.enabled ? "enabled" : "disabled");
     const auto mode = persisted.contains("steamos_virtual_display_mode") ? persisted.at("steamos_virtual_display_mode") : std::string {steamos_virtual_session::to_string(config::steamos_virtual_display.mode)};
+    const auto session_source = persisted.contains("steamos_session_source") ? persisted.at("steamos_session_source") : std::string {steamos_virtual_session::to_string(config::steamos_virtual_display.session_source)};
+    const auto keep_session_alive = persisted.contains("steamos_keep_session_alive") ? persisted.at("steamos_keep_session_alive") : (config::steamos_virtual_display.keep_session_alive ? "enabled" : "disabled");
     return {
       {"locale", config::sunshine.locale},
       {"port", config::sunshine.port},
@@ -215,18 +217,25 @@ namespace web {
       {"system_tray", config::sunshine.system_tray},
       {"steamos_virtual_display_enabled", enabled},
       {"steamos_virtual_display_mode", mode},
+      {"steamos_session_source", session_source},
+      {"steamos_keep_session_alive", keep_session_alive},
     };
   }
 
-  service_result_t ConfigurationService::save_virtual_display(const bool enabled, const std::string_view mode) const {
+  service_result_t ConfigurationService::save_virtual_display(const bool enabled, const std::string_view mode, const std::string_view session_source, const bool keep_session_alive) const {
     if (!steamos_virtual_session::parse_virtual_display_mode(mode).has_value()) {
       return {false, "invalid_virtual_display_mode", "Virtual display mode must be off, auto, or force."};
+    }
+    if (!steamos_virtual_session::parse_session_source_policy(session_source).has_value()) {
+      return {false, "invalid_steamos_session_source", "Gamescope source must be auto, existing_gamescope, or owned_private."};
     }
 
     try {
       auto persisted = config::parse_config(file_handler::read_file(config::sunshine.config_file.c_str()));
       persisted["steamos_virtual_display_enabled"] = enabled ? "enabled" : "disabled";
       persisted["steamos_virtual_display_mode"] = std::string {mode};
+      persisted["steamos_session_source"] = std::string {session_source};
+      persisted["steamos_keep_session_alive"] = keep_session_alive ? "enabled" : "disabled";
 
       std::vector<std::pair<std::string, std::string>> ordered {persisted.begin(), persisted.end()};
       std::sort(ordered.begin(), ordered.end(), [](const auto &left, const auto &right) {

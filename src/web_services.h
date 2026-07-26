@@ -282,9 +282,11 @@ namespace web {
      *
      * @param enabled Whether SteamShine virtual-display management is enabled.
      * @param mode Requested canonical mode: off, auto, or force.
+     * @param session_source Requested Gamescope source: auto, existing_gamescope, or owned_private.
+     * @param keep_session_alive Whether an owned session remains available after disconnect.
      * @return Non-secret result describing validation or persistence outcome.
      */
-    service_result_t save_virtual_display(bool enabled, std::string_view mode) const;
+    service_result_t save_virtual_display(bool enabled, std::string_view mode, std::string_view session_source, bool keep_session_alive) const;
   };
 
   /**

@@ -156,20 +156,28 @@ TEST(WebServicesTest, PersistsVirtualDisplayPolicyForRestart) {
   config::sunshine.config_file = temporary_config.string();
 
   web::ConfigurationService configuration;
-  const auto invalid = configuration.save_virtual_display(true, "FORCE");
+  const auto invalid = configuration.save_virtual_display(true, "FORCE", "auto", true);
   EXPECT_FALSE(invalid.success);
   EXPECT_EQ(invalid.code, "invalid_virtual_display_mode");
 
-  const auto saved = configuration.save_virtual_display(true, "force");
+  const auto invalid_source = configuration.save_virtual_display(true, "force", "resident", true);
+  EXPECT_FALSE(invalid_source.success);
+  EXPECT_EQ(invalid_source.code, "invalid_steamos_session_source");
+
+  const auto saved = configuration.save_virtual_display(true, "force", "owned_private", false);
   EXPECT_TRUE(saved.success);
   EXPECT_EQ(saved.code, "restart_required");
   const auto persisted = file_handler::read_file(temporary_config.string().c_str());
   EXPECT_NE(persisted.find("custom_option = preserved"), std::string::npos);
   EXPECT_NE(persisted.find("steamos_virtual_display_enabled = enabled"), std::string::npos);
   EXPECT_NE(persisted.find("steamos_virtual_display_mode = force"), std::string::npos);
+  EXPECT_NE(persisted.find("steamos_session_source = owned_private"), std::string::npos);
+  EXPECT_NE(persisted.find("steamos_keep_session_alive = disabled"), std::string::npos);
   const auto snapshot = configuration.snapshot();
   EXPECT_EQ(snapshot.at("steamos_virtual_display_enabled"), "enabled");
   EXPECT_EQ(snapshot.at("steamos_virtual_display_mode"), "force");
+  EXPECT_EQ(snapshot.at("steamos_session_source"), "owned_private");
+  EXPECT_EQ(snapshot.at("steamos_keep_session_alive"), "disabled");
 
   config::sunshine.config_file = original_config_file;
   fs::remove(temporary_config);
