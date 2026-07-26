@@ -5,12 +5,25 @@
 #include "gamescope_source.h"
 
 #include <algorithm>
+#include <cerrno>
+#include <climits>
+#include <cstring>
 #include <exception>
 #include <fstream>
+#include <mutex>
 #include <sstream>
+#include <thread>
+#include <utility>
 
 #if defined(__linux__)
+  #include <sys/socket.h>
   #include <sys/stat.h>
+  #include <sys/un.h>
+  #include <unistd.h>
+#endif
+
+#if defined(SUNSHINE_BUILD_PIPEWIRE)
+  #include <pipewire/pipewire.h>
 #endif
 
 namespace gamescope_source {
@@ -83,6 +96,323 @@ namespace gamescope_source {
       }
       return *matches.front();
     }
+
+#if defined(SUNSHINE_BUILD_PIPEWIRE)
+    /**
+     * @brief Own one connected PipeWire UNIX socket until the core consumes it.
+     */
+    class pipewire_connection_t {
+    public:
+      /**
+       * @brief Connect to a user-owned host PipeWire socket.
+       *
+       * @param runtime_directory Host runtime directory.
+       * @param remote_name Socket name below the runtime directory.
+       * @param error Receives a stable failure reason.
+       * @return Socket owner when validation and connect succeed.
+       */
+      static std::optional<pipewire_connection_t> connect(const std::string &runtime_directory, const std::string_view remote_name, std::string &error) {
+        if (runtime_directory.empty() || remote_name.empty() || remote_name.find('/') != std::string_view::npos) {
+          error = "gamescope_source_pipewire_socket_invalid";
+          return std::nullopt;
+        }
+        const std::filesystem::path socket_path {std::filesystem::path {runtime_directory} / remote_name};
+        struct stat socket_stat {};
+        if (::stat(socket_path.c_str(), &socket_stat) != 0 || !S_ISSOCK(socket_stat.st_mode) || socket_stat.st_uid != ::getuid()) {
+          error = "gamescope_source_pipewire_socket_missing";
+          return std::nullopt;
+        }
+        if (socket_path.string().size() >= sizeof(sockaddr_un::sun_path)) {
+          error = "gamescope_source_pipewire_socket_path_too_long";
+          return std::nullopt;
+        }
+        const int socket {::socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0)};
+        if (socket < 0) {
+          error = "gamescope_source_pipewire_socket_open_failed";
+          return std::nullopt;
+        }
+        sockaddr_un address {};
+        address.sun_family = AF_UNIX;
+        std::strncpy(address.sun_path, socket_path.c_str(), sizeof(address.sun_path) - 1);
+        const auto address_length {static_cast<socklen_t>(offsetof(sockaddr_un, sun_path) + std::strlen(address.sun_path) + 1)};
+        if (::connect(socket, reinterpret_cast<const sockaddr *>(&address), address_length) != 0) {
+          ::close(socket);
+          error = "gamescope_source_pipewire_connect_failed";
+          return std::nullopt;
+        }
+        return pipewire_connection_t {socket};
+      }
+
+      /**
+       * @brief Construct an owner for a connected descriptor.
+       *
+       * @param socket Connected UNIX descriptor.
+       */
+      explicit pipewire_connection_t(const int socket):
+          socket_ {socket} {}
+
+      /**
+       * @brief Prevent accidental copying of a unique descriptor.
+       */
+      pipewire_connection_t(const pipewire_connection_t &) = delete;
+
+      /**
+       * @brief Move a unique descriptor owner.
+       *
+       * @param other Owner from which to transfer the descriptor.
+       */
+      pipewire_connection_t(pipewire_connection_t &&other) noexcept:
+          socket_ {std::exchange(other.socket_, -1)} {}
+
+      /**
+       * @brief Close a descriptor not consumed by PipeWire.
+       */
+      ~pipewire_connection_t() {
+        if (socket_ >= 0) {
+          ::close(socket_);
+        }
+      }
+
+      /**
+       * @brief Transfer descriptor ownership to PipeWire.
+       *
+       * @return Connected descriptor, or -1 after ownership transfer.
+       */
+      int release() {
+        return std::exchange(socket_, -1);
+      }
+
+    private:
+      int socket_ {-1};  ///< Locally owned connected PipeWire descriptor.
+    };
+
+    /**
+     * @brief Retained PipeWire Client identity needed to validate a source node.
+     */
+    struct pipewire_client_t {
+      uint32_t id {PW_ID_ANY};  ///< PipeWire client global ID.
+      int pid {-1};  ///< Client-reported process ID.
+      int uid {-1};  ///< Client-reported user ID.
+    };
+
+    /**
+     * @brief Read one PipeWire property from a preferred key list.
+     *
+     * @param properties PipeWire global properties.
+     * @param keys Keys to inspect in priority order.
+     * @return First present value, or null when absent.
+     */
+    const char *property(const spa_dict *properties, const std::initializer_list<const char *> keys) {
+      for (const auto *key : keys) {
+        if (const auto *value {spa_dict_lookup(properties, key)}) {
+          return value;
+        }
+      }
+      return nullptr;
+    }
+
+    /**
+     * @brief Parse a positive integer PipeWire property without accepting junk.
+     *
+     * @param value Property text to parse.
+     * @return Parsed value, or std::nullopt for invalid input.
+     */
+    std::optional<unsigned long long> parse_property_integer(const char *value) {
+      if (!value || !*value) {
+        return std::nullopt;
+      }
+      char *end {};
+      errno = 0;
+      const auto parsed {std::strtoull(value, &end, 10)};
+      return errno == 0 && end && *end == '\0' ? std::optional<unsigned long long> {parsed} : std::nullopt;
+    }
+
+    /**
+     * @brief Check strict Game Mode evidence without using a process name alone.
+     *
+     * @param identity Verified Gamescope process identity.
+     * @return True only when command-line and cgroup metadata identify a SteamOS session.
+     */
+    bool is_game_mode_gamescope(const process_identity_t &identity) {
+      std::ifstream command_line {"/proc/" + std::to_string(identity.pid) + "/cmdline", std::ios::binary};
+      const std::string command {std::istreambuf_iterator<char> {command_line}, {}};
+      std::ifstream cgroup_file {"/proc/" + std::to_string(identity.pid) + "/cgroup"};
+      const std::string cgroup {std::istreambuf_iterator<char> {cgroup_file}, {}};
+      const bool steam_argument {command.find("--steam") != std::string::npos || command.find("-steamdeck") != std::string::npos};
+      const bool steam_session {cgroup.find("gamescope-session") != std::string::npos || cgroup.find("steam") != std::string::npos};
+      return steam_argument && steam_session;
+    }
+
+    /**
+     * @brief Registry snapshot that joins Video/Source nodes to PipeWire clients.
+     */
+    class pipewire_registry_t {
+    public:
+      /**
+       * @brief Destroy PipeWire objects before their event loop.
+       */
+      ~pipewire_registry_t() {
+        if (registry_) {
+          spa_hook_remove(&listener_);
+        }
+        if (core_) {
+          pw_core_disconnect(core_);
+        }
+        if (context_) {
+          pw_context_destroy(context_);
+        }
+        if (loop_) {
+          pw_thread_loop_stop(loop_);
+          pw_thread_loop_destroy(loop_);
+        }
+      }
+
+      /**
+       * @brief Connect a registry listener to the host PipeWire core.
+       *
+       * @param connection Connected PipeWire socket owner.
+       * @param error Receives a stable failure reason.
+       * @return True after the registry listener starts.
+       */
+      bool connect(pipewire_connection_t &&connection, std::string &error) {
+        loop_ = pw_thread_loop_new("SteamShine Gamescope source registry", nullptr);
+        if (!loop_ || pw_thread_loop_start(loop_) != 0) {
+          error = "gamescope_source_registry_loop_failed";
+          return false;
+        }
+        pw_thread_loop_lock(loop_);
+        context_ = pw_context_new(pw_thread_loop_get_loop(loop_), nullptr, 0);
+        core_ = context_ ? pw_context_connect_fd(context_, connection.release(), nullptr, 0) : nullptr;
+        registry_ = core_ ? pw_core_get_registry(core_, PW_VERSION_REGISTRY, 0) : nullptr;
+        if (!registry_) {
+          pw_thread_loop_unlock(loop_);
+          error = "gamescope_source_registry_connect_failed";
+          return false;
+        }
+        pw_registry_add_listener(registry_, &listener_, &events, this);
+        pw_thread_loop_unlock(loop_);
+        return true;
+      }
+
+      /**
+       * @brief Return verified Gamescope nodes collected during a bounded wait.
+       *
+       * @param timeout Maximum discovery wait.
+       * @return Verified descriptor list.
+       */
+      std::vector<gamescope_source_t> snapshot(const std::chrono::milliseconds timeout) {
+        std::this_thread::sleep_for(timeout);
+        std::scoped_lock lock {mutex_};
+        std::vector<gamescope_source_t> result;
+        for (auto source : sources_) {
+          const auto client {std::find_if(clients_.begin(), clients_.end(), [&source](const pipewire_client_t &candidate) {
+            return candidate.id == source.client_id;
+          })};
+          if (client == clients_.end() || client->uid != static_cast<int>(::getuid())) {
+            continue;
+          }
+          const auto identity {read_process_identity(client->pid)};
+          if (!identity || identity->uid != client->uid || identity->executable.filename() != "gamescope") {
+            continue;
+          }
+          source.producer_pid = identity->pid;
+          source.producer_uid = identity->uid;
+          source.producer_start_time = identity->start_time;
+          source.executable = identity->executable.string();
+          source.identity_verified = true;
+          source.game_mode_verified = is_game_mode_gamescope(*identity);
+          source.origin = steamos_virtual_session::session_origin_e::attached_existing;
+          result.emplace_back(std::move(source));
+        }
+        return result;
+      }
+
+    private:
+      /**
+       * @brief Handle one PipeWire registry global announcement.
+       *
+       * @param data Registry receiver.
+       * @param id Global object ID.
+       * @param permissions PipeWire permissions.
+       * @param type Interface type.
+       * @param version Interface version.
+       * @param properties Global properties.
+       */
+      static void on_global(void *data, const uint32_t id, uint32_t permissions [[maybe_unused]], const char *type, uint32_t version [[maybe_unused]], const spa_dict *properties) {
+        if (!properties) {
+          return;
+        }
+        auto *self {static_cast<pipewire_registry_t *>(data)};
+        if (std::string_view {type} == PW_TYPE_INTERFACE_Client) {
+          const auto pid {parse_property_integer(property(properties, {"application.process.id", "pipewire.sec.pid", "process.id"}))};
+          const auto uid {parse_property_integer(property(properties, {"application.process.user", "pipewire.sec.uid", "process.user"}))};
+          if (!pid || !uid || *pid > INT_MAX || *uid > INT_MAX) {
+            return;
+          }
+          std::scoped_lock lock {self->mutex_};
+          std::erase_if(self->clients_, [id](const pipewire_client_t &client) {
+            return client.id == id;
+          });
+          self->clients_.push_back({id, static_cast<int>(*pid), static_cast<int>(*uid)});
+          return;
+        }
+        if (std::string_view {type} != PW_TYPE_INTERFACE_Node || std::string_view {property(properties, {PW_KEY_MEDIA_CLASS}) ?: ""} != "Video/Source") {
+          return;
+        }
+        const auto client_id {parse_property_integer(property(properties, {"client.id"}))};
+        const auto object_serial {parse_property_integer(property(properties, {PW_KEY_OBJECT_SERIAL}))};
+        if (!client_id || !object_serial || *client_id > UINT32_MAX) {
+          return;
+        }
+        gamescope_source_t source;
+        source.node_id = id;
+        source.object_serial = *object_serial;
+        source.client_id = static_cast<uint32_t>(*client_id);
+        source.node_name = property(properties, {PW_KEY_NODE_NAME}) ?: "";
+        source.node_description = property(properties, {PW_KEY_NODE_DESCRIPTION}) ?: "";
+        source.application_name = property(properties, {"application.name"}) ?: "";
+        source.media_class = property(properties, {PW_KEY_MEDIA_CLASS}) ?: "";
+        source.render_node = property(properties, {"api.vulkan.render-node", "render.node", "device.path"}) ?: "";
+        std::scoped_lock lock {self->mutex_};
+        std::erase_if(self->sources_, [id](const gamescope_source_t &candidate) {
+          return candidate.node_id == id;
+        });
+        self->sources_.emplace_back(std::move(source));
+      }
+
+      /**
+       * @brief Drop removed PipeWire client or node metadata.
+       *
+       * @param data Registry receiver.
+       * @param id Removed global object ID.
+       */
+      static void on_global_remove(void *data, const uint32_t id) {
+        auto *self {static_cast<pipewire_registry_t *>(data)};
+        std::scoped_lock lock {self->mutex_};
+        std::erase_if(self->clients_, [id](const pipewire_client_t &client) {
+          return client.id == id;
+        });
+        std::erase_if(self->sources_, [id](const gamescope_source_t &source) {
+          return source.node_id == id;
+        });
+      }
+
+      static constexpr pw_registry_events events {
+        .version = PW_VERSION_REGISTRY_EVENTS,
+        .global = on_global,
+        .global_remove = on_global_remove,
+      };  ///< Registry callbacks for source discovery.
+
+      pw_thread_loop *loop_ {};  ///< PipeWire registry event loop.
+      pw_context *context_ {};  ///< Connected PipeWire context.
+      pw_core *core_ {};  ///< Connected PipeWire core.
+      pw_registry *registry_ {};  ///< PipeWire registry listener.
+      spa_hook listener_ {};  ///< Registry callback hook.
+      std::mutex mutex_;  ///< Synchronizes registry callback state.
+      std::vector<pipewire_client_t> clients_;  ///< Current PipeWire client identities.
+      std::vector<gamescope_source_t> sources_;  ///< Current Video/Source node descriptors.
+    };
+#endif
   }  // namespace
 
   std::optional<process_identity_t> read_process_identity(const int pid) {
@@ -118,6 +448,26 @@ namespace gamescope_source {
   bool source_identity_is_current(const gamescope_source_t &source) {
     const auto identity {read_process_identity(source.producer_pid)};
     return identity && identity->uid == source.producer_uid && identity->start_time == source.producer_start_time && identity->executable == source.executable && identity->executable.filename() == "gamescope";
+  }
+
+  std::vector<gamescope_source_t> discover_gamescope_sources(const std::string &runtime_directory, const std::string_view remote_name, const std::chrono::milliseconds timeout, std::string &error) {
+#if defined(SUNSHINE_BUILD_PIPEWIRE)
+    auto connection {pipewire_connection_t::connect(runtime_directory, remote_name, error)};
+    if (!connection) {
+      return {};
+    }
+    pipewire_registry_t registry;
+    if (!registry.connect(std::move(*connection), error)) {
+      return {};
+    }
+    return registry.snapshot(timeout);
+#else
+    (void) runtime_directory;
+    (void) remote_name;
+    (void) timeout;
+    error = "gamescope_source_pipewire_unavailable";
+    return {};
+#endif
   }
 
   std::expected<gamescope_source_t, source_error_e> select_gamescope_source(const std::vector<gamescope_source_t> &sources, const source_selection_request_t &request) {

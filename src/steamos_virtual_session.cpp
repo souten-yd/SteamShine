@@ -838,6 +838,56 @@ namespace steamos_virtual_session {
       manager.current = state_e::Failed;
       return false;
     }
+    if (config::steamos_virtual_display.session_source != session_source_policy_e::owned_private) {
+      std::string discovery_error;
+      const auto discovery_timeout {std::min(std::chrono::milliseconds {500}, std::chrono::milliseconds {config::steamos_virtual_display.pipewire_node_timeout_milliseconds})};
+      const auto sources {gamescope_source::discover_gamescope_sources(pipewire_runtime->string(), pipewire_remote, discovery_timeout, discovery_error)};
+      gamescope_source::source_selection_request_t selection_request {
+        .policy = config::steamos_virtual_display.session_source,
+        .required_render_node = gpu->render_node,
+      };
+      if (config::steamos_virtual_display.existing_gamescope_pid > 0) {
+        selection_request.explicit_gamescope_pid = config::steamos_virtual_display.existing_gamescope_pid;
+      }
+      const auto selected {gamescope_source::select_gamescope_source(sources, selection_request)};
+      if (selected.has_value()) {
+        manager.origin = session_origin_e::attached_existing;
+        manager.process_owned = false;
+        manager.runtime_owned = false;
+        manager.runtime_directory.clear();
+        manager.pipewire_runtime = pipewire_runtime->string();
+        manager.pipewire_remote = pipewire_remote;
+        manager.pipewire_node_id = selected->node_id;
+        manager.pipewire_object_serial = selected->object_serial;
+        manager.pipewire_producer_pid = selected->producer_pid;
+        manager.pulse_runtime = (*pipewire_runtime / "pulse").string();
+        manager.width = request.width;
+        manager.height = request.height;
+        manager.fps = request.fps;
+        manager.pci_bdf = gpu->pci_bdf;
+        manager.render_node = gpu->render_node;
+        manager.source_description = selected->node_description.empty() ? selected->application_name : selected->node_description;
+        manager.source_executable = selected->executable;
+        manager.source_process_start_time = selected->producer_start_time;
+        manager.packet_tracking.store(false, std::memory_order_release);
+        manager.encoded_packets.store(0, std::memory_order_relaxed);
+        manager.encoded_bytes.store(0, std::memory_order_relaxed);
+        manager.idr_packets.store(0, std::memory_order_relaxed);
+        manager.captured_frames.store(0, std::memory_order_relaxed);
+  #if defined(__linux__)
+        manager.process_group = selected->producer_pid;
+  #endif
+        manager.current = state_e::WaitingForCapture;
+        BOOST_LOG(info) << "GAMESCOPE_SOURCE_ATTACHED origin=attached_existing pid=" << selected->producer_pid << " start_time=" << selected->producer_start_time << " node_id=" << selected->node_id << " object_serial=" << selected->object_serial << " render_node=" << selected->render_node;
+        return true;
+      }
+      BOOST_LOG(info) << "GAMESCOPE_SOURCE_UNAVAILABLE policy=" << to_string(config::steamos_virtual_display.session_source) << " reason=" << (discovery_error.empty() ? "selection_failed" : discovery_error);
+      if (config::steamos_virtual_display.session_source == session_source_policy_e::existing_gamescope) {
+        error = "No unique verified existing Gamescope source is available";
+        manager.current = state_e::Failed;
+        return false;
+      }
+    }
     manager.runtime_directory = base / ("session-" + std::to_string(::getpid()) + "-" + std::to_string(launch_session.id));
     manager.origin = session_origin_e::owned_private;
     manager.process_owned = true;
@@ -1196,7 +1246,7 @@ namespace steamos_virtual_session {
   bool active() {
     std::scoped_lock lock {manager.mutex};
 #if defined(__linux__)
-    return manager.process_group > 0 && !manager.runtime_directory.empty() &&
+    return manager.process_group > 0 && (manager.origin == session_origin_e::attached_existing || !manager.runtime_directory.empty()) &&
            (manager.current == state_e::WaitingForCapture || manager.current == state_e::Ready || manager.current == state_e::Streaming || manager.current == state_e::Failed);
 #else
     return false;
@@ -1233,6 +1283,8 @@ namespace steamos_virtual_session {
                       << " captured_frames=" << manager.captured_frames.load(std::memory_order_relaxed);
       stop_owned_process_group(manager.process_group, std::chrono::seconds {config::steamos_virtual_display.shutdown_timeout_seconds});
       manager.process_group = -1;
+    } else if (manager.origin == session_origin_e::attached_existing) {
+      BOOST_LOG(info) << "GAMESCOPE_SOURCE_DETACHED origin=attached_existing pid=" << manager.process_group << " process_owned=false runtime_owned=false";
     }
 #endif
     manager.current = state_e::Recovering;

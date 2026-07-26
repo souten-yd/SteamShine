@@ -6,6 +6,7 @@
 
 #include "src/steamos_virtual_session_core.h"
 
+#include <chrono>
 #include <cstdint>
 #include <expected>
 #include <filesystem>
@@ -41,6 +42,17 @@ namespace gamescope_source {
    * @return True only when PID, UID, start time, and executable still match Gamescope.
    */
   bool source_identity_is_current(const gamescope_source_t &source);
+
+  /**
+   * @brief Discover current-user Gamescope Video/Source nodes from one PipeWire core.
+   *
+   * @param runtime_directory Host PipeWire runtime directory.
+   * @param remote_name Host PipeWire socket name.
+   * @param timeout Maximum time to receive registry globals.
+   * @param error Receives a stable non-secret failure reason.
+   * @return Verified candidate descriptors; an empty result is safe to treat as unavailable.
+   */
+  std::vector<gamescope_source_t> discover_gamescope_sources(const std::string &runtime_directory, std::string_view remote_name, std::chrono::milliseconds timeout, std::string &error);
 
   /**
    * @brief Stable identity and PipeWire metadata for one Gamescope Video/Source node.

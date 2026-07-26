@@ -202,6 +202,20 @@ TEST_F(SteamOSVirtualSessionTest, OffModePreservesNormalLaunch) {
   EXPECT_FALSE(steamos_virtual_session::capture_backend_required());
 }
 
+/**
+ * @brief Verify an explicit resident-Gamescope policy fails closed without spawning one.
+ */
+TEST_F(SteamOSVirtualSessionTest, ExistingGamescopePolicyDoesNotCreateOwnedFallback) {
+  config::steamos_virtual_display.session_source = steamos_virtual_session::session_source_policy_e::existing_gamescope;
+  rtsp_stream::launch_session_t launch {};
+  std::string error;
+
+  EXPECT_FALSE(steamos_virtual_session::prepare(launch, error));
+  EXPECT_NE(error.find("existing Gamescope"), std::string::npos);
+  const auto session_directory {std::filesystem::path {config::steamos_virtual_display.runtime_directory} / ("session-" + std::to_string(::getpid()) + "-0")};
+  EXPECT_FALSE(std::filesystem::exists(session_directory));
+}
+
 TEST_F(SteamOSVirtualSessionTest, FeatureFlagKeepsWaylandCaptureAvailableBeforeLaunch) {
   EXPECT_TRUE(steamos_virtual_session::capture_backend_required());
 }
