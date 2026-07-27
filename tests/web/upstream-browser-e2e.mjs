@@ -113,11 +113,16 @@ try {
   if ((await setupPage.locator('body').innerText()).includes('<%-')) {
     throw new Error('The rendered welcome page contains an unresolved EJS template marker.');
   }
-  await setupPage.locator('#usernameInput').fill('web-e2e');
-  await setupPage.locator('#passwordInput').fill('web-e2e-password');
-  await setupPage.locator('#confirmPasswordInput').fill('web-e2e-password');
-  await setupPage.locator('form').evaluate((form) => form.requestSubmit());
-  await setupPage.getByText('Success').waitFor({ timeout: 5000 });
+  const setupRouteResponse = await setupPage.goto(`${baseUrl}/steamshine/login`, { waitUntil: 'domcontentloaded' });
+  if (setupRouteResponse?.status() !== 200) {
+    throw new Error(`SteamShine credential setup returned ${setupRouteResponse?.status()}.`);
+  }
+  await setupPage.getByRole('heading', { name: 'Create shared credentials' }).waitFor({ timeout: 5000 });
+  await setupPage.locator('#setup input[name="username"]').fill('web-e2e');
+  await setupPage.locator('#setup input[name="password"]').fill('web-e2e-password');
+  await setupPage.locator('#setup input[name="confirm_password"]').fill('web-e2e-password');
+  await setupPage.locator('#setup button').click();
+  await setupPage.getByRole('heading', { name: 'Sign in' }).waitFor({ timeout: 5000 });
   const defaultRouteResponse = await setupPage.goto(`${baseUrl}/`, { waitUntil: 'networkidle' });
   if (defaultRouteResponse?.status() !== 200 || !(await setupPage.getByRole('heading', { name: 'Sign in' }).isVisible())) {
     throw new Error('SteamShine was not served at the configured default Web UI route.');
