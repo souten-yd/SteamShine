@@ -2777,7 +2777,7 @@ namespace confighttp {
     server.resource["^/pin/?$"]["GET"] = page_handler("pin.html");
     server.resource["^/troubleshooting/?$"]["GET"] = page_handler("troubleshooting.html");
     server.resource["^/welcome/?$"]["GET"] = page_handler("welcome.html", false, true);
-    server.resource["^/steamshine/?(?:setup|login|dashboard|config|pairing|clients|logs)?/?$"]["GET"] = getSteamshinePage;
+    server.resource["^/steamshine/?(?:setup|login|monitor|applications|gpu|settings|config|pairing|clients|terminal)?/?$"]["GET"] = getSteamshinePage;
 
     // rest api
     server.resource["^/api/browse$"]["GET"] = browseDirectory;

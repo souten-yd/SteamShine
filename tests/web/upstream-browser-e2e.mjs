@@ -250,10 +250,10 @@ try {
   if (securityResults.virtual_display_config_status !== 200) {
     throw new Error(`SteamShine virtual display configuration returned ${securityResults.virtual_display_config_status}.`);
   }
-  const cspResponse = await steamshinePage.request.get(`${baseUrl}/steamshine/dashboard`);
+  const cspResponse = await steamshinePage.request.get(`${baseUrl}/steamshine/monitor`);
   securityResults.csp_header = cspResponse.headers()['content-security-policy'] || '';
   if (!securityResults.csp_header.includes("default-src 'self'")) {
-    throw new Error('SteamShine dashboard is missing its restrictive Content-Security-Policy header.');
+    throw new Error('SteamShine Monitor is missing its restrictive Content-Security-Policy header.');
   }
   securityResults.malformed_json_status = await steamshinePage.evaluate(async (csrf) => (await fetch('/api/steamshine/v1/pairing/pin', {
     method: 'POST', headers: { 'Content-Type': 'application/json', 'X-SteamShine-CSRF-Token': csrf }, body: '{',
@@ -388,7 +388,7 @@ try {
   await writeFile(join(reportDirectory, 'web-coexistence-report.json'), JSON.stringify({
     commit_sha: process.env.STEAMSHINE_COMMIT_SHA || process.env.GITHUB_SHA || 'local',
     artifact_sha256: process.env.STEAMSHINE_ARTIFACT_SHA256 || null,
-    upstream_url: `${baseUrl}/`, steamshine_url: `${baseUrl}/steamshine/dashboard`, shared_credential_login: true,
+    upstream_url: `${baseUrl}/`, steamshine_url: `${baseUrl}/steamshine/monitor`, shared_credential_login: true,
     simultaneous_routes: true,
     client_sync: 'not_exercised_without_a_mock_pairing_backend',
     service_mock_client_sync: 'covered_by_WebServicesTest.SharesPairingAndClientState',
