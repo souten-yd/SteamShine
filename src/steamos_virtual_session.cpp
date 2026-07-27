@@ -219,38 +219,28 @@ namespace steamos_virtual_session {
     }
 
     /**
-     * @brief Read the server PID authenticated by a connected UNIX-domain socket.
+     * @brief Connect to a UNIX-domain stream socket without sending protocol data.
      *
-     * Linux supplies `SO_PEERCRED` from the kernel, so set-user-ID/capability
-     * process protections on `/proc/<pid>/fd` do not prevent identity checks.
-     *
-     * @param path Listening UNIX-domain socket to probe.
-     * @return Kernel-authenticated peer PID, or no value when connection fails.
+     * @param path Listening UNIX-domain socket.
+     * @return Connected close-on-exec descriptor, or `-1` on failure.
      */
-    std::optional<pid_t> unix_socket_peer_pid(const std::filesystem::path &path) {
+    int connect_unix_socket(const std::filesystem::path &path) {
       const auto native_path {path.string()};
       sockaddr_un address {};
       if (native_path.empty() || native_path.size() >= sizeof(address.sun_path)) {
-        return std::nullopt;
+        return -1;
       }
       const int descriptor {::socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0)};
       if (descriptor < 0) {
-        return std::nullopt;
+        return -1;
       }
       address.sun_family = AF_UNIX;
       std::memcpy(address.sun_path, native_path.c_str(), native_path.size() + 1);
       if (::connect(descriptor, reinterpret_cast<const sockaddr *>(&address), sizeof(address)) != 0) {
         ::close(descriptor);
-        return std::nullopt;
+        return -1;
       }
-      ucred credentials {};
-      socklen_t credentials_size {sizeof(credentials)};
-      const bool verified {
-        ::getsockopt(descriptor, SOL_SOCKET, SO_PEERCRED, &credentials, &credentials_size) == 0 &&
-        credentials_size == sizeof(credentials) && credentials.pid > 0
-      };
-      ::close(descriptor);
-      return verified ? std::optional<pid_t> {credentials.pid} : std::nullopt;
+      return descriptor;
     }
 
     /**
@@ -2030,8 +2020,32 @@ namespace steamos_virtual_session {
            (manager.current == state_e::WaitingForCapture || manager.current == state_e::Ready || manager.current == state_e::Streaming);
   }
 
-  bool gamescope_input_endpoint(std::string &socket_path, std::string &error) {
+  bool gamescope_input_generation(std::uint64_t &generation, std::string &error) {
 #if defined(__linux__)
+    std::scoped_lock lock {manager.mutex};
+    if (manager.process_group <= 0 || manager.source_process_start_time == 0 || manager.display_endpoint.generation == 0 || (manager.current != state_e::WaitingForCapture && manager.current != state_e::Ready && manager.current != state_e::Streaming)) {
+      error = "gamescope_input_source_unavailable";
+      return false;
+    }
+    const auto identity {gamescope_source::read_process_identity(manager.process_group)};
+    if (!identity || identity->start_time != manager.source_process_start_time) {
+      error = "gamescope_input_identity_changed";
+      return false;
+    }
+    generation = manager.display_endpoint.generation;
+    error.clear();
+    return true;
+#else
+    generation = 0;
+    error = "gamescope_input_unsupported";
+    return false;
+#endif
+  }
+
+  bool open_verified_gamescope_input(std::string &socket_path, int &descriptor, std::uint64_t &generation, std::string &error) {
+#if defined(__linux__)
+    descriptor = -1;
+    generation = 0;
     std::scoped_lock lock {manager.mutex};
     if (manager.process_group <= 0 || manager.source_process_start_time == 0 || (manager.current != state_e::WaitingForCapture && manager.current != state_e::Ready && manager.current != state_e::Streaming)) {
       error = "gamescope_input_source_unavailable";
@@ -2053,17 +2067,17 @@ namespace steamos_virtual_session {
       error = "gamescope_input_eis_socket_invalid";
       return false;
     }
-    if (manager.verified_input_socket == *socket &&
-        manager.verified_input_socket_device == static_cast<std::uint64_t>(socket_status.st_dev) &&
-        manager.verified_input_socket_inode == static_cast<std::uint64_t>(socket_status.st_ino) &&
-        manager.verified_input_producer_pid == manager.process_group &&
-        manager.verified_input_producer_start_time == manager.source_process_start_time) {
-      socket_path = socket->string();
-      error.clear();
-      return true;
+    descriptor = connect_unix_socket(*socket);
+    if (descriptor < 0) {
+      error = "gamescope_input_eis_connect_failed";
+      return false;
     }
-    const auto peer_pid {unix_socket_peer_pid(*socket)};
-    if (!peer_pid || *peer_pid != manager.process_group) {
+    ucred credentials {};
+    socklen_t credentials_size {sizeof(credentials)};
+    if (::getsockopt(descriptor, SOL_SOCKET, SO_PEERCRED, &credentials, &credentials_size) != 0 ||
+        credentials_size != sizeof(credentials) || credentials.pid != manager.process_group) {
+      ::close(descriptor);
+      descriptor = -1;
       error = "gamescope_input_eis_socket_unverified";
       return false;
     }
@@ -2073,10 +2087,13 @@ namespace steamos_virtual_session {
     manager.verified_input_producer_pid = manager.process_group;
     manager.verified_input_producer_start_time = manager.source_process_start_time;
     socket_path = socket->string();
+    generation = manager.display_endpoint.generation;
     error.clear();
     return true;
 #else
     (void) socket_path;
+    descriptor = -1;
+    generation = 0;
     error = "gamescope_input_unsupported";
     return false;
 #endif

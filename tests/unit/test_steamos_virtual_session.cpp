@@ -93,6 +93,39 @@ namespace {
     } else if (mode == "runtime-escape") {
       output << "export STEAMSHINE_TEST_REPORT_RUNTIME=/tmp\n";
     }
+    if (mode == "verified-eis") {
+      const auto server {directory / "fake-gamescope-server.py"};
+      std::ofstream python {server};
+      python << "import os, signal, socket, subprocess, sys\n";
+      python << "runtime = os.environ['XDG_RUNTIME_DIR']\n";
+      python << "paths = ['/tmp/.X11-unix/X' + os.environ['DISPLAY'][1:], os.path.join(runtime, 'gamescope-0'), os.path.join(runtime, 'gamescope-0-ei')]\n";
+      python << "sockets = []\n";
+      python << "for path in paths:\n";
+      python << "    try: os.unlink(path)\n";
+      python << "    except FileNotFoundError: pass\n";
+      python << "    current = socket.socket(socket.AF_UNIX)\n";
+      python << "    current.bind(path)\n";
+      python << "    current.listen()\n";
+      python << "    sockets.append(current)\n";
+      python << "separator = sys.argv.index('--')\n";
+      python << "bootstrap = subprocess.Popen(sys.argv[separator + 1:])\n";
+      python << "def stop(*_):\n";
+      python << "    bootstrap.terminate()\n";
+      python << "    bootstrap.wait()\n";
+      python << "    for path in paths:\n";
+      python << "        try: os.unlink(path)\n";
+      python << "        except FileNotFoundError: pass\n";
+      python << "    raise SystemExit(0)\n";
+      python << "signal.signal(signal.SIGTERM, stop)\n";
+      python << "signal.signal(signal.SIGINT, stop)\n";
+      python << "while True: signal.pause()\n";
+      python.close();
+      output << "mkdir -p /tmp/.X11-unix\n";
+      output << "exec python3 " << server.string() << " \"$@\"\n";
+      output.close();
+      std::filesystem::permissions(executable, std::filesystem::perms::owner_exec, std::filesystem::perm_options::add);
+      return executable;
+    }
     output << "mkdir -p /tmp/.X11-unix\n";
     output << "stale_x11_path=\n";
     if (mode == "stale-x11-socket") {
@@ -636,7 +669,11 @@ TEST_F(SteamOSVirtualSessionTest, FakeGamescopeReadinessAndCleanup) {
   ASSERT_TRUE(std::filesystem::is_socket(eis_path));
   std::string input_socket_path;
   std::string input_error;
-  EXPECT_FALSE(steamos_virtual_session::gamescope_input_endpoint(input_socket_path, input_error));
+  int input_descriptor {-1};
+  std::uint64_t input_generation {};
+  EXPECT_FALSE(steamos_virtual_session::open_verified_gamescope_input(input_socket_path, input_descriptor, input_generation, input_error));
+  EXPECT_EQ(input_descriptor, -1);
+  EXPECT_EQ(input_generation, 0U);
   EXPECT_EQ(input_error, "gamescope_input_eis_socket_unverified");
   std::filesystem::remove(socket_path);
   EXPECT_FALSE(steamos_virtual_session::capture_socket(socket_path));
@@ -647,6 +684,31 @@ TEST_F(SteamOSVirtualSessionTest, FakeGamescopeReadinessAndCleanup) {
   EXPECT_EQ(steamos_virtual_session::state(), steamos_virtual_session::state_e::Idle);
   EXPECT_FALSE(steamos_virtual_session::active());
   EXPECT_TRUE(std::filesystem::exists(config::steamos_virtual_display.runtime_directory));
+}
+
+/**
+ * @brief Verify the exact peer-authenticated EIS connection is returned.
+ */
+TEST_F(SteamOSVirtualSessionTest, OpensVerifiedGamescopeEisConnection) {
+  config::steamos_virtual_display.gamescope_path = make_fake_gamescope(root, "verified-eis").string();
+  rtsp_stream::launch_session_t launch {};
+  std::string error;
+  ASSERT_TRUE(steamos_virtual_session::prepare(launch, error)) << error;
+
+  std::uint64_t active_generation {};
+  ASSERT_TRUE(steamos_virtual_session::gamescope_input_generation(active_generation, error)) << error;
+  EXPECT_GT(active_generation, 0U);
+
+  std::string socket_path;
+  int descriptor {-1};
+  std::uint64_t connection_generation {};
+  ASSERT_TRUE(steamos_virtual_session::open_verified_gamescope_input(socket_path, descriptor, connection_generation, error)) << error;
+  EXPECT_GE(descriptor, 0);
+  EXPECT_EQ(connection_generation, active_generation);
+  const auto endpoint {steamos_virtual_session::application_environment()};
+  ASSERT_TRUE(endpoint);
+  EXPECT_EQ(socket_path, (std::filesystem::path {endpoint->xdg_runtime_directory} / "gamescope-0-ei").string());
+  ::close(descriptor);
 }
 
 /**

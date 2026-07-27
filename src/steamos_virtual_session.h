@@ -288,17 +288,35 @@ namespace steamos_virtual_session {
   bool gamescope_input_required();
 
   /**
-   * @brief Resolve the EIS input socket owned by the selected verified Gamescope process.
+   * @brief Return the identity generation of the active Gamescope input source.
+   *
+   * The selected producer PID and start time are revalidated before returning.
+   * An established libei connection may be reused only while this generation
+   * remains unchanged.
+   *
+   * @param generation Receives the active display-endpoint generation.
+   * @param error Receives a stable failure reason without credentials.
+   * @return True while the selected Gamescope identity remains current.
+   */
+  bool gamescope_input_generation(std::uint64_t &generation, std::string &error);
+
+  /**
+   * @brief Open the EIS input socket owned by the selected verified Gamescope process.
    *
    * The socket is accepted only when its path remains inside the selected
    * runtime, it is a current-user UNIX-domain socket, and the kernel-reported
    * `SO_PEERCRED` PID matches the selected Gamescope identity.
    *
+   * The returned descriptor is the exact kernel-authenticated connection and
+   * must be closed by the caller or transferred to libei.
+   *
    * @param socket_path Receives the absolute EIS socket path.
+   * @param descriptor Receives a connected close-on-exec descriptor.
+   * @param generation Receives the generation verified with the connection.
    * @param error Receives a stable failure reason without credentials.
    * @return True when input can be bound to the selected Gamescope session.
    */
-  bool gamescope_input_endpoint(std::string &socket_path, std::string &error);
+  bool open_verified_gamescope_input(std::string &socket_path, int &descriptor, std::uint64_t &generation, std::string &error);
 
   /**
    * @brief Open one dedicated PipeWire connection for the verified source.
