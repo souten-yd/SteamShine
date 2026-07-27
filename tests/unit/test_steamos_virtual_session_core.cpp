@@ -271,6 +271,24 @@ namespace {
   }
 
   /**
+   * @brief Verify a Game Mode source published after an earlier request is selected on retry.
+   */
+  TEST(SteamOSVirtualSessionCore, SelectsGameModeSourceThatAppearsOnLaterRetry) {
+    const auto unavailable {gamescope_source::select_gamescope_source({}, {})};
+    ASSERT_FALSE(unavailable.has_value());
+    EXPECT_EQ(unavailable.error(), gamescope_source::source_error_e::unavailable);
+
+    const std::vector<gamescope_source::gamescope_source_t> later_sources {
+      verified_source(steamos_virtual_session::session_origin_e::attached_existing, 210),
+    };
+    const auto selected {gamescope_source::select_gamescope_source(later_sources, {})};
+    ASSERT_TRUE(selected.has_value());
+    EXPECT_EQ(selected->origin, steamos_virtual_session::session_origin_e::attached_existing);
+    EXPECT_EQ(selected->producer_pid, 210);
+    EXPECT_EQ(selected->producer_start_time, 3210U);
+  }
+
+  /**
    * @brief Verify ambiguous resident Gamescope sources fail closed without fallback.
    */
   TEST(SteamOSVirtualSessionCore, RejectsAmbiguousExistingGamescopeSources) {
