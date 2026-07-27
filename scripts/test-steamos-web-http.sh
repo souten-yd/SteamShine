@@ -96,9 +96,9 @@ missing_status="$(curl --insecure --silent --show-error --output /dev/null --wri
 upstream_after_steamshine_failure="$(curl --insecure --silent --show-error --output /dev/null --write-out '%{http_code}' "${base_url}/welcome/")"
 [[ "${upstream_after_steamshine_failure}" == 200 ]] || { echo 'A missing upstream asset prevented the upstream welcome route from loading.' >&2; exit 1; }
 steamshine_page_file="${work_dir}/steamshine.html"
-steamshine_status="$(curl --insecure --silent --show-error --output "${steamshine_page_file}" --write-out '%{http_code}' "${base_url}/steamshine/dashboard")"
-[[ "${steamshine_status}" == 200 ]] || { echo "Expected /steamshine/dashboard to return HTTP 200, got ${steamshine_status}." >&2; exit 1; }
-for steamshine_route in /steamshine/setup /steamshine/login /steamshine/config /steamshine/pairing /steamshine/clients /steamshine/logs; do
+steamshine_status="$(curl --insecure --silent --show-error --output "${steamshine_page_file}" --write-out '%{http_code}' "${base_url}/steamshine/monitor")"
+[[ "${steamshine_status}" == 200 ]] || { echo "Expected /steamshine/monitor to return HTTP 200, got ${steamshine_status}." >&2; exit 1; }
+for steamshine_route in /steamshine/setup /steamshine/login /steamshine/monitor /steamshine/applications /steamshine/gpu /steamshine/settings /steamshine/config /steamshine/pairing /steamshine/clients /steamshine/terminal; do
   steamshine_route_status="$(curl --insecure --silent --show-error --output /dev/null --write-out '%{http_code}' "${base_url}${steamshine_route}")"
   [[ "${steamshine_route_status}" == 200 ]] || { echo "Expected SteamShine route ${steamshine_route} to return HTTP 200, got ${steamshine_route_status}." >&2; exit 1; }
 done
@@ -113,7 +113,7 @@ grep -Eqi '^content-type: text/css' "${work_dir}/app.css.headers" || { echo 'Ste
 grep -Eqi '^content-type: (application|text)/javascript' "${work_dir}/app.js.headers" || { echo 'SteamShine JavaScript has an invalid Content-Type.' >&2; exit 1; }
 steamshine_missing_status="$(curl --insecure --silent --show-error --output /dev/null --write-out '%{http_code}' "${base_url}/steamshine/missing.js")"
 [[ "${steamshine_missing_status}" == 404 ]] || { echo "Expected a missing SteamShine asset to return HTTP 404, got ${steamshine_missing_status}." >&2; exit 1; }
-steamshine_after_upstream_failure="$(curl --insecure --silent --show-error --output /dev/null --write-out '%{http_code}' "${base_url}/steamshine/dashboard")"
+steamshine_after_upstream_failure="$(curl --insecure --silent --show-error --output /dev/null --write-out '%{http_code}' "${base_url}/steamshine/monitor")"
 [[ "${steamshine_after_upstream_failure}" == 200 ]] || { echo 'A missing SteamShine asset prevented the SteamShine route from loading.' >&2; exit 1; }
 unauthorized_api_status="$(curl --insecure --silent --show-error --output /dev/null --write-out '%{http_code}' "${base_url}/api/steamshine/v1/status")"
 [[ "${unauthorized_api_status}" == 401 || "${unauthorized_api_status}" == 403 ]] || { echo "Expected unauthenticated SteamShine status API to return 401 or 403, got ${unauthorized_api_status}." >&2; exit 1; }
@@ -184,7 +184,7 @@ Path(sys.argv[1]).write_text(json.dumps({
     "missing_asset_status": 404,
     "cross_tree_failure_isolation": True,
     "unresolved_template_markers": False,
-    "steamshine_dashboard_status": 200,
+    "steamshine_monitor_status": 200,
     "steamshine_assets": ["/steamshine/app.css", "/steamshine/app.js"],
     "steamshine_missing_asset_status": 404,
     "steamshine_unauthenticated_status_api": int(sys.argv[4]),

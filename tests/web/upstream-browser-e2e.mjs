@@ -23,7 +23,7 @@ const homeDirectory = join(workDirectory, 'home');
 const logFile = join(reportDirectory, 'steamshine-web-browser.log');
 const traceFile = join(reportDirectory, 'upstream-browser-trace.zip');
 const screenshotFile = join(reportDirectory, 'upstream-browser-failure.png');
-const successScreenshotFile = join(reportDirectory, 'steamshine-dashboard.png');
+const successScreenshotFile = join(reportDirectory, 'steamshine-monitor.png');
 const configFile = join(homeDirectory, 'sunshine.conf');
 const consoleErrors = [];
 const failedRequests = [];
@@ -367,7 +367,7 @@ try {
     setup: 'passed',
     login: 'passed',
     invalid_pin_rejected: true,
-    steamshine_dashboard_status: 200,
+    steamshine_monitor_status: 200,
     steamshine_login: 'passed',
     steamshine_secure_session_cookie: true,
     steamshine_invalid_pin_rejected: true,
