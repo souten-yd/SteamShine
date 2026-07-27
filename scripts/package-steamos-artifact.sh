@@ -53,7 +53,7 @@ if [[ -f /usr/share/licenses/miniupnpc/LICENSE ]]; then
   mkdir -p "${stage}/share/licenses/miniupnpc"
   install -m 644 /usr/share/licenses/miniupnpc/LICENSE "${stage}/share/licenses/miniupnpc/LICENSE"
 fi
-install -m 644 "${root_dir}/packaging/linux/app-dev.lizardbyte.app.Sunshine.service.in" "${stage}/systemd-user/steamshine.service.in"
+install -m 644 "${root_dir}/packaging/linux/steamshine.service.in" "${stage}/systemd-user/steamshine.service.in"
 {
   ldd "${stage}/bin/steamshine"
   readelf -d "${stage}/bin/steamshine"
