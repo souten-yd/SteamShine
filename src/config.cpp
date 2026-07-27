@@ -4,6 +4,7 @@
  */
 // standard includes
 #include <algorithm>
+#include <climits>
 #include <filesystem>
 #include <format>
 #include <fstream>
@@ -1707,7 +1708,34 @@ namespace config {
         steamos_virtual_display.mode = *mode;
       }
     }
+    {
+      std::string source_value;
+      string_f(vars, "steamos_session_source", source_value);
+      if (!source_value.empty()) {
+        const auto source {steamos_virtual_session::parse_session_source_policy(source_value)};
+        if (!source) {
+          BOOST_LOG(error) << "config: invalid steamos_session_source value: " << source_value << "; expected auto, existing_gamescope, or owned_private";
+          throw std::invalid_argument {"invalid steamos_session_source"};
+        }
+        steamos_virtual_display.session_source = *source;
+      }
+    }
+    {
+      std::string presentation_value;
+      string_f(vars, "steamos_local_presentation", presentation_value);
+      if (!presentation_value.empty()) {
+        const auto presentation {steamos_virtual_session::parse_local_presentation_policy(presentation_value)};
+        if (!presentation) {
+          BOOST_LOG(error) << "config: invalid steamos_local_presentation value: " << presentation_value << "; expected auto, off, or mirror";
+          throw std::invalid_argument {"invalid steamos_local_presentation"};
+        }
+        steamos_virtual_display.local_presentation = *presentation;
+      }
+    }
+    bool_f(vars, "steamos_keep_session_alive", steamos_virtual_display.keep_session_alive);
+    int_between_f(vars, "steamos_existing_gamescope_pid", steamos_virtual_display.existing_gamescope_pid, {0, INT_MAX});
     string_f(vars, "steamos_gamescope_path", steamos_virtual_display.gamescope_path);
+    string_f(vars, "steamos_virtual_desktop_command", steamos_virtual_display.virtual_desktop_command);
     path_f(vars, "steamos_runtime_directory", steamos_virtual_display.runtime_directory);
     string_f(vars, "steamos_game_gpu", steamos_virtual_display.game_gpu);
     string_f(vars, "steamos_capture_gpu", steamos_virtual_display.capture_gpu);

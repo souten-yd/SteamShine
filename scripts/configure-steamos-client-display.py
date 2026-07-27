@@ -1,0 +1,143 @@
+#!/usr/bin/env python3
+"""Temporarily match a KDE physical output to the Moonlight video request."""
+
+from __future__ import annotations
+
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+from typing import Any
+
+
+def state_path(environment: dict[str, str]) -> Path:
+    """Return the per-user runtime path used to restore the physical display."""
+    runtime = environment.get("XDG_RUNTIME_DIR", "")
+    if not runtime or not Path(runtime).is_absolute():
+        raise ValueError("XDG_RUNTIME_DIR must be an absolute path")
+    return Path(runtime) / "steamshine" / "client-display-state.json"
+
+
+def requested_mode(environment: dict[str, str]) -> tuple[int, int, float]:
+    """Parse and validate the Moonlight-requested width, height, and frame rate."""
+    try:
+        width = int(environment["SUNSHINE_CLIENT_WIDTH"])
+        height = int(environment["SUNSHINE_CLIENT_HEIGHT"])
+        fps = float(environment["SUNSHINE_CLIENT_FPS"])
+    except (KeyError, ValueError) as error:
+        raise ValueError("Moonlight display request is unavailable") from error
+    if not 640 <= width <= 7680 or not 480 <= height <= 4320 or not 1 <= fps <= 240:
+        raise ValueError("Moonlight display request is outside supported bounds")
+    return width, height, fps
+
+
+def physical_display_selected(environment: dict[str, str]) -> bool:
+    """Return whether SteamShine selected the host physical desktop."""
+    return environment.get("STEAMSHINE_VIRTUAL_DISPLAY_ORIGIN", "none") == "none"
+
+
+def select_output(configuration: dict[str, Any], requested_name: str = "") -> dict[str, Any]:
+    """Select the requested or primary connected and enabled KDE output."""
+    outputs = [
+        output
+        for output in configuration.get("outputs", [])
+        if output.get("connected") and output.get("enabled")
+    ]
+    if requested_name:
+        outputs = [output for output in outputs if output.get("name") == requested_name]
+    if not outputs:
+        raise ValueError("No matching connected KDE output is enabled")
+    return min(outputs, key=lambda output: (int(output.get("priority") or 9999), int(output.get("id") or 9999)))
+
+
+def select_mode(output: dict[str, Any], width: int, height: int, fps: float) -> dict[str, Any]:
+    """Select the exact requested size whose refresh rate is nearest the request."""
+    modes = [
+        mode
+        for mode in output.get("modes", [])
+        if int(mode.get("size", {}).get("width", 0)) == width
+        and int(mode.get("size", {}).get("height", 0)) == height
+    ]
+    if not modes:
+        raise ValueError(f"KDE output {output.get('name', 'unknown')} has no {width}x{height} mode")
+    return min(modes, key=lambda mode: abs(float(mode.get("refreshRate", 0.0)) - fps))
+
+
+def read_configuration() -> dict[str, Any]:
+    """Read the current KScreen configuration from kscreen-doctor."""
+    completed = subprocess.run(
+        ["kscreen-doctor", "-j"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return json.loads(completed.stdout)
+
+
+def apply_mode(environment: dict[str, str]) -> None:
+    """Save the current output state and apply the Moonlight-requested mode."""
+    if not physical_display_selected(environment):
+        return
+    path = state_path(environment)
+    if path.exists():
+        revert_mode(environment)
+    width, height, fps = requested_mode(environment)
+    output = select_output(read_configuration(), environment.get("STEAMSHINE_DISPLAY_OUTPUT", ""))
+    mode = select_mode(output, width, height, fps)
+    saved_state = {
+        "output": output["name"],
+        "mode_id": str(output["currentModeId"]),
+        "scale": float(output["scale"]),
+    }
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    temporary = path.with_suffix(".tmp")
+    temporary.write_text(json.dumps(saved_state) + "\n", encoding="utf-8")
+    temporary.chmod(0o600)
+    temporary.replace(path)
+    subprocess.run(
+        ["kscreen-doctor", f"output.{output['name']}.mode.{mode['id']}"],
+        check=True,
+    )
+
+
+def revert_mode(environment: dict[str, str]) -> None:
+    """Restore the physical output mode and scale saved before streaming."""
+    if not physical_display_selected(environment):
+        return
+    path = state_path(environment)
+    if not path.exists():
+        return
+    saved_state = json.loads(path.read_text(encoding="utf-8"))
+    output = str(saved_state["output"])
+    mode_id = str(saved_state["mode_id"])
+    scale = float(saved_state["scale"])
+    subprocess.run(
+        [
+            "kscreen-doctor",
+            f"output.{output}.mode.{mode_id}",
+            f"output.{output}.scale.{scale:g}",
+        ],
+        check=True,
+    )
+    path.unlink()
+
+
+def main(arguments: list[str]) -> int:
+    """Apply or revert the client display mode selected on the command line."""
+    if len(arguments) != 2 or arguments[1] not in {"apply", "revert"}:
+        print(f"Usage: {arguments[0]} apply|revert", file=sys.stderr)
+        return 2
+    try:
+        if arguments[1] == "apply":
+            apply_mode(dict(os.environ))
+        else:
+            revert_mode(dict(os.environ))
+    except (OSError, ValueError, KeyError, json.JSONDecodeError, subprocess.SubprocessError) as error:
+        print(f"SteamShine client display configuration failed: {error}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv))

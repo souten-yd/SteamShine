@@ -78,7 +78,7 @@ systemd-run --user --wait --pipe /bin/bash -lc '
     test -r "${node}" && readable=true
     test -w "${node}" && writable=true
     if exec {fd}<>"${node}"; then exec {fd}>&-; else open_errno=$?; fi
-    printf "%s readable=%s writable=%s open_errno=%s\\n" "${node}" "${readable}" "${writable}" "${open_errno}"
+    printf "%s readable=%s writable=%s open_errno=%s\n" "${node}" "${readable}" "${writable}" "${open_errno}"
   done
 ' || true
 

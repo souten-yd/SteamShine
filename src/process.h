@@ -14,6 +14,7 @@
 
 // standard includes
 #include <optional>
+#include <string_view>
 #include <unordered_map>
 
 // lib includes
@@ -32,6 +33,20 @@
 #define DEFAULT_APP_IMAGE_PATH SUNSHINE_ASSETS_DIR "/box.png"
 
 namespace proc {
+  /**
+   * @brief Select the command that represents a configured application launch.
+   *
+   * A commandless Desktop entry remains a capture-only placebo on the physical
+   * Desktop and attached Game Mode. Inside an owned private display it launches
+   * a non-singleton desktop surface so a monitorless stream is usable.
+   *
+   * @param app_command Configured application command.
+   * @param owned_virtual_display Whether the selected display is SteamShine-owned.
+   * @param virtual_desktop_command Desktop surface command for an owned display.
+   * @return Application command to execute, or an empty string for a capture-only Desktop.
+   */
+  std::string select_effective_command(std::string_view app_command, bool owned_virtual_display, std::string_view virtual_desktop_command);
+
   /**
    * @brief Boost.Process pipe stream used for child-process I/O.
    */

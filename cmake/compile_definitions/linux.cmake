@@ -214,6 +214,7 @@ if(WAYLAND_FOUND)
     endif()
 
     GEN_WAYLAND("${WAYLAND_PROTOCOLS_DIR}" "unstable/xdg-output" xdg-output-unstable-v1)
+    GEN_WAYLAND("${WAYLAND_PROTOCOLS_DIR}" "stable/xdg-shell" xdg-shell)
     GEN_WAYLAND("${WAYLAND_PROTOCOLS_DIR}" "unstable/linux-dmabuf" linux-dmabuf-unstable-v1)
     GEN_WAYLAND("${CMAKE_SOURCE_DIR}/third-party/wlr-protocols" "unstable" wlr-screencopy-unstable-v1)
 
@@ -264,7 +265,11 @@ if(PIPEWIRE_FOUND)
     list(APPEND PLATFORM_TARGET_FILES
             "${CMAKE_SOURCE_DIR}/src/platform/linux/pipewire.cpp")
     list(APPEND PLATFORM_TARGET_FILES
+            "${CMAKE_SOURCE_DIR}/src/platform/linux/pipewire_capture.cpp")
+    list(APPEND PLATFORM_TARGET_FILES
             "${CMAKE_SOURCE_DIR}/src/platform/linux/gamescopegrab.cpp")
+    list(APPEND PLATFORM_TARGET_FILES
+            "${CMAKE_SOURCE_DIR}/src/platform/linux/gamescope_presenter_pipewire.cpp")
 endif()
 
 # XDG portal
@@ -309,6 +314,9 @@ endif()
 add_subdirectory("${CMAKE_SOURCE_DIR}/third-party/inputtino")
 list(APPEND SUNSHINE_EXTERNAL_LIBRARIES inputtino::libinputtino)
 file(GLOB_RECURSE INPUTTINO_SOURCES
+        ${CMAKE_SOURCE_DIR}/src/platform/linux/input/gamescope_eis_input.h
+        ${CMAKE_SOURCE_DIR}/src/platform/linux/input/gamescope_eis_input.cpp
+        ${CMAKE_SOURCE_DIR}/src/platform/linux/input/input_key_mapping.h
         ${CMAKE_SOURCE_DIR}/src/platform/linux/input/inputtino*.h
         ${CMAKE_SOURCE_DIR}/src/platform/linux/input/inputtino*.cpp)
 list(APPEND PLATFORM_TARGET_FILES ${INPUTTINO_SOURCES})

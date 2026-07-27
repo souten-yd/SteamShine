@@ -1085,9 +1085,23 @@ namespace nvhttp {
     if (appid > 0) {
       auto err = proc::proc.execute((int) appid, launch_session);
       if (err) {
+        const auto virtual_status {steamos_virtual_session::status_snapshot()};
         steamos_virtual_session::stop();
         tree.put("root.<xmlattr>.status_code", err);
-        tree.put("root.<xmlattr>.status_message", "Failed to start the specified application");
+        const auto rejection_message {
+          virtual_status.app_launch_rejected_message.empty() ?
+            "Failed to start the specified application" :
+            virtual_status.app_launch_rejected_message
+        };
+        tree.put(
+          "root.<xmlattr>.status_message",
+          virtual_status.app_launch_rejected_reason.empty() ?
+            rejection_message :
+            virtual_status.app_launch_rejected_reason + ": " + rejection_message
+        );
+        if (!virtual_status.app_launch_rejected_reason.empty()) {
+          tree.put("root.steamshine_reason", virtual_status.app_launch_rejected_reason);
+        }
         tree.put("root.gamesession", 0);
 
         return;

@@ -5,6 +5,7 @@
 #pragma once
 
 // standard includes
+#include <algorithm>
 #include <bitset>
 #include <filesystem>
 #include <functional>
@@ -521,6 +522,27 @@ namespace platf {
      */
     virtual ~img_t() = default;
   };
+
+  /**
+   * @brief Fill a system-memory capture image with black pixels.
+   *
+   * GPU-backed image descriptors have no CPU data pointer and are left unchanged because
+   * their converter creates the black fallback texture.
+   *
+   * @param img Image to initialize.
+   * @return Zero on success, or negative one when the image metadata is invalid.
+   */
+  inline int fill_image_black(img_t *img) {
+    if (img == nullptr || img->width < 0 || img->height < 0 || img->row_pitch < 0) {
+      return -1;
+    }
+
+    if (img->data != nullptr) {
+      std::fill_n(img->data, static_cast<std::size_t>(img->row_pitch) * img->height, std::uint8_t {});
+    }
+
+    return 0;
+  }
 
   /**
    * @brief Host and virtual audio sink names for audio routing.
@@ -1174,11 +1196,30 @@ namespace platf {
   typedef deinit_t client_input_t;
 
   /**
+   * @brief Low-frequency diagnostic view of the selected input destination.
+   */
+  struct input_route_diagnostics_t {
+    std::string target;  ///< `desktop`, `gamescope_eis`, or `gamescope_blocked`.
+    std::string error;  ///< Stable machine-readable failure reason, if blocked.
+  };
+
+  /**
    * @brief Allocate a context to store per-client input data.
    * @param input The global input context.
    * @return A unique pointer to a per-client input data context.
    */
   std::unique_ptr<client_input_t> allocate_client_input_context(input_t &input);
+
+  /**
+   * @brief Inspect the current input destination for aggregated status output.
+   *
+   * This may refresh a platform endpoint and therefore must not be called from
+   * event or frame hot paths.
+   *
+   * @param input Global platform input context.
+   * @return Selected target and any fail-closed reason.
+   */
+  input_route_diagnostics_t input_route_diagnostics(input_t &input);
 
   /**
    * @brief Send a touch event to the OS.

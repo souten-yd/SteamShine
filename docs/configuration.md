@@ -2249,6 +2249,105 @@ editing the `conf` file in a text editor. Use the examples as reference.
     </tr>
 </table>
 
+## SteamOS Virtual Display
+
+These settings control SteamShine's opt-in SteamOS display provider. In `auto`
+mode a capturable physical Desktop output is preferred through direct KWin
+ScreenCast and then XDG Portal. If none exists, SteamShine may use an owned
+virtual desktop. Portal calls and response waits are bounded so a compositor
+chooser failure cannot hang the service indefinitely. Game Mode uses only a
+verified existing Gamescope source or an explicitly selected owned private source.
+Mouse, keyboard, touch, and pen input for a Gamescope stream are bound to its
+verified EIS socket and are never allowed to fall back to the physical Desktop.
+The SteamShine dashboard reports this as @code{} input_route_target =
+gamescope_eis @endcode. A missing dependency, rejected socket, or incomplete
+capability negotiation reports @code{} gamescope_blocked @endcode together
+with a stable @code{} input_route_error @endcode.
+
+### steamos_virtual_display_enabled
+
+<table><tr><td>Description</td><td colspan="2">Enable SteamOS display-source policy.</td></tr><tr><td>Default</td><td colspan="2">@code{} disabled @endcode</td></tr><tr><td>Example</td><td colspan="2">@code{} steamos_virtual_display_enabled = enabled @endcode</td></tr></table>
+
+### steamos_virtual_display_mode
+
+<table><tr><td>Description</td><td colspan="2">@code{} off @endcode disables virtual displays, @code{} auto @endcode prefers a capturable physical Desktop and otherwise selects a verified Gamescope or owned virtual desktop, and @code{} force @endcode requires an owned private Gamescope.</td></tr><tr><td>Default</td><td colspan="2">@code{} auto @endcode</td></tr><tr><td>Example</td><td colspan="2">@code{} steamos_virtual_display_mode = auto @endcode</td></tr></table>
+
+### steamos_session_source
+
+<table><tr><td>Description</td><td colspan="2">Select @code{} auto @endcode, @code{} existing_gamescope @endcode, or @code{} owned_private @endcode. Existing sources must pass process, PipeWire, GPU, and ownership checks.</td></tr><tr><td>Default</td><td colspan="2">@code{} auto @endcode</td></tr><tr><td>Example</td><td colspan="2">@code{} steamos_session_source = existing_gamescope @endcode</td></tr></table>
+
+### steamos_local_presentation
+
+<table><tr><td>Description</td><td colspan="2">Select @code{} auto @endcode, @code{} off @endcode, or @code{} mirror @endcode for local presentation of SteamShine-owned private sessions. Existing Game Mode is not mirrored a second time.</td></tr><tr><td>Default</td><td colspan="2">@code{} auto @endcode</td></tr><tr><td>Example</td><td colspan="2">@code{} steamos_local_presentation = off @endcode</td></tr></table>
+
+### steamos_keep_session_alive
+
+<table><tr><td>Description</td><td colspan="2">Retain a compatible SteamShine-owned session across a Moonlight disconnect. Explicit cancel or service stop still destroys owned resources.</td></tr><tr><td>Default</td><td colspan="2">@code{} enabled @endcode</td></tr><tr><td>Example</td><td colspan="2">@code{} steamos_keep_session_alive = enabled @endcode</td></tr></table>
+
+### steamos_existing_gamescope_pid
+
+<table><tr><td>Description</td><td colspan="2">Optional existing Game Mode Gamescope PID. Zero requests unique automatic discovery. A PID is never trusted without start-time, owner, process, socket, PipeWire, and GPU verification.</td></tr><tr><td>Default</td><td colspan="2">@code{} 0 @endcode</td></tr><tr><td>Example</td><td colspan="2">@code{} steamos_existing_gamescope_pid = 0 @endcode</td></tr></table>
+
+### steamos_gamescope_path
+
+<table><tr><td>Description</td><td colspan="2">Gamescope executable used when SteamShine creates an owned private session.</td></tr><tr><td>Default</td><td colspan="2">@code{} gamescope @endcode</td></tr><tr><td>Example</td><td colspan="2">@code{} steamos_gamescope_path = /usr/bin/gamescope @endcode</td></tr></table>
+
+### steamos_virtual_desktop_command
+
+<table><tr><td>Description</td><td colspan="2">Non-singleton desktop surface launched when Moonlight selects the commandless Desktop app and automatic policy has created a SteamShine-owned private session. The command is not launched when a physical Desktop is selected or when SteamShine attaches to existing Game Mode.</td></tr><tr><td>Default</td><td colspan="2">@code{} plasmawindowed org.kde.plasma.folder @endcode</td></tr><tr><td>Example</td><td colspan="2">@code{} steamos_virtual_desktop_command = plasmawindowed org.kde.plasma.folder @endcode</td></tr></table>
+
+### steamos_runtime_directory
+
+<table><tr><td>Description</td><td colspan="2">Optional base directory for owned private Wayland runtime state. It must remain inside the current user's trusted runtime.</td></tr><tr><td>Default</td><td colspan="2">Empty; use a private directory below @code{} XDG_RUNTIME_DIR @endcode.</td></tr><tr><td>Example</td><td colspan="2">@code{} steamos_runtime_directory = /run/user/1000/steamshine @endcode</td></tr></table>
+
+### steamos_game_gpu
+
+<table><tr><td>Description</td><td colspan="2">Preferred game GPU as a PCI BDF or render node. Game, capture, and encoder selectors must resolve to the same verified GPU.</td></tr><tr><td>Default</td><td colspan="2">Empty; automatically resolve the active AMD render node.</td></tr><tr><td>Example</td><td colspan="2">@code{} steamos_game_gpu = /dev/dri/renderD128 @endcode</td></tr></table>
+
+### steamos_capture_gpu
+
+<table><tr><td>Description</td><td colspan="2">Preferred capture GPU as a PCI BDF or render node. A cross-GPU source is rejected.</td></tr><tr><td>Default</td><td colspan="2">Empty; use the verified game GPU.</td></tr><tr><td>Example</td><td colspan="2">@code{} steamos_capture_gpu = /dev/dri/renderD128 @endcode</td></tr></table>
+
+### steamos_encoder_gpu
+
+<table><tr><td>Description</td><td colspan="2">Preferred encoder GPU as a PCI BDF or render node. A cross-GPU encoder is rejected.</td></tr><tr><td>Default</td><td colspan="2">Empty; use the verified game GPU.</td></tr><tr><td>Example</td><td colspan="2">@code{} steamos_encoder_gpu = /dev/dri/renderD128 @endcode</td></tr></table>
+
+### steamos_pipewire_runtime
+
+<table><tr><td>Description</td><td colspan="2">Optional host PipeWire runtime directory. This endpoint stays separate from the private Wayland runtime and must be a trusted current-user directory.</td></tr><tr><td>Default</td><td colspan="2">Empty; retain the login session runtime.</td></tr><tr><td>Example</td><td colspan="2">@code{} steamos_pipewire_runtime = /run/user/1000 @endcode</td></tr></table>
+
+### steamos_pipewire_remote
+
+<table><tr><td>Description</td><td colspan="2">Optional host PipeWire remote socket name.</td></tr><tr><td>Default</td><td colspan="2">Empty; automatically use the login remote.</td></tr><tr><td>Example</td><td colspan="2">@code{} steamos_pipewire_remote = pipewire-0 @endcode</td></tr></table>
+
+### steamos_pipewire_node_timeout_ms
+
+<table><tr><td>Description</td><td colspan="2">Maximum milliseconds to wait for the verified Gamescope Video/Source node.</td></tr><tr><td>Default</td><td colspan="2">@code{} 10000 @endcode</td></tr><tr><td>Range</td><td colspan="2">1000 through 60000</td></tr></table>
+
+### steamos_startup_timeout_seconds
+
+<table><tr><td>Description</td><td colspan="2">Maximum seconds to wait for an owned private display to become ready.</td></tr><tr><td>Default</td><td colspan="2">@code{} 15 @endcode</td></tr><tr><td>Range</td><td colspan="2">1 through 60</td></tr></table>
+
+### steamos_shutdown_timeout_seconds
+
+<table><tr><td>Description</td><td colspan="2">Maximum seconds to wait for a SteamShine-owned process to stop before bounded forced cleanup.</td></tr><tr><td>Default</td><td colspan="2">@code{} 5 @endcode</td></tr><tr><td>Range</td><td colspan="2">1 through 60</td></tr></table>
+
+### steamos_default_width
+
+<table><tr><td>Description</td><td colspan="2">Fallback virtual-display width when a client request is unavailable.</td></tr><tr><td>Default</td><td colspan="2">@code{} 1920 @endcode</td></tr><tr><td>Range</td><td colspan="2">640 through 7680</td></tr></table>
+
+### steamos_default_height
+
+<table><tr><td>Description</td><td colspan="2">Fallback virtual-display height when a client request is unavailable.</td></tr><tr><td>Default</td><td colspan="2">@code{} 1080 @endcode</td></tr><tr><td>Range</td><td colspan="2">480 through 4320</td></tr></table>
+
+### steamos_default_fps
+
+<table><tr><td>Description</td><td colspan="2">Fallback virtual-display refresh rate when a client request is unavailable.</td></tr><tr><td>Default</td><td colspan="2">@code{} 60 @endcode</td></tr><tr><td>Range</td><td colspan="2">30 through 240</td></tr></table>
+
+### steamos_cleanup_orphan_sessions
+
+<table><tr><td>Description</td><td colspan="2">At startup, remove only marked orphan runtime directories that are contained below the trusted user runtime and owned by the current user.</td></tr><tr><td>Default</td><td colspan="2">@code{} enabled @endcode</td></tr><tr><td>Example</td><td colspan="2">@code{} steamos_cleanup_orphan_sessions = enabled @endcode</td></tr></table>
+
 ## NVIDIA NVENC Encoder
 
 ### nvenc_preset

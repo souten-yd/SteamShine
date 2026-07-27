@@ -29,7 +29,27 @@ namespace platf {
   }
 
   std::unique_ptr<client_input_t> allocate_client_input_context(input_t &input) {
+    auto *raw = static_cast<input_raw_t *>(input.get());
+    if (raw->gamescope_eis.refresh() == gamescope_input_result_e::blocked) {
+      BOOST_LOG(error) << "Gamescope input is fail-closed: " << raw->gamescope_eis.error();
+    }
     return std::make_unique<client_input_raw_t>(input);
+  }
+
+  input_route_diagnostics_t input_route_diagnostics(input_t &input) {
+    auto *const raw {static_cast<input_raw_t *>(input.get())};
+    if (!raw) {
+      return {"unavailable", "input_backend_unavailable"};
+    }
+    switch (raw->gamescope_eis.refresh()) {
+      case gamescope_input_result_e::desktop:
+        return {"desktop", ""};
+      case gamescope_input_result_e::delivered:
+        return {"gamescope_eis", ""};
+      case gamescope_input_result_e::blocked:
+        return {"gamescope_blocked", raw->gamescope_eis.error()};
+    }
+    return {"unavailable", "input_route_unknown"};
   }
 
   /**

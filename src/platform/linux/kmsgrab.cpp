@@ -1719,7 +1719,7 @@ namespace platf {
        * @return Capture status reported to the streaming pipeline.
        */
       int dummy_img(platf::img_t *img) override {
-        return 0;
+        return fill_image_black(img);
       }
 
       gbm::gbm_t gbm;  ///< GBM device used for buffer allocation.

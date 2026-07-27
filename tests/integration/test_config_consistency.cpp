@@ -32,6 +32,7 @@ protected:
       {"Network", "network"},
       {"Config Files", "files"},
       {"Advanced", "advanced"},
+      {"SteamOS Virtual Display", "steamos-display"},
       {"NVIDIA NVENC Encoder", "nv"},
       {"Intel QuickSync Encoder", "qsv"},
       {"AMD AMF Encoder", "amd"},

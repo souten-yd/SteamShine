@@ -43,6 +43,52 @@ using namespace std::literals;
 namespace video {
 
   namespace {
+    std::atomic_uint64_t capture_queue_current {0};  ///< Captured images waiting for encode.
+    std::atomic_uint64_t capture_queue_max {0};  ///< Capture handoff high-water mark.
+    std::atomic_uint64_t capture_frames_replaced {0};  ///< Latest-frame-wins capture replacements.
+    std::atomic_uint64_t encoder_queue_current {0};  ///< Frames currently executing in an encoder.
+    std::atomic_uint64_t encoder_queue_max {0};  ///< Encoder occupancy high-water mark.
+    std::atomic_uint64_t network_queue_bytes {0};  ///< Encoded bytes waiting for packetization.
+    std::atomic_uint64_t network_queue_frames {0};  ///< Encoded frames waiting for packetization.
+    std::atomic_uint64_t network_queue_frames_max {0};  ///< Network queue high-water mark.
+    std::atomic_uint64_t socket_outq_bytes {0};  ///< Latest kernel socket output queue.
+    std::atomic_uint64_t socket_outq_bytes_max {0};  ///< Kernel socket output-queue high-water mark.
+    std::atomic_uint64_t idr_requests {0};  ///< Accepted IDR requests.
+    std::atomic_uint64_t idr_emitted {0};  ///< Encoded IDR frames.
+    std::atomic_uint64_t idr_reason_client_request {0};  ///< IDRs emitted for client requests.
+    std::atomic_uint64_t idr_reason_recovery {0};  ///< IDRs emitted for recovery.
+    std::atomic_uint64_t idr_reason_periodic {0};  ///< Periodic encoder IDRs.
+    std::atomic_uint64_t idr_reason_reconnect {0};  ///< Initial reconnect IDRs.
+    std::atomic_int pending_idr_reason {-1};  ///< Reason submitted for the next forced IDR.
+    std::atomic_int64_t last_client_idr_request_microseconds {0};  ///< Client-request rate-limit timestamp.
+    latency_diagnostics::fixed_ring_t<> frame_age_at_capture;  ///< Fixed-memory capture-age samples.
+    latency_diagnostics::fixed_ring_t<> frame_age_at_encode;  ///< Fixed-memory encode-age samples.
+    latency_diagnostics::fixed_ring_t<> frame_age_at_network;  ///< Fixed-memory network-age samples.
+
+    /**
+     * @brief Atomically update an unsigned high-water mark.
+     *
+     * @param maximum High-water counter.
+     * @param value Newly observed value.
+     */
+    void update_maximum(std::atomic_uint64_t &maximum, const std::uint64_t value) {
+      auto current {maximum.load(std::memory_order_relaxed)};
+      while (current < value && !maximum.compare_exchange_weak(current, value, std::memory_order_relaxed)) {
+      }
+    }
+
+    /**
+     * @brief Subtract from an unsigned counter without wrapping below zero.
+     *
+     * @param counter Counter to reduce.
+     * @param value Amount to subtract.
+     */
+    void saturating_subtract(std::atomic_uint64_t &counter, const std::uint64_t value) {
+      auto current {counter.load(std::memory_order_relaxed)};
+      while (!counter.compare_exchange_weak(current, current > value ? current - value : 0, std::memory_order_relaxed)) {
+      }
+    }
+
     /**
      * @brief Check if we can allow probing for the encoders.
      * @return True if there should be no issues with the probing, false if we should prevent it.
@@ -72,6 +118,145 @@ namespace video {
       return false;
     }
   }  // namespace
+
+  void reset_pipeline_diagnostics() {
+    capture_queue_current.store(0, std::memory_order_relaxed);
+    capture_queue_max.store(0, std::memory_order_relaxed);
+    capture_frames_replaced.store(0, std::memory_order_relaxed);
+    encoder_queue_current.store(0, std::memory_order_relaxed);
+    encoder_queue_max.store(0, std::memory_order_relaxed);
+    network_queue_bytes.store(0, std::memory_order_relaxed);
+    network_queue_frames.store(0, std::memory_order_relaxed);
+    network_queue_frames_max.store(0, std::memory_order_relaxed);
+    socket_outq_bytes.store(0, std::memory_order_relaxed);
+    socket_outq_bytes_max.store(0, std::memory_order_relaxed);
+    idr_requests.store(0, std::memory_order_relaxed);
+    idr_emitted.store(0, std::memory_order_relaxed);
+    idr_reason_client_request.store(0, std::memory_order_relaxed);
+    idr_reason_recovery.store(0, std::memory_order_relaxed);
+    idr_reason_periodic.store(0, std::memory_order_relaxed);
+    idr_reason_reconnect.store(0, std::memory_order_relaxed);
+    pending_idr_reason.store(-1, std::memory_order_relaxed);
+    last_client_idr_request_microseconds.store(0, std::memory_order_relaxed);
+    frame_age_at_capture.reset();
+    frame_age_at_encode.reset();
+    frame_age_at_network.reset();
+  }
+
+  void record_capture_enqueued(const std::optional<std::chrono::steady_clock::time_point> &timestamp, const bool replaced_pending) {
+    capture_queue_current.store(1, std::memory_order_relaxed);
+    update_maximum(capture_queue_max, 1);
+    if (replaced_pending) {
+      capture_frames_replaced.fetch_add(1, std::memory_order_relaxed);
+    }
+    if (timestamp) {
+      frame_age_at_capture.record(std::chrono::steady_clock::now() - *timestamp);
+    }
+  }
+
+  void record_capture_dequeued() {
+    capture_queue_current.store(0, std::memory_order_relaxed);
+  }
+
+  void record_encode_started(const std::optional<std::chrono::steady_clock::time_point> &timestamp) {
+    const auto current {encoder_queue_current.fetch_add(1, std::memory_order_relaxed) + 1};
+    update_maximum(encoder_queue_max, current);
+    if (timestamp) {
+      frame_age_at_encode.record(std::chrono::steady_clock::now() - *timestamp);
+    }
+  }
+
+  void record_encode_finished() {
+    saturating_subtract(encoder_queue_current, 1);
+  }
+
+  void record_network_enqueued(const std::size_t bytes, const std::size_t queue_frames) {
+    network_queue_bytes.fetch_add(bytes, std::memory_order_relaxed);
+    network_queue_frames.store(queue_frames, std::memory_order_relaxed);
+    update_maximum(network_queue_frames_max, queue_frames);
+  }
+
+  void record_network_dequeued(
+    const std::size_t bytes,
+    const std::size_t queue_frames,
+    const std::optional<std::chrono::steady_clock::time_point> &timestamp
+  ) {
+    saturating_subtract(network_queue_bytes, bytes);
+    network_queue_frames.store(queue_frames, std::memory_order_relaxed);
+    if (timestamp) {
+      frame_age_at_network.record(std::chrono::steady_clock::now() - *timestamp);
+    }
+  }
+
+  void record_socket_outq(const std::uint64_t bytes) {
+    socket_outq_bytes.store(bytes, std::memory_order_relaxed);
+    update_maximum(socket_outq_bytes_max, bytes);
+  }
+
+  bool record_idr_request(const idr_reason_e reason) {
+    if (reason == idr_reason_e::client_request) {
+      constexpr std::int64_t duplicate_window_microseconds {250000};
+      const auto now {std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch()).count()};
+      auto previous {last_client_idr_request_microseconds.load(std::memory_order_relaxed)};
+      do {
+        if (previous != 0 && now - previous < duplicate_window_microseconds) {
+          return false;
+        }
+      } while (!last_client_idr_request_microseconds.compare_exchange_weak(previous, now, std::memory_order_relaxed));
+    }
+    idr_requests.fetch_add(1, std::memory_order_relaxed);
+    return true;
+  }
+
+  void record_idr_submitted(const idr_reason_e reason) {
+    pending_idr_reason.store(static_cast<int>(reason), std::memory_order_release);
+  }
+
+  void record_idr_emitted(const bool emitted) {
+    if (!emitted) {
+      return;
+    }
+    idr_emitted.fetch_add(1, std::memory_order_relaxed);
+    const auto reason {pending_idr_reason.exchange(-1, std::memory_order_acq_rel)};
+    switch (reason < 0 ? idr_reason_e::periodic : static_cast<idr_reason_e>(reason)) {
+      case idr_reason_e::client_request:
+        idr_reason_client_request.fetch_add(1, std::memory_order_relaxed);
+        break;
+      case idr_reason_e::recovery:
+        idr_reason_recovery.fetch_add(1, std::memory_order_relaxed);
+        break;
+      case idr_reason_e::periodic:
+        idr_reason_periodic.fetch_add(1, std::memory_order_relaxed);
+        break;
+      case idr_reason_e::reconnect:
+        idr_reason_reconnect.fetch_add(1, std::memory_order_relaxed);
+        break;
+    }
+  }
+
+  pipeline_diagnostics_t pipeline_diagnostics_snapshot() {
+    return {
+      .capture_queue_current = capture_queue_current.load(std::memory_order_relaxed),
+      .capture_queue_max = capture_queue_max.load(std::memory_order_relaxed),
+      .capture_frames_replaced = capture_frames_replaced.load(std::memory_order_relaxed),
+      .encoder_queue_current = encoder_queue_current.load(std::memory_order_relaxed),
+      .encoder_queue_max = encoder_queue_max.load(std::memory_order_relaxed),
+      .network_queue_bytes = network_queue_bytes.load(std::memory_order_relaxed),
+      .network_queue_frames = network_queue_frames.load(std::memory_order_relaxed),
+      .network_queue_frames_max = network_queue_frames_max.load(std::memory_order_relaxed),
+      .socket_outq_bytes = socket_outq_bytes.load(std::memory_order_relaxed),
+      .socket_outq_bytes_max = socket_outq_bytes_max.load(std::memory_order_relaxed),
+      .idr_requests = idr_requests.load(std::memory_order_relaxed),
+      .idr_emitted = idr_emitted.load(std::memory_order_relaxed),
+      .idr_reason_client_request = idr_reason_client_request.load(std::memory_order_relaxed),
+      .idr_reason_recovery = idr_reason_recovery.load(std::memory_order_relaxed),
+      .idr_reason_periodic = idr_reason_periodic.load(std::memory_order_relaxed),
+      .idr_reason_reconnect = idr_reason_reconnect.load(std::memory_order_relaxed),
+      .frame_age_at_capture_ms = frame_age_at_capture.snapshot(),
+      .frame_age_at_encode_ms = frame_age_at_encode.snapshot(),
+      .frame_age_at_network_ms = frame_age_at_network.snapshot(),
+    };
+  }
 
   /**
    * @brief Release context resources.
@@ -489,10 +674,12 @@ namespace video {
      *
      * @param first_frame First frame.
      * @param last_frame Last frame.
+     * @return True because this backend always falls back to a forced IDR.
      */
-    void invalidate_ref_frames(int64_t first_frame, int64_t last_frame) override {
+    bool invalidate_ref_frames(int64_t first_frame, int64_t last_frame) override {
       BOOST_LOG(error) << "Encoder doesn't support reference frame invalidation";
       request_idr_frame();
+      return true;
     }
 
     avcodec_ctx_t avcodec_ctx;  ///< FFmpeg codec context owned by the encode session.
@@ -553,15 +740,18 @@ namespace video {
      *
      * @param first_frame First frame.
      * @param last_frame Last frame.
+     * @return True when NVENC rejected in-place invalidation and an IDR was forced.
      */
-    void invalidate_ref_frames(int64_t first_frame, int64_t last_frame) override {
+    bool invalidate_ref_frames(int64_t first_frame, int64_t last_frame) override {
       if (!device || !device->nvenc) {
-        return;
+        return false;
       }
 
       if (!device->nvenc->invalidate_ref_frames(first_frame, last_frame)) {
         force_idr = true;
+        return true;
       }
+      return false;
     }
 
     /**
@@ -592,7 +782,7 @@ namespace video {
     safe::signal_t *join_event;  ///< Signal raised when the capture and encode workers should join.
     safe::mail_raw_t::event_t<bool> shutdown_event;  ///< Event raised when the stream should shut down.
     safe::mail_raw_t::queue_t<packet_t> packets;  ///< Queue receiving encoded video packets for the stream sender.
-    safe::mail_raw_t::event_t<bool> idr_events;  ///< Event raised when an IDR frame is requested.
+    safe::mail_raw_t::event_t<idr_reason_e> idr_events;  ///< Event carrying the reason for an IDR request.
     safe::mail_raw_t::event_t<hdr_info_t> hdr_events;  ///< Event carrying updated HDR metadata.
     safe::mail_raw_t::event_t<input::touch_port_t> touch_port_events;  ///< Event carrying updated touch viewport metadata.
 
@@ -1647,7 +1837,8 @@ namespace video {
           }
 
           if (frame_captured) {
-            capture_ctx->images->raise(img);
+            const bool replaced_pending {capture_ctx->images->raise_replacing(img)};
+            record_capture_enqueued(img->frame_timestamp, replaced_pending);
           }
 
           ++capture_ctx;
@@ -1828,7 +2019,11 @@ namespace video {
 
       packet->replacements = &session.replacements;
       packet->channel_data = channel_data;
-      packets->raise(std::move(packet));
+      const auto packet_bytes {packet->data_size()};
+      record_idr_emitted(packet->is_idr());
+      if (packets->raise(std::move(packet))) {
+        record_network_enqueued(packet_bytes, packets->size());
+      }
     }
 
     return 0;
@@ -1859,7 +2054,11 @@ namespace video {
     packet->channel_data = channel_data;
     packet->after_ref_frame_invalidation = encoded_frame.after_ref_frame_invalidation;
     packet->frame_timestamp = frame_timestamp;
-    packets->raise(std::move(packet));
+    const auto packet_bytes {packet->data_size()};
+    record_idr_emitted(packet->is_idr());
+    if (packets->raise(std::move(packet))) {
+      record_network_enqueued(packet_bytes, packets->size());
+    }
 
     return 0;
   }
@@ -2373,8 +2572,12 @@ namespace video {
     BOOST_LOG(info) << "Minimum FPS target set to ~"sv << minimum_fps_target << "fps ("sv << max_frametime.count() << "ms)"sv;
 
     auto shutdown_event = mail->event<bool>(mail::shutdown);
-    auto packets = mail::man->queue<packet_t>(mail::video_packets);
-    auto idr_events = mail->event<bool>(mail::idr);
+    auto packets = mail::man->queue<packet_t>(
+      mail::video_packets,
+      NETWORK_QUEUE_FRAME_LIMIT,
+      safe::queue_overflow_e::block_producer
+    );
+    auto idr_events = mail->event<idr_reason_e>(mail::idr);
     auto invalidate_ref_frames_events = mail->event<std::pair<int64_t, int64_t>>(mail::invalidate_ref_frames);
 
     {
@@ -2393,17 +2596,21 @@ namespace video {
 
       while (invalidate_ref_frames_events->peek()) {
         if (auto frames = invalidate_ref_frames_events->pop(0ms)) {
-          session->invalidate_ref_frames(frames->first, frames->second);
+          if (session->invalidate_ref_frames(frames->first, frames->second) && record_idr_request(idr_reason_e::recovery)) {
+            record_idr_submitted(idr_reason_e::recovery);
+          }
         }
       }
 
-      if (idr_events->peek()) {
+      idr_reason_e requested_idr_reason {idr_reason_e::periodic};
+      if (auto reason = idr_events->try_pop()) {
         requested_idr_frame = true;
-        idr_events->pop();
+        requested_idr_reason = *reason;
       }
 
       if (requested_idr_frame) {
         session->request_idr_frame();
+        record_idr_submitted(requested_idr_reason);
       }
 
       std::optional<std::chrono::steady_clock::time_point> frame_timestamp;
@@ -2412,6 +2619,7 @@ namespace video {
       if (!requested_idr_frame || images->peek()) {
         if (auto img = images->pop(max_frametime)) {
           frame_timestamp = img->frame_timestamp;
+          record_capture_dequeued();
           if (session->convert(*img)) {
             BOOST_LOG(error) << "Could not convert image"sv;
             return;
@@ -2435,6 +2643,10 @@ namespace video {
         break;
       }
 
+      record_encode_started(frame_timestamp);
+      const auto encode_guard {util::fail_guard([]() {
+        record_encode_finished();
+      })};
       if (encode(frame_nr++, *session, packets, channel_data, frame_timestamp)) {
         BOOST_LOG(error) << "Could not encode video packet"sv;
         return;
@@ -2676,6 +2888,10 @@ namespace video {
     auto ec = platf::capture_e::ok;
     while (encode_session_ctx_queue.running()) {
       auto push_captured_image_callback = [&](std::shared_ptr<platf::img_t> &&img, bool frame_captured) -> bool {
+        if (frame_captured) {
+          record_capture_enqueued(img ? img->frame_timestamp : std::nullopt, false);
+          record_capture_dequeued();
+        }
         while (encode_session_ctx_queue.peek()) {
           auto encode_session_ctx = encode_session_ctx_queue.pop();
           if (!encode_session_ctx) {
@@ -2711,9 +2927,9 @@ namespace video {
             continue;
           }
 
-          if (ctx->idr_events->peek()) {
+          if (auto reason = ctx->idr_events->try_pop()) {
             pos->session->request_idr_frame();
-            ctx->idr_events->pop();
+            record_idr_submitted(*reason);
           }
 
           if (frame_captured && pos->session->convert(*img)) {
@@ -2728,6 +2944,10 @@ namespace video {
             frame_timestamp = img->frame_timestamp;
           }
 
+          record_encode_started(frame_timestamp);
+          const auto encode_guard {util::fail_guard([]() {
+            record_encode_finished();
+          })};
           if (encode(ctx->frame_nr++, *pos->session, ctx->packets, ctx->channel_data, frame_timestamp)) {
             BOOST_LOG(error) << "Could not encode video packet"sv;
             ctx->shutdown_event->raise(true);
@@ -2903,9 +3123,12 @@ namespace video {
     config_t config,
     void *channel_data
   ) {
-    auto idr_events = mail->event<bool>(mail::idr);
+    reset_pipeline_diagnostics();
+    auto idr_events = mail->event<idr_reason_e>(mail::idr);
 
-    idr_events->raise(true);
+    if (record_idr_request(idr_reason_e::reconnect)) {
+      idr_events->raise(idr_reason_e::reconnect);
+    }
     if (chosen_encoder->flags & PARALLEL_ENCODING) {
       capture_async(std::move(mail), config, channel_data);
     } else {
@@ -2914,7 +3137,7 @@ namespace video {
       ref->encode_session_ctx_queue.raise(sync_session_ctx_t {
         &join_event,
         mail->event<bool>(mail::shutdown),
-        mail::man->queue<packet_t>(mail::video_packets),
+        mail::man->queue<packet_t>(mail::video_packets, NETWORK_QUEUE_FRAME_LIMIT, safe::queue_overflow_e::block_producer),
         std::move(idr_events),
         mail->event<hdr_info_t>(mail::hdr),
         mail->event<input::touch_port_t>(mail::touch_port),
@@ -2964,7 +3187,11 @@ namespace video {
 
     session->request_idr_frame();
 
-    auto packets = mail::man->queue<packet_t>(mail::video_packets);
+    auto packets = mail::man->queue<packet_t>(
+      mail::video_packets,
+      NETWORK_QUEUE_FRAME_LIMIT,
+      safe::queue_overflow_e::block_producer
+    );
     while (!packets->peek()) {
       if (encode(1, *session, packets, nullptr, {})) {
         return -1;

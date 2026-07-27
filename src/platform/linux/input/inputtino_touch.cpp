@@ -22,6 +22,34 @@ namespace platf::touch {
    * @brief Apply the supplied state update to the platform backend.
    */
   void update(client_input_raw_t *raw, const touch_port_t &touch_port, const touch_input_t &touch) {
+    const auto route {raw->global->gamescope_eis.refresh()};
+    if (route != gamescope_input_result_e::desktop) {
+      if (route == gamescope_input_result_e::blocked) {
+        raw->gamescope_pointer_state.reset();
+      }
+      if (route == gamescope_input_result_e::delivered) {
+        switch (touch.eventType) {
+          case LI_TOUCH_EVENT_HOVER:
+          case LI_TOUCH_EVENT_DOWN:
+          case LI_TOUCH_EVENT_MOVE:
+            raw->global->gamescope_eis.move_absolute(touch.x, touch.y);
+            if (touch.eventType == LI_TOUCH_EVENT_DOWN) {
+              if (const auto transition {raw->gamescope_pointer_state.update(gamescope_pointer_source_e::touch, true)}) {
+                raw->global->gamescope_eis.button(BTN_LEFT, *transition);
+              }
+            }
+            break;
+          case LI_TOUCH_EVENT_CANCEL:
+          case LI_TOUCH_EVENT_UP:
+          case LI_TOUCH_EVENT_HOVER_LEAVE:
+            if (const auto transition {raw->gamescope_pointer_state.update(gamescope_pointer_source_e::touch, false)}) {
+              raw->global->gamescope_eis.button(BTN_LEFT, *transition);
+            }
+            break;
+        }
+      }
+      return;
+    }
     if (raw->touch) {
       switch (touch.eventType) {
         case LI_TOUCH_EVENT_HOVER:

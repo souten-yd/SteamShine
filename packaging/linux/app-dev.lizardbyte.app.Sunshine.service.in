@@ -7,6 +7,8 @@ After=graphical-session.target xdg-desktop-autostart.target xdg-desktop-portal.s
 [Service]
 # Avoid starting Sunshine before the desktop is fully initialized.
 ExecStartPre=/bin/sleep 5
+PassEnvironment=XDG_RUNTIME_DIR WAYLAND_DISPLAY DISPLAY DBUS_SESSION_BUS_ADDRESS PIPEWIRE_REMOTE
+Environment=STEAMSHINE_LAUNCH_MODE=systemd_user_service
 @SUNSHINE_SERVICE_START_COMMAND@
 @SUNSHINE_SERVICE_STOP_COMMAND@
 Restart=on-failure

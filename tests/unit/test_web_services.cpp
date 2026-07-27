@@ -156,33 +156,101 @@ TEST(WebServicesTest, PersistsVirtualDisplayPolicyForRestart) {
   config::sunshine.config_file = temporary_config.string();
 
   web::ConfigurationService configuration;
-  const auto invalid = configuration.save_virtual_display(true, "FORCE");
+  const auto invalid = configuration.save_virtual_display(true, "FORCE", "auto", "auto", true, 0);
   EXPECT_FALSE(invalid.success);
   EXPECT_EQ(invalid.code, "invalid_virtual_display_mode");
 
-  const auto saved = configuration.save_virtual_display(true, "force");
+  const auto invalid_source = configuration.save_virtual_display(true, "force", "resident", "auto", true, 0);
+  EXPECT_FALSE(invalid_source.success);
+  EXPECT_EQ(invalid_source.code, "invalid_steamos_session_source");
+
+  const auto invalid_presentation = configuration.save_virtual_display(true, "force", "owned_private", "desktop", false, 0);
+  EXPECT_FALSE(invalid_presentation.success);
+  EXPECT_EQ(invalid_presentation.code, "invalid_steamos_local_presentation");
+
+  const auto invalid_pid = configuration.save_virtual_display(true, "force", "owned_private", "mirror", false, -1);
+  EXPECT_FALSE(invalid_pid.success);
+  EXPECT_EQ(invalid_pid.code, "invalid_steamos_existing_gamescope_pid");
+
+  const auto saved = configuration.save_virtual_display(true, "force", "owned_private", "mirror", false, 4321);
   EXPECT_TRUE(saved.success);
   EXPECT_EQ(saved.code, "restart_required");
   const auto persisted = file_handler::read_file(temporary_config.string().c_str());
   EXPECT_NE(persisted.find("custom_option = preserved"), std::string::npos);
   EXPECT_NE(persisted.find("steamos_virtual_display_enabled = enabled"), std::string::npos);
   EXPECT_NE(persisted.find("steamos_virtual_display_mode = force"), std::string::npos);
+  EXPECT_NE(persisted.find("steamos_session_source = owned_private"), std::string::npos);
+  EXPECT_NE(persisted.find("steamos_local_presentation = mirror"), std::string::npos);
+  EXPECT_NE(persisted.find("steamos_keep_session_alive = disabled"), std::string::npos);
+  EXPECT_NE(persisted.find("steamos_existing_gamescope_pid = 4321"), std::string::npos);
   const auto snapshot = configuration.snapshot();
   EXPECT_EQ(snapshot.at("steamos_virtual_display_enabled"), "enabled");
   EXPECT_EQ(snapshot.at("steamos_virtual_display_mode"), "force");
+  EXPECT_EQ(snapshot.at("steamos_session_source"), "owned_private");
+  EXPECT_EQ(snapshot.at("steamos_local_presentation"), "mirror");
+  EXPECT_EQ(snapshot.at("steamos_keep_session_alive"), "disabled");
+  EXPECT_EQ(snapshot.at("steamos_existing_gamescope_pid"), "4321");
 
   config::sunshine.config_file = original_config_file;
   fs::remove(temporary_config);
 }
 
 /**
- * @brief Verify the authenticated status payload always includes PipeWire diagnostics.
+ * @brief Verify the authenticated status payload includes PipeWire and ownership diagnostics.
  */
 TEST(WebServicesTest, StatusSnapshotIncludesPipeWireDiagnostics) {
   web::StatusSnapshotService status;
   const auto snapshot = status.snapshot();
 
+  EXPECT_EQ(snapshot.at("service_binary_commit"), PROJECT_VERSION_COMMIT);
+  EXPECT_EQ(snapshot.at("service_config_path"), config::sunshine.config_file);
+  EXPECT_EQ(snapshot.at("service_launch_mode"), "manual");
   EXPECT_TRUE(snapshot.contains("pipewire_runtime"));
+  EXPECT_TRUE(snapshot.contains("virtual_display_origin"));
+  EXPECT_TRUE(snapshot.contains("virtual_display_process_owned"));
+  EXPECT_TRUE(snapshot.contains("virtual_display_runtime_owned"));
+  EXPECT_TRUE(snapshot.contains("virtual_display_source_description"));
+  EXPECT_TRUE(snapshot.contains("virtual_display_source_executable"));
+  EXPECT_TRUE(snapshot.contains("steam_location"));
+  EXPECT_TRUE(snapshot.contains("migration_required"));
+  EXPECT_TRUE(snapshot.contains("app_launch_rejected_reason"));
+  EXPECT_TRUE(snapshot.contains("app_launch_rejected_message"));
+  EXPECT_TRUE(snapshot.contains("capture_selection_reason"));
+  EXPECT_TRUE(snapshot.contains("presentation"));
+  EXPECT_TRUE(snapshot.contains("local_presenter_active"));
+  EXPECT_TRUE(snapshot.contains("input_events_received"));
+  EXPECT_TRUE(snapshot.contains("input_events_injected"));
+  EXPECT_TRUE(snapshot.contains("input_motion_coalesced"));
+  EXPECT_TRUE(snapshot.contains("input_motion_dropped"));
+  EXPECT_TRUE(snapshot.contains("input_route_target"));
+  EXPECT_TRUE(snapshot.contains("input_route_error"));
+  EXPECT_TRUE(snapshot.contains("input_queue_current"));
+  EXPECT_TRUE(snapshot.contains("input_queue_max"));
+  ASSERT_TRUE(snapshot.contains("input_queue_age_ms"));
+  EXPECT_TRUE(snapshot.at("input_queue_age_ms").contains("count"));
+  EXPECT_TRUE(snapshot.at("input_queue_age_ms").contains("average"));
+  EXPECT_TRUE(snapshot.at("input_queue_age_ms").contains("p50"));
+  EXPECT_TRUE(snapshot.at("input_queue_age_ms").contains("p95"));
+  EXPECT_TRUE(snapshot.at("input_queue_age_ms").contains("p99"));
+  EXPECT_TRUE(snapshot.at("input_queue_age_ms").contains("max"));
+  EXPECT_TRUE(snapshot.contains("capture_queue_current"));
+  EXPECT_TRUE(snapshot.contains("capture_queue_max"));
+  EXPECT_TRUE(snapshot.contains("encoder_queue_current"));
+  EXPECT_TRUE(snapshot.contains("encoder_queue_max"));
+  EXPECT_TRUE(snapshot.contains("network_queue_bytes"));
+  EXPECT_TRUE(snapshot.contains("network_queue_frames"));
+  EXPECT_TRUE(snapshot.contains("socket_outq_bytes"));
+  EXPECT_TRUE(snapshot.contains("idr_requests"));
+  EXPECT_TRUE(snapshot.contains("idr_emitted"));
+  EXPECT_TRUE(snapshot.contains("idr_reason_client_request"));
+  EXPECT_TRUE(snapshot.contains("idr_reason_recovery"));
+  EXPECT_TRUE(snapshot.contains("idr_reason_periodic"));
+  EXPECT_TRUE(snapshot.contains("idr_reason_reconnect"));
+  EXPECT_TRUE(snapshot.at("frame_age_at_capture_ms").contains("p95"));
+  EXPECT_TRUE(snapshot.at("frame_age_at_encode_ms").contains("p95"));
+  EXPECT_TRUE(snapshot.at("frame_age_at_network_ms").contains("p95"));
+  EXPECT_TRUE(snapshot.contains("local_presented_frames"));
+  EXPECT_TRUE(snapshot.contains("local_dropped_frames"));
   EXPECT_TRUE(snapshot.contains("pipewire_remote"));
   EXPECT_TRUE(snapshot.contains("pipewire_node_id"));
   EXPECT_TRUE(snapshot.contains("pipewire_object_serial"));
@@ -190,4 +258,17 @@ TEST(WebServicesTest, StatusSnapshotIncludesPipeWireDiagnostics) {
   EXPECT_EQ(snapshot.at("pipewire_node_id"), 0);
   EXPECT_EQ(snapshot.at("pipewire_object_serial"), 0);
   EXPECT_EQ(snapshot.at("pipewire_producer_pid"), -1);
+}
+
+/**
+ * @brief Verify resident Gamescope discovery exposes only a bounded public schema.
+ */
+TEST(WebServicesTest, GamescopeSourceDiscoveryHasBoundedSchema) {
+  web::ConfigurationService configuration;
+  const auto snapshot = configuration.gamescope_sources();
+
+  EXPECT_TRUE(snapshot.contains("available"));
+  EXPECT_TRUE(snapshot.contains("error"));
+  ASSERT_TRUE(snapshot.contains("sources"));
+  EXPECT_TRUE(snapshot.at("sources").is_array());
 }

@@ -5,6 +5,17 @@
   "apps": [
     {
       "name": "Desktop",
+      "image-path": "desktop.png",
+      "prep-cmd": [
+        {
+          "do": "$(HOME)/.local/share/steamshine/current/scripts/configure-steamos-client-display.py apply",
+          "undo": "$(HOME)/.local/share/steamshine/current/scripts/configure-steamos-client-display.py revert"
+        }
+      ]
+    },
+    {
+      "name": "Input Latency Visualizer",
+      "cmd": "steamshine-input-visualizer",
       "image-path": "desktop.png"
     },
     {
@@ -23,6 +34,10 @@
         "setsid steam steam://open/bigpicture"
       ],
       "prep-cmd": [
+        {
+          "do": "$(HOME)/.local/share/steamshine/current/scripts/configure-steamos-client-display.py apply",
+          "undo": "$(HOME)/.local/share/steamshine/current/scripts/configure-steamos-client-display.py revert"
+        },
         {
           "do": "",
           "undo": "setsid steam steam://close/bigpicture"

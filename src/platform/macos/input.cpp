@@ -633,6 +633,11 @@ const KeyCodeMap kKeyCodesMap[] = {
     return nullptr;
   }
 
+  input_route_diagnostics_t input_route_diagnostics(input_t &input) {
+    (void) input;
+    return {"desktop", ""};
+  }
+
   /**
    * @brief Sends a touch event to the OS.
    * @param input The client-specific input context.

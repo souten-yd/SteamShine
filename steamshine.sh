@@ -86,6 +86,7 @@ configure() {
 steamos_virtual_display_enabled = false
 steamos_virtual_display_mode = auto
 steamos_gamescope_path = ${GAMESCOPE_PATH}
+steamos_virtual_desktop_command = plasmawindowed org.kde.plasma.folder
 steamos_runtime_directory = ${XDG_RUNTIME_DIR}/steamshine
 steamos_game_gpu = ${GAME_GPU}
 steamos_capture_gpu = ${CAPTURE_GPU}
@@ -109,6 +110,8 @@ After=graphical-session.target
 StartLimitIntervalSec=60
 StartLimitBurst=3
 [Service]
+PassEnvironment=XDG_RUNTIME_DIR WAYLAND_DISPLAY DISPLAY DBUS_SESSION_BUS_ADDRESS PIPEWIRE_REMOTE
+Environment=STEAMSHINE_LAUNCH_MODE=systemd_user_service
 ExecStart=${PREFIX}/bin/steamshine ${CONFIG_FILE}
 Restart=on-failure
 RestartSec=5
@@ -170,7 +173,7 @@ install_artifact() {
   validate_artifact "${ARTIFACT_PATH}"
   mkdir -p "${HOME}/.cache/steamshine"; extract="$(mktemp -d "${HOME}/.cache/steamshine/extract.XXXXXX")"
   if ! tar --zstd -C "${extract}" -xf "${ARTIFACT_PATH}"; then rm -rf -- "${extract}"; die 'Artifact extraction failed.' "$EXIT_DEPENDENCY"; fi
-  if [[ ! -x "${extract}/bin/steamshine" || ! -f "${extract}/BUILD_INFO.json" || ! -f "${extract}/STEAMOS_BASELINE.json" ]]; then rm -rf -- "${extract}"; die 'Artifact layout is invalid.' "$EXIT_DEPENDENCY"; fi
+  if [[ ! -x "${extract}/bin/steamshine" || ! -x "${extract}/bin/steamshine-input-visualizer" || ! -f "${extract}/BUILD_INFO.json" || ! -f "${extract}/STEAMOS_BASELINE.json" ]]; then rm -rf -- "${extract}"; die 'Artifact layout is invalid.' "$EXIT_DEPENDENCY"; fi
   [[ "$(json_value target_architecture "${extract}/BUILD_INFO.json")" == x86_64 ]] || { rm -rf -- "${extract}"; die 'Artifact architecture is not x86_64.' "$EXIT_UNSUPPORTED"; }
   run mkdir -p "${versions}" "${PREFIX}/bin"; version="$(sha256sum "${ARTIFACT_PATH}" | awk '{print $1}')"
   if [[ -L "${target}/current" ]]; then previous="$(readlink -f -- "${target}/current" || true)"; fi
@@ -187,11 +190,43 @@ install_artifact() {
       printf '%s\n' "${previous}" >"${target}/rollback"
     fi
   fi
-  if ! "${DRY_RUN}"; then ln -s "${versions}/${version}" "${target}/current.next"; mv -Tf "${target}/current.next" "${target}/current"; ln -sfn "${target}/current/bin/steamshine" "${PREFIX}/bin/steamshine"; fi
+  if ! "${DRY_RUN}"; then
+    ln -s "${versions}/${version}" "${target}/current.next"
+    mv -Tf "${target}/current.next" "${target}/current"
+    ln -sfn "${target}/current/bin/steamshine" "${PREFIX}/bin/steamshine"
+    ln -sfn "${target}/current/bin/steamshine-input-visualizer" "${PREFIX}/bin/steamshine-input-visualizer"
+  fi
 }
-install() { install_artifact; configure; "${NO_SERVICE}" || install_service; }
+configured_apps_file() {
+  local configured=""
+  if [[ -r "${CONFIG_FILE}" ]]; then
+    configured="$(sed -nE 's/^[[:space:]]*file_apps[[:space:]]*=[[:space:]]*([^#]*[^#[:space:]])[[:space:]]*(#.*)?$/\1/p' "${CONFIG_FILE}" | tail -n1)"
+  fi
+  configured="${configured:-apps.json}"
+  if [[ "${configured}" == /* ]]; then
+    printf '%s\n' "${configured}"
+  else
+    printf '%s\n' "${HOME}/.config/sunshine/${configured}"
+  fi
+}
+migrate_existing_apps() {
+  local helper="${PREFIX}/share/steamshine/current/scripts/migrate-steamos-apps.py" apps_file
+  apps_file="$(configured_apps_file)"
+  if "${DRY_RUN}"; then say "[dry-run] migrate existing applications in ${apps_file}"; return; fi
+  [[ -x "${helper}" ]] || return 0
+  "${helper}" "${apps_file}" || die 'Existing Sunshine applications could not be migrated safely.' "${EXIT_CONFIG}"
+}
+install() { install_artifact; configure; migrate_existing_apps; "${NO_SERVICE}" || install_service; }
 virtual_display_enabled() { [[ -r "${CONFIG_FILE}" ]] && grep -Eq '^steamos_virtual_display_enabled[[:space:]]*=[[:space:]]*true[[:space:]]*$' "${CONFIG_FILE}"; }
-start() { "${NO_SERVICE}" && die 'start requires the user service.' "$EXIT_SERVICE"; if virtual_display_enabled; then compatibility_check; fi; systemctl --user is-active --quiet steamshine && { say 'Already running'; return; }; run systemctl --user enable --now steamshine || die 'Service failed to start.' "$EXIT_SERVICE"; }
+import_desktop_environment() {
+  local -a names=(XDG_RUNTIME_DIR WAYLAND_DISPLAY DISPLAY DBUS_SESSION_BUS_ADDRESS PIPEWIRE_REMOTE) values=() name
+  for name in "${names[@]}"; do
+    [[ -n "${!name:-}" ]] && values+=("${name}")
+  done
+  ((${#values[@]})) || return 0
+  run systemctl --user import-environment "${values[@]}"
+}
+start() { "${NO_SERVICE}" && die 'start requires the user service.' "$EXIT_SERVICE"; if virtual_display_enabled; then compatibility_check; fi; import_desktop_environment; systemctl --user is-active --quiet steamshine && { say 'Already running'; return; }; run systemctl --user enable --now steamshine || die 'Service failed to start.' "$EXIT_SERVICE"; }
 stop() { run systemctl --user stop steamshine; }
 status() { systemctl --user status steamshine --no-pager; }
 logs() { journalctl --user -u steamshine --no-pager -n 200; }
@@ -218,18 +253,18 @@ compatibility_check() {
   load_os_release
   [[ "${VERSION_ID:-}" == "${expected_version}" ]] || die "SteamOS VERSION_ID ${VERSION_ID:-unknown} is incompatible with artifact baseline ${expected_version}." "$EXIT_UNSUPPORTED"
   [[ "${BUILD_ID:-}" == "${expected_build}" ]] || die "SteamOS BUILD_ID ${BUILD_ID:-unknown} is incompatible with artifact baseline ${expected_build}." "$EXIT_UNSUPPORTED"
-  actual_glibc="$(ldd --version | awk 'NR == 1 { for (i = NF; i > 0; --i) if ($i ~ /^[0-9]+\.[0-9]+/) { print $i; exit } }')"
+  actual_glibc="$(ldd --version | awk 'NR == 1 { for (i = NF; i > 0; --i) if ($i ~ /^[0-9]+\.[0-9]+/) { version = $i; break } } END { print version }')"
   version_at_least "${actual_glibc}" "$(json_value max_glibc "${baseline}")" || die "Host glibc ${actual_glibc:-unknown} is older than the required ABI baseline." "$EXIT_UNSUPPORTED"
   actual_glibcxx="$(strings /usr/lib/libstdc++.so.6 2>/dev/null | grep -E '^GLIBCXX_[0-9]+(\.[0-9]+)+$' | sort -V | tail -1 || true)"
   version_at_least "${actual_glibcxx#GLIBCXX_}" "${expected_glibcxx}" || die "Host ${actual_glibcxx:-unknown} is older than required GLIBCXX_${expected_glibcxx}." "$EXIT_UNSUPPORTED"
   command -v gamescope >/dev/null || die 'Gamescope is required for a SteamOS virtual display.' "$EXIT_DEPENDENCY"
-  gamescope --help 2>&1 | grep -q -- '--backend' || die 'Gamescope lacks --backend required for headless operation.' "$EXIT_DEPENDENCY"
-  gamescope --help 2>&1 | grep -q -- '--prefer-vk-device' || die 'Gamescope lacks deterministic Vulkan device selection.' "$EXIT_DEPENDENCY"
+  gamescope --help 2>&1 | grep -- '--backend' >/dev/null || die 'Gamescope lacks --backend required for headless operation.' "$EXIT_DEPENDENCY"
+  gamescope --help 2>&1 | grep -- '--prefer-vk-device' >/dev/null || die 'Gamescope lacks deterministic Vulkan device selection.' "$EXIT_DEPENDENCY"
   actual_render="$(readlink -f -- "/dev/dri/by-path/pci-${expected_bdf}-render" 2>/dev/null || true)"
   [[ "${actual_render}" == "${expected_render}" && -r "${actual_render}" && -w "${actual_render}" ]] || die "Expected AMD render node ${expected_render} for ${expected_bdf} is unavailable." "$EXIT_DEPENDENCY"
   say 'GPU_DRM_AVAILABLE'
   say 'VULKAN_RENDER_AVAILABLE'
-  if command -v vulkaninfo >/dev/null && vulkaninfo --summary 2>/dev/null | grep -q 'VK_KHR_video_encode_h264'; then
+  if command -v vulkaninfo >/dev/null && vulkaninfo --summary 2>/dev/null | grep 'VK_KHR_video_encode_h264' >/dev/null; then
     say 'VULKAN_VIDEO_ENCODE_AVAILABLE'
   else
     say 'VULKAN_VIDEO_ENCODE_AVAILABLE=unverified; SteamShine will perform the authoritative Vulkan Video encoder probe at stream start.'
@@ -248,7 +283,7 @@ repair() { configure; "${NO_SERVICE}" || install_service; [[ -x "${PREFIX}/bin/s
 uninstall() {
   if "${PURGE}" && "${NON_INTERACTIVE}" && ! "${ASSUME_YES}"; then die '--purge in non-interactive mode requires --yes.' "$EXIT_USAGE"; fi
   "${NO_SERVICE}" || stop || true
-  run rm -f "$(service_file)" "${PREFIX}/bin/steamshine"
+  run rm -f "$(service_file)" "${PREFIX}/bin/steamshine" "${PREFIX}/bin/steamshine-input-visualizer"
   run rm -rf -- "${PREFIX}/share/steamshine" "${HOME}/.cache/steamshine" "${BUILD_DIR}" "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/steamshine"
   "${NO_SERVICE}" || run systemctl --user daemon-reload || true
   if "${PURGE}"; then run rm -rf -- "${HOME}/.config/steamshine" "${STATE_DIR}"; fi
@@ -259,7 +294,16 @@ rollback() {
   [[ -f "${target}/rollback" ]] || die 'No rollback snapshot is available.' "$EXIT_CONFIG"
   previous="$(<"${target}/rollback")"
   [[ -d "${previous}" ]] && path_within "${previous}" "${versions}" || die 'Rollback target is unsafe or unavailable.' "$EXIT_CONFIG"
-  if ! "${DRY_RUN}"; then ln -s "${previous}" "${target}/current.next"; mv -Tf "${target}/current.next" "${target}/current"; ln -sfn "${target}/current/bin/steamshine" "${PREFIX}/bin/steamshine"; fi
+  if ! "${DRY_RUN}"; then
+    ln -s "${previous}" "${target}/current.next"
+    mv -Tf "${target}/current.next" "${target}/current"
+    ln -sfn "${target}/current/bin/steamshine" "${PREFIX}/bin/steamshine"
+    if [[ -x "${target}/current/bin/steamshine-input-visualizer" ]]; then
+      ln -sfn "${target}/current/bin/steamshine-input-visualizer" "${PREFIX}/bin/steamshine-input-visualizer"
+    else
+      rm -f "${PREFIX}/bin/steamshine-input-visualizer"
+    fi
+  fi
   say 'Rolled back SteamShine artifact'
 }
 hardware_test() {

@@ -9,6 +9,7 @@
 
 // local includes
 #include "input.h"
+#include "latency_diagnostics.h"
 #include "platform/common.h"
 #include "thread_safe.h"
 #include "video_colorspace.h"
@@ -21,6 +22,17 @@ extern "C" {
 struct AVPacket;
 
 namespace video {
+  constexpr std::uint32_t NETWORK_QUEUE_FRAME_LIMIT = 2;  ///< Encoded frames retained before producer backpressure.
+
+  /**
+   * @brief Reasons that require or explain an IDR frame.
+   */
+  enum class idr_reason_e {
+    client_request,  ///< Moonlight explicitly requested a decoder refresh.
+    recovery,  ///< Reference-frame recovery required a full decoder refresh.
+    periodic,  ///< The encoder emitted an IDR without a pending external request.
+    reconnect,  ///< A newly connected or resumed decoder requires an initial IDR.
+  };
 
   /**
    * @brief Encoding configuration requested by a remote client.
@@ -94,6 +106,116 @@ namespace video {
    * @brief Shared event that transports captured images between capture and encode threads.
    */
   using img_event_t = std::shared_ptr<safe::event_t<std::shared_ptr<platf::img_t>>>;
+
+  /**
+   * @brief Bounded capture, encode, and network pipeline diagnostics.
+   */
+  struct pipeline_diagnostics_t {
+    std::uint64_t capture_queue_current {0};  ///< Captured images currently waiting for encode.
+    std::uint64_t capture_queue_max {0};  ///< Greatest captured-image queue depth.
+    std::uint64_t capture_frames_replaced {0};  ///< Older pending images replaced by a newer frame.
+    std::uint64_t encoder_queue_current {0};  ///< Frames currently executing in the encoder.
+    std::uint64_t encoder_queue_max {0};  ///< Greatest concurrent encoder occupancy.
+    std::uint64_t network_queue_bytes {0};  ///< Encoded bytes waiting for the video sender.
+    std::uint64_t network_queue_frames {0};  ///< Encoded frames waiting for the video sender.
+    std::uint64_t network_queue_frames_max {0};  ///< Greatest encoded-frame queue depth.
+    std::uint64_t socket_outq_bytes {0};  ///< Latest kernel video socket output-queue size.
+    std::uint64_t socket_outq_bytes_max {0};  ///< Greatest kernel video socket output-queue size.
+    std::uint64_t idr_requests {0};  ///< Accepted external and reconnect IDR requests.
+    std::uint64_t idr_emitted {0};  ///< IDR frames emitted by the encoder.
+    std::uint64_t idr_reason_client_request {0};  ///< Emitted IDRs attributed to a client request.
+    std::uint64_t idr_reason_recovery {0};  ///< Emitted IDRs attributed to reference recovery.
+    std::uint64_t idr_reason_periodic {0};  ///< Unrequested periodic IDRs emitted by the encoder.
+    std::uint64_t idr_reason_reconnect {0};  ///< Emitted initial IDRs attributed to connection setup.
+    latency_diagnostics::statistics_t frame_age_at_capture_ms;  ///< Source timestamp age when capture publishes a frame.
+    latency_diagnostics::statistics_t frame_age_at_encode_ms;  ///< Source timestamp age when encoding starts.
+    latency_diagnostics::statistics_t frame_age_at_network_ms;  ///< Source timestamp age when network packetization starts.
+  };
+
+  /**
+   * @brief Reset bounded pipeline counters at the start of a stream.
+   */
+  void reset_pipeline_diagnostics();
+
+  /**
+   * @brief Record one captured frame published to the one-frame encode handoff.
+   *
+   * @param timestamp Source frame timestamp when available.
+   * @param replaced_pending Whether the previous pending frame was replaced.
+   */
+  void record_capture_enqueued(const std::optional<std::chrono::steady_clock::time_point> &timestamp, bool replaced_pending);
+
+  /**
+   * @brief Record removal of a captured frame for conversion and encoding.
+   */
+  void record_capture_dequeued();
+
+  /**
+   * @brief Mark the beginning of one frame encode operation.
+   *
+   * @param timestamp Source frame timestamp when available.
+   */
+  void record_encode_started(const std::optional<std::chrono::steady_clock::time_point> &timestamp);
+
+  /**
+   * @brief Mark completion of one frame encode operation.
+   */
+  void record_encode_finished();
+
+  /**
+   * @brief Record an encoded frame after it enters the ordered network queue.
+   *
+   * @param bytes Encoded payload bytes.
+   * @param queue_frames Current bounded queue occupancy.
+   */
+  void record_network_enqueued(std::size_t bytes, std::size_t queue_frames);
+
+  /**
+   * @brief Record an encoded frame removed for packetization.
+   *
+   * @param bytes Encoded payload bytes.
+   * @param queue_frames Remaining bounded queue occupancy.
+   * @param timestamp Source frame timestamp when available.
+   */
+  void record_network_dequeued(std::size_t bytes, std::size_t queue_frames, const std::optional<std::chrono::steady_clock::time_point> &timestamp);
+
+  /**
+   * @brief Record the kernel output queue observed after sending a video frame.
+   *
+   * @param bytes Unsent bytes reported by the socket.
+   */
+  void record_socket_outq(std::uint64_t bytes);
+
+  /**
+   * @brief Record an accepted IDR request, rate-limiting duplicate client requests.
+   *
+   * Reconnect and recovery requests are never delayed.
+   *
+   * @param reason Reason supplied by the request source.
+   * @return True when the encoder should receive this request.
+   */
+  bool record_idr_request(idr_reason_e reason);
+
+  /**
+   * @brief Associate the next emitted IDR with a request consumed by the encoder.
+   *
+   * @param reason Reason consumed immediately before forcing the next frame.
+   */
+  void record_idr_submitted(idr_reason_e reason);
+
+  /**
+   * @brief Record an encoded IDR and classify unrequested frames as periodic.
+   *
+   * @param emitted Whether the encoded frame is an IDR.
+   */
+  void record_idr_emitted(bool emitted);
+
+  /**
+   * @brief Return an atomic snapshot of current pipeline diagnostics.
+   *
+   * @return Bounded counters and latency statistics.
+   */
+  pipeline_diagnostics_t pipeline_diagnostics_snapshot();
 
   /**
    * @brief Pixel formats supported by one encoder backend.
@@ -355,8 +477,9 @@ namespace video {
      *
      * @param first_frame First frame.
      * @param last_frame Last frame.
+     * @return True when recovery forced a new IDR instead of invalidating references in place.
      */
-    virtual void invalidate_ref_frames(int64_t first_frame, int64_t last_frame) = 0;
+    virtual bool invalidate_ref_frames(int64_t first_frame, int64_t last_frame) = 0;
   };
 
   // encoders

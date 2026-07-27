@@ -10,3 +10,20 @@ if(NOT FREEBSD)
         list(APPEND SUNSHINE_EXTERNAL_LIBRARIES -static-libstdc++)
     endif()
 endif()
+
+option(STEAMSHINE_BUILD_INPUT_VISUALIZER "Build the SteamShine fullscreen input-latency probe" ON)
+if(STEAMSHINE_BUILD_INPUT_VISUALIZER AND X11_FOUND AND X11_Xi_LIB)
+    add_executable(steamshine_input_visualizer
+        "${CMAKE_SOURCE_DIR}/tools/steamshine_input_visualizer.cpp")
+    target_include_directories(steamshine_input_visualizer PRIVATE
+        "${X11_INCLUDE_DIR}"
+        "${X11_Xi_INCLUDE_PATH}")
+    target_link_libraries(steamshine_input_visualizer PRIVATE
+        "${X11_LIBRARIES}"
+        "${X11_Xi_LIB}")
+    target_compile_options(steamshine_input_visualizer PRIVATE ${SUNSHINE_COMPILE_OPTIONS})
+    set_target_properties(steamshine_input_visualizer PROPERTIES
+        OUTPUT_NAME "steamshine-input-visualizer")
+    install(TARGETS steamshine_input_visualizer
+        RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
+endif()

@@ -22,6 +22,20 @@ namespace platf::pen {
    * @brief Apply the supplied state update to the platform backend.
    */
   void update(client_input_raw_t *raw, const touch_port_t &touch_port, const pen_input_t &pen) {
+    const auto route {raw->global->gamescope_eis.refresh()};
+    if (route != gamescope_input_result_e::desktop) {
+      if (route == gamescope_input_result_e::blocked) {
+        raw->gamescope_pointer_state.reset();
+      }
+      if (route == gamescope_input_result_e::delivered) {
+        raw->global->gamescope_eis.move_absolute(pen.x, pen.y);
+        const bool touching {pen.eventType == LI_TOUCH_EVENT_DOWN || pen.eventType == LI_TOUCH_EVENT_MOVE};
+        if (const auto transition {raw->gamescope_pointer_state.update(gamescope_pointer_source_e::pen, touching)}) {
+          raw->global->gamescope_eis.button(BTN_LEFT, *transition);
+        }
+      }
+      return;
+    }
     if (raw->pen) {
       // First set the buttons
       (*raw->pen).set_btn(inputtino::PenTablet::PRIMARY, pen.penButtons & LI_PEN_BUTTON_PRIMARY);

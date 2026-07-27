@@ -162,10 +162,55 @@ namespace platf::keyboard {
     {KEY_102ND, 0xE2}
   };
 
+  std::optional<std::uint32_t> linux_keycode(const std::uint16_t modcode) {
+    for (const auto &[linux_code, windows_code] : key_mappings) {
+      if (windows_code == modcode) {
+        return static_cast<std::uint32_t>(linux_code);
+      }
+    }
+    switch (modcode) {
+      case 0x0C:
+        return KEY_CLEAR;
+      case 0x12:
+        return KEY_LEFTALT;
+      case 0x13:
+        return KEY_PAUSE;
+      case 0x15:
+        return KEY_KATAKANAHIRAGANA;
+      case 0x16:
+        return KEY_HANGEUL;
+      case 0x17:
+        return KEY_HANJA;
+      case 0x19:
+        return KEY_KATAKANA;
+      case 0x29:
+        return KEY_SELECT;
+      case 0x2A:
+        return KEY_PRINT;
+      case 0x2F:
+        return KEY_HELP;
+      case 0x5D:
+        return KEY_COMPOSE;
+      case 0x5F:
+        return KEY_SLEEP;
+      case 0x6C:
+        return KEY_KPCOMMA;
+      default:
+        return std::nullopt;
+    }
+  }
+
   /**
    * @brief Apply the supplied state update to the platform backend.
    */
   void update(input_raw_t *raw, uint16_t modcode, bool release, uint8_t flags) {
+    if (const auto keycode {linux_keycode(modcode)}) {
+      if (raw->gamescope_eis.key(*keycode, !release) != gamescope_input_result_e::desktop) {
+        return;
+      }
+    } else if (raw->gamescope_eis.refresh() != gamescope_input_result_e::desktop) {
+      return;
+    }
     if (raw->keyboard) {
       if (release) {
         (*raw->keyboard).release(modcode);
@@ -179,6 +224,10 @@ namespace platf::keyboard {
    * @brief Submit UTF-8 text input to the keyboard backend.
    */
   void unicode(input_raw_t *raw, char *utf8, int size) {
+    if (raw->gamescope_eis.refresh() != gamescope_input_result_e::desktop) {
+      BOOST_LOG(warning) << "Gamescope EIS text input is unavailable; physical desktop fallback is blocked";
+      return;
+    }
     if (raw->keyboard) {
       /* Reading input text as UTF-8 */
       auto utf8_str = boost::locale::conv::to_utf<wchar_t>(utf8, utf8 + size, "UTF-8");

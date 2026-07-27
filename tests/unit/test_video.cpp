@@ -4,6 +4,7 @@
  */
 #include "../tests_common.h"
 
+#include <future>
 #include <src/video.h>
 
 struct EncoderTest: PlatformTestSuite, testing::WithParamInterface<video::encoder_t *> {
@@ -122,3 +123,96 @@ INSTANTIATE_TEST_SUITE_P(
     std::make_tuple(120, 11988, std::chrono::nanoseconds {8341666})  // 1e9 * 1001 / 120000
   )
 );
+
+/**
+ * @brief Verify bounded pipeline counters and age samples are resettable.
+ */
+TEST(VideoPipelineDiagnostics, RecordsBoundedStages) {
+  video::reset_pipeline_diagnostics();
+  const auto timestamp {std::chrono::steady_clock::now() - std::chrono::milliseconds {2}};
+
+  video::record_capture_enqueued(timestamp, false);
+  video::record_capture_enqueued(timestamp, true);
+  video::record_capture_dequeued();
+  video::record_encode_started(timestamp);
+  video::record_encode_finished();
+  video::record_network_enqueued(1000, 1);
+  video::record_network_enqueued(500, 2);
+  video::record_network_dequeued(1000, 1, timestamp);
+  video::record_socket_outq(4096);
+  EXPECT_TRUE(video::record_idr_request(video::idr_reason_e::reconnect));
+  video::record_idr_submitted(video::idr_reason_e::reconnect);
+  video::record_idr_emitted(true);
+  video::record_idr_emitted(true);
+
+  const auto snapshot {video::pipeline_diagnostics_snapshot()};
+  EXPECT_EQ(snapshot.capture_queue_current, 0U);
+  EXPECT_EQ(snapshot.capture_queue_max, 1U);
+  EXPECT_EQ(snapshot.capture_frames_replaced, 1U);
+  EXPECT_EQ(snapshot.encoder_queue_current, 0U);
+  EXPECT_EQ(snapshot.encoder_queue_max, 1U);
+  EXPECT_EQ(snapshot.network_queue_bytes, 500U);
+  EXPECT_EQ(snapshot.network_queue_frames, 1U);
+  EXPECT_EQ(snapshot.network_queue_frames_max, 2U);
+  EXPECT_EQ(snapshot.socket_outq_bytes, 4096U);
+  EXPECT_EQ(snapshot.socket_outq_bytes_max, 4096U);
+  EXPECT_EQ(snapshot.idr_requests, 1U);
+  EXPECT_EQ(snapshot.idr_emitted, 2U);
+  EXPECT_EQ(snapshot.idr_reason_reconnect, 1U);
+  EXPECT_EQ(snapshot.idr_reason_periodic, 1U);
+  EXPECT_EQ(snapshot.frame_age_at_capture_ms.count, 2U);
+  EXPECT_EQ(snapshot.frame_age_at_encode_ms.count, 1U);
+  EXPECT_EQ(snapshot.frame_age_at_network_ms.count, 1U);
+}
+
+/**
+ * @brief Verify duplicate client IDR requests are limited without delaying recovery.
+ */
+TEST(VideoPipelineDiagnostics, RateLimitsOnlyDuplicateClientIdrRequests) {
+  video::reset_pipeline_diagnostics();
+
+  EXPECT_TRUE(video::record_idr_request(video::idr_reason_e::client_request));
+  EXPECT_FALSE(video::record_idr_request(video::idr_reason_e::client_request));
+  EXPECT_TRUE(video::record_idr_request(video::idr_reason_e::recovery));
+  EXPECT_TRUE(video::record_idr_request(video::idr_reason_e::reconnect));
+
+  const auto snapshot {video::pipeline_diagnostics_snapshot()};
+  EXPECT_EQ(snapshot.idr_requests, 3U);
+}
+
+/**
+ * @brief Verify a slow encoder observes only the newest pending capture frame.
+ */
+TEST(VideoPipelineBackpressure, SlowEncoderRetainsNewestPendingCapture) {
+  safe::event_t<std::uint64_t> capture_handoff;
+  EXPECT_FALSE(capture_handoff.raise_replacing(41U));
+  EXPECT_TRUE(capture_handoff.raise_replacing(42U));
+
+  const auto newest {capture_handoff.pop()};
+  ASSERT_TRUE(newest);
+  EXPECT_EQ(*newest, 42U);
+  EXPECT_FALSE(capture_handoff.try_pop());
+}
+
+/**
+ * @brief Verify a slow network consumer preserves order within the two-frame bound.
+ */
+TEST(VideoPipelineBackpressure, SlowNetworkConsumerAppliesOrderedBackpressure) {
+  safe::queue_t<std::uint64_t> network_queue {
+    video::NETWORK_QUEUE_FRAME_LIMIT,
+    safe::queue_overflow_e::block_producer
+  };
+  ASSERT_TRUE(network_queue.raise(1U));
+  ASSERT_TRUE(network_queue.raise(2U));
+
+  auto producer = std::async(std::launch::async, [&network_queue]() {
+    return network_queue.raise(3U);
+  });
+  EXPECT_EQ(producer.wait_for(std::chrono::milliseconds {20}), std::future_status::timeout);
+  EXPECT_EQ(network_queue.size(), video::NETWORK_QUEUE_FRAME_LIMIT);
+  EXPECT_EQ(network_queue.pop(std::chrono::seconds {1}), 1U);
+  EXPECT_EQ(producer.wait_for(std::chrono::seconds {1}), std::future_status::ready);
+  EXPECT_TRUE(producer.get());
+  EXPECT_EQ(network_queue.pop(std::chrono::seconds {1}), 2U);
+  EXPECT_EQ(network_queue.pop(std::chrono::seconds {1}), 3U);
+}

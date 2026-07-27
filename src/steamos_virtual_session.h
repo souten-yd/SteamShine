@@ -4,6 +4,7 @@
  */
 #pragma once
 
+#include "platform/linux/pipewire_capture.h"
 #include "steamos_virtual_session_core.h"
 
 #include <cstddef>
@@ -38,6 +39,21 @@ namespace steamos_virtual_session {
    */
   struct status_snapshot_t {
     state_e state {state_e::Disabled};  ///< Current lifecycle state.
+    session_origin_e origin {session_origin_e::none};  ///< Origin of the selected Gamescope source.
+    bool process_owned {false};  ///< Whether SteamShine may signal the Gamescope process group.
+    bool runtime_owned {false};  ///< Whether SteamShine may remove the session runtime directory.
+    std::string source_description;  ///< Human-readable verified PipeWire source description.
+    std::string source_executable;  ///< Verified Gamescope executable path.
+    uint64_t source_process_start_time {0};  ///< Verified Gamescope `/proc` start time.
+    std::string steam_location;  ///< Steam singleton location relative to the selected Gamescope.
+    bool migration_required {false};  ///< Whether an explicitly confirmed Desktop Steam migration is required.
+    std::string app_launch_rejected_reason;  ///< Stable machine-readable reason for the latest rejected application launch.
+    std::string app_launch_rejected_message;  ///< Safe operator-facing detail for the latest rejected application launch.
+    std::string selection_reason;  ///< Stable reason for selecting Desktop capture or a Gamescope source.
+    presentation_e presentation {presentation_e::remote_only};  ///< Desired remote/local presentation paths.
+    bool local_presenter_active {false};  ///< Whether a local presenter has attached successfully.
+    uint64_t local_presented_frames {0};  ///< Frames shown by the local presenter.
+    uint64_t local_dropped_frames {0};  ///< Latest-frame-wins drops by the local presenter.
     std::string runtime_directory;  ///< Owned runtime directory, when active.
     std::string socket_path;  ///< Private Gamescope Wayland socket, when ready.
     std::string pci_bdf;  ///< Selected AMD PCI BDF, when available.
@@ -92,6 +108,24 @@ namespace steamos_virtual_session {
   bool capture_backend_required();
 
   /**
+   * @brief Check whether a physical DRM connector is connected.
+   *
+   * @return True when a non-writeback physical connector reports connected.
+   */
+  bool physical_output_connected();
+
+  /**
+   * @brief Publish whether the compositor exposed a physical Desktop capture source.
+   *
+   * Linux platform initialization calls this after KWin and Portal
+   * enumeration so the later Moonlight launch decision uses the same source
+   * evidence as encoder probing.
+   *
+   * @param available Whether a compositor capture source is currently available.
+   */
+  void set_physical_compositor_capture_available(bool available);
+
+  /**
    * @brief Remove stale runtime sessions that are provably owned by SteamShine.
    *
    * This is called once during normal service startup. It only considers
@@ -106,16 +140,16 @@ namespace steamos_virtual_session {
   void mark_streaming();
 
   /**
-   * @brief Suspend packet accounting while retaining the owned virtual session.
+   * @brief Handle stream disconnection according to the owned-session policy.
    *
-   * A transient Moonlight disconnect must not terminate the application or its
-   * Gamescope session. A later `/resume` request calls @ref mark_streaming to
-   * attach a new stream to the retained virtual display.
+   * A transient Moonlight disconnect retains the session by default. When
+   * @c steamos_keep_session_alive is disabled, only a SteamShine-owned session
+   * is stopped; an attached Game Mode session is always left untouched.
    */
   void mark_streaming_disconnected();
 
   /**
-   * @brief Record one encoded video packet for the owned virtual session.
+   * @brief Record one encoded video packet for the active virtual session.
    *
    * This is an in-memory, lock-free counter used only for the final lifecycle
    * report. It deliberately performs no file or network I/O on the video
@@ -151,6 +185,21 @@ namespace steamos_virtual_session {
   bool application_environment(std::string &runtime_directory, std::string &wayland_display, std::string &pipewire_runtime, std::string &pipewire_remote, std::string &pulse_runtime);
 
   /**
+   * @brief Check whether a configured command may start or address Steam.
+   *
+   * Every Steam request rechecks the live process placement. Steam commands
+   * are rejected when an existing instance is outside the selected Gamescope
+   * or its placement cannot be verified. This avoids silently creating a
+   * second Steam instance while allowing ordinary non-Steam applications to
+   * run normally.
+   *
+   * @param command Configured application command.
+   * @param error_message Human-readable rejection reason.
+   * @return True when the command is safe to execute.
+   */
+  bool steam_command_allowed(std::string_view command, std::string &error_message);
+
+  /**
    * @brief Return the absolute path to the owned Wayland socket for capture.
    *
    * Capture backends use this path to create their own socket connection rather
@@ -181,14 +230,48 @@ namespace steamos_virtual_session {
   bool encoder_render_node(std::string &render_node);
 
   /**
-   * @brief Return the verified host PipeWire endpoint and owned Gamescope PID.
+   * @brief Return the verified host PipeWire endpoint and selected Gamescope PID.
    *
    * @param runtime_directory Receives the host PipeWire runtime directory.
    * @param remote_name Receives the host PipeWire remote name.
-   * @param gamescope_pid Receives the owned Gamescope process-group leader.
-   * @return True only while an owned session can use its host PipeWire endpoint.
+   * @param gamescope_pid Receives the selected Gamescope producer PID.
+   * @return True only while an active session can use its host PipeWire endpoint.
    */
   bool gamescope_pipewire_endpoint(std::string &runtime_directory, std::string &remote_name, int &gamescope_pid);
+
+  /**
+   * @brief Test whether input must be isolated to a selected Gamescope source.
+   *
+   * @return True while an owned or attached Gamescope session is streamable.
+   */
+  bool gamescope_input_required();
+
+  /**
+   * @brief Resolve the EIS input socket owned by the selected verified Gamescope process.
+   *
+   * The socket is accepted only when its inode is held by the selected PID,
+   * its path remains inside the selected runtime, and it is a current-user
+   * UNIX-domain socket.
+   *
+   * @param socket_path Receives the absolute EIS socket path.
+   * @param error Receives a stable failure reason without credentials.
+   * @return True when input can be bound to the selected Gamescope session.
+   */
+  bool gamescope_input_endpoint(std::string &socket_path, std::string &error);
+
+  /**
+   * @brief Open one dedicated PipeWire connection for the verified source.
+   *
+   * Every caller receives a new connection FD. The remote encoder and local
+   * presenter therefore share source identity only, never a PipeWire core or
+   * queue. The source is rediscovered and checked against its PID, start time,
+   * object serial, and render node before the FD is returned.
+   *
+   * @param descriptor Receives the dedicated consumer descriptor.
+   * @param error Receives a human-readable validation or socket error.
+   * @return True only when the returned descriptor is still verified.
+   */
+  bool open_verified_gamescope_pipewire_consumer(pipewire_capture::stream_descriptor_t &descriptor, std::string &error);
 
   /**
    * @brief Record the identity of the verified owned Gamescope PipeWire node.

@@ -6,6 +6,9 @@
 
 #include "config.h"
 #include "logging.h"
+#include "platform/linux/gamescope_source.h"
+#include "platform/linux/host_desktop_endpoint.h"
+#include "platform/linux/steam_session.h"
 #include "rtsp.h"
 
 #include <algorithm>
@@ -13,6 +16,7 @@
 #include <atomic>
 #include <cctype>
 #include <cerrno>
+#include <charconv>
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
@@ -41,10 +45,27 @@
 
 namespace steamos_virtual_session {
   namespace {
+    std::atomic_bool physical_compositor_capture_available {false};  ///< Latest host compositor capture observation.
+
     struct manager_t {
       std::mutex mutex;  ///< Serializes virtual-session state transitions.
       state_e current {state_e::Disabled};  ///< Current lifecycle state.
       std::filesystem::path runtime_directory;  ///< Runtime path uniquely owned by this process.
+      session_origin_e origin {session_origin_e::none};  ///< Origin of the selected Gamescope session.
+      bool process_owned {false};  ///< Whether SteamShine may stop the selected process group.
+      bool runtime_owned {false};  ///< Whether SteamShine may remove the selected runtime directory.
+      std::string source_description;  ///< Human-readable verified source description.
+      std::string source_executable;  ///< Verified Gamescope executable path.
+      uint64_t source_process_start_time {0};  ///< Verified Gamescope process start time.
+      std::string steam_location {"unknown"};  ///< Steam singleton location relative to the selected Gamescope.
+      bool migration_required {false};  ///< Whether Desktop Steam needs an explicitly confirmed migration.
+      std::string app_launch_rejected_reason;  ///< Stable reason for the latest application launch rejection.
+      std::string app_launch_rejected_message;  ///< Safe detail for the latest application launch rejection.
+      std::string selection_reason;  ///< Stable reason for the current Desktop or Gamescope capture choice.
+      presentation_e presentation {presentation_e::remote_only};  ///< Desired remote/local presentation paths.
+      bool local_presenter_active {false};  ///< Whether a local presenter has attached successfully.
+      std::atomic_uint64_t local_presented_frames {0};  ///< Frames displayed locally.
+      std::atomic_uint64_t local_dropped_frames {0};  ///< Latest-frame-wins drops locally.
       std::string pipewire_runtime;  ///< Host PipeWire runtime retained for owned children.
       std::string pipewire_remote;  ///< Host PipeWire remote retained for owned children.
       std::optional<uint32_t> pipewire_node_id;  ///< Verified current-core Gamescope PipeWire node ID.
@@ -54,6 +75,7 @@ namespace steamos_virtual_session {
       int width {0};  ///< Requested virtual-display width in pixels.
       int height {0};  ///< Requested virtual-display height in pixels.
       int fps {0};  ///< Requested virtual-display refresh rate.
+      bool hdr {false};  ///< Whether the retained owned display was created for HDR.
       std::string pci_bdf;  ///< PCI BDF of the AMD dGPU selected for Gamescope, capture, and encoding.
       std::string render_node;  ///< AMD dGPU render node shared by Gamescope, capture, and encoders.
       bool stream_requested {false};  ///< Whether RTSP accepted the associated stream before capture attached.
@@ -186,6 +208,35 @@ namespace steamos_virtual_session {
     }
 
     /**
+     * @brief Read UNIX socket inodes currently held by one verified process.
+     *
+     * @param process Process whose file descriptors are inspected.
+     * @return Socket inode numbers parsed from `/proc/<pid>/fd` links.
+     */
+    std::vector<std::uint64_t> process_socket_inodes(const pid_t process) {
+      std::vector<std::uint64_t> inodes;
+      std::error_code error;
+      const auto descriptor_directory {std::filesystem::path {"/proc"} / std::to_string(process) / "fd"};
+      for (const auto &entry : std::filesystem::directory_iterator {descriptor_directory, error}) {
+        if (error) {
+          break;
+        }
+        const auto target {std::filesystem::read_symlink(entry.path(), error).string()};
+        if (error || !target.starts_with("socket:[") || !target.ends_with(']')) {
+          error.clear();
+          continue;
+        }
+        const auto value {std::string_view {target}.substr(8, target.size() - 9)};
+        std::uint64_t inode {};
+        const auto parsed {std::from_chars(value.data(), value.data() + value.size(), inode)};
+        if (parsed.ec == std::errc {} && parsed.ptr == value.data() + value.size()) {
+          inodes.emplace_back(inode);
+        }
+      }
+      return inodes;
+    }
+
+    /**
      * @brief Gracefully stop an owned process group and force-stop remaining children.
      *
      * @param process_group Process group established by SteamShine before exec.
@@ -216,14 +267,29 @@ namespace steamos_virtual_session {
      */
     void recover_failed_session_locked() {
 #if defined(__linux__)
-      if (manager.process_group > 0) {
+      if (manager.process_owned && manager.process_group > 0) {
         stop_owned_process_group(manager.process_group, std::chrono::seconds {config::steamos_virtual_display.shutdown_timeout_seconds});
       }
       manager.process_group = -1;
 #endif
       std::error_code error;
-      std::filesystem::remove_all(manager.runtime_directory, error);
+      if (manager.runtime_owned) {
+        std::filesystem::remove_all(manager.runtime_directory, error);
+      }
       manager.runtime_directory.clear();
+      manager.origin = session_origin_e::none;
+      manager.process_owned = false;
+      manager.runtime_owned = false;
+      manager.source_description.clear();
+      manager.source_executable.clear();
+      manager.source_process_start_time = 0;
+      if (manager.app_launch_rejected_reason.empty()) {
+        manager.steam_location = "unknown";
+      }
+      manager.presentation = presentation_e::remote_only;
+      manager.local_presenter_active = false;
+      manager.local_presented_frames.store(0, std::memory_order_relaxed);
+      manager.local_dropped_frames.store(0, std::memory_order_relaxed);
       manager.pipewire_runtime.clear();
       manager.pipewire_remote.clear();
       manager.pipewire_node_id.reset();
@@ -233,6 +299,7 @@ namespace steamos_virtual_session {
       manager.width = 0;
       manager.height = 0;
       manager.fps = 0;
+      manager.hdr = false;
       manager.pci_bdf.clear();
       manager.render_node.clear();
       manager.stream_requested = false;
@@ -535,6 +602,111 @@ namespace steamos_virtual_session {
     }
 
     /**
+     * @brief Check whether a physical DRM connector is currently connected.
+     *
+     * @return True when a non-writeback DRM connector reports `connected`.
+     */
+    bool host_physical_output_connected() {
+#if defined(__linux__)
+      std::error_code error;
+      for (const auto &entry : std::filesystem::directory_iterator {"/sys/class/drm", error}) {
+        const auto name {entry.path().filename().string()};
+        if (error || name.find('-') == std::string::npos || name.find("Writeback") != std::string::npos) {
+          continue;
+        }
+        std::ifstream status {entry.path() / "status"};
+        std::string value;
+        std::getline(status, value);
+        if (value == "connected") {
+          return true;
+        }
+      }
+#endif
+      return false;
+    }
+
+    /**
+     * @brief Check whether a connected DRM output has an enabled scanout.
+     *
+     * A connector can remain physically connected while its CRTC is disabled.
+     * Treating that state as a normal Desktop capture target would make auto
+     * mode skip the virtual display even though no desktop frame can advance.
+     *
+     * @return True when one non-writeback connector reports `enabled`.
+     */
+    bool host_active_crtc_present() {
+#if defined(__linux__)
+      std::error_code error;
+      for (const auto &entry : std::filesystem::directory_iterator {"/sys/class/drm", error}) {
+        const auto name {entry.path().filename().string()};
+        if (error || name.find('-') == std::string::npos || name.find("Writeback") != std::string::npos) {
+          continue;
+        }
+        std::ifstream enabled {entry.path() / "enabled"};
+        std::string value;
+        std::getline(enabled, value);
+        if (value == "enabled") {
+          return true;
+        }
+      }
+#endif
+      return false;
+    }
+
+    /**
+     * @brief Probe whether automatic policy must prefer a resident Game Mode source.
+     *
+     * This lightweight launch-time probe runs before the Desktop/virtual
+     * decision. It prevents an active Game Mode session from being mistaken
+     * for a normal physical Desktop merely because its connector is enabled.
+     *
+     * @return True when at least one current-user Game Mode source is verified.
+     */
+    bool verified_game_mode_source_present() {
+#if defined(__linux__)
+      if (config::steamos_virtual_display.session_source == session_source_policy_e::owned_private) {
+        return false;
+      }
+      const auto *const inherited_runtime {std::getenv("XDG_RUNTIME_DIR")};
+      const auto *const inherited_remote {std::getenv("PIPEWIRE_REMOTE")};
+      const std::string runtime {
+        config::steamos_virtual_display.pipewire_runtime.empty() ? (inherited_runtime ? inherited_runtime : "") : config::steamos_virtual_display.pipewire_runtime
+      };
+      const std::string remote {
+        config::steamos_virtual_display.pipewire_remote.empty() ? (inherited_remote && *inherited_remote ? inherited_remote : "pipewire-0") : config::steamos_virtual_display.pipewire_remote
+      };
+      if (runtime.empty() || remote.empty()) {
+        return false;
+      }
+      std::string discovery_error;
+      const auto timeout {std::min(
+        std::chrono::milliseconds {250},
+        std::chrono::milliseconds {config::steamos_virtual_display.pipewire_node_timeout_milliseconds}
+      )};
+      const auto sources {gamescope_source::discover_gamescope_sources(runtime, remote, timeout, discovery_error)};
+      return std::ranges::any_of(sources, [](const gamescope_source::gamescope_source_t &source) {
+        return source.identity_verified && source.game_mode_verified &&
+               source.origin == session_origin_e::attached_existing &&
+               gamescope_source::source_identity_is_current(source);
+      });
+#else
+      return false;
+#endif
+    }
+
+    /**
+     * @brief Decide whether the selected session may use a local mirror.
+     *
+     * @param origin Ownership origin selected for the session.
+     * @return Safe desired presentation paths.
+     */
+    presentation_e desired_presentation(const session_origin_e origin) {
+      host_desktop_endpoint::capture();
+      const auto endpoint {host_desktop_endpoint::current()};
+      return decide_presentation(config::steamos_virtual_display.local_presentation, origin, !endpoint.xdg_runtime_directory.empty() && !endpoint.wayland_display.empty(), host_physical_output_connected());
+    }
+
+    /**
      * @brief Check whether a prospective session path remains in the user runtime directory.
      *
      * Canonicalizing both paths prevents a configured symlink from redirecting
@@ -728,25 +900,85 @@ namespace steamos_virtual_session {
 
   bool prepare(const rtsp_stream::launch_session_t &launch_session, std::string &error) {
     std::scoped_lock lock {manager.mutex};
+    manager.migration_required = false;
+    manager.app_launch_rejected_reason.clear();
+    manager.app_launch_rejected_message.clear();
+    manager.steam_location = "unknown";
+    const bool physical_output_connected {host_physical_output_connected()};
+    const bool active_crtc_present {host_active_crtc_present()};
+    const bool capturable_output_present {physical_desktop_capturable(
+      physical_output_connected,
+      active_crtc_present,
+      physical_compositor_capture_available.load(std::memory_order_acquire)
+    )};
+    const bool verified_existing_gamescope {verified_game_mode_source_present()};
+    const auto request {normalize_display_request(launch_session.width, launch_session.height, launch_session.fps, config::steamos_virtual_display.default_width, config::steamos_virtual_display.default_height, config::steamos_virtual_display.default_fps)};
+#if defined(__linux__)
+    const bool retained_owned_session {
+      manager.origin == session_origin_e::owned_private &&
+      manager.process_owned &&
+      manager.process_group > 0 &&
+      manager.current == state_e::Ready &&
+      manager.width == request.width &&
+      manager.height == request.height &&
+      manager.fps == request.fps &&
+      manager.hdr == launch_session.enable_hdr &&
+      process_group_exists(manager.process_group) &&
+      owned_wayland_socket_exists(manager.runtime_directory / "gamescope-0")
+    };
+#else
+    const bool retained_owned_session {false};
+#endif
     const auto decision {decide_virtual_display({
-      config::steamos_virtual_display.enabled,
-      config::steamos_virtual_display.mode,
-      false,
-      false,
-      false,
-      false,
-      true,
+      .feature_enabled = config::steamos_virtual_display.enabled,
+      .mode = config::steamos_virtual_display.mode,
+      .physical_output_connected = physical_output_connected,
+      .active_crtc_present = active_crtc_present,
+      .capturable_output_present = capturable_output_present,
+      .existing_owned_session = retained_owned_session,
+      .host_supported = true,
+      .verified_existing_gamescope_present = verified_existing_gamescope,
+      .existing_gamescope_required = config::steamos_virtual_display.session_source == session_source_policy_e::existing_gamescope,
     })};
+    manager.selection_reason = decision.reason;
     if (!decision.required) {
+      if (manager.origin != session_origin_e::none) {
+        BOOST_LOG(info) << "SESSION_EVENT source_released reason=desktop_capture_selected"
+                        << " origin=" << to_string(manager.origin)
+                        << " process_owned=" << (manager.process_owned ? "true" : "false");
+        recover_failed_session_locked();
+      }
       manager.current = state_e::Disabled;
       return true;
     }
-    BOOST_LOG(info) << "SESSION_EVENT mode_decided mode=" << to_string(config::steamos_virtual_display.mode) << " reason=" << decision.reason;
+    BOOST_LOG(info) << "SESSION_EVENT mode_decided mode=" << to_string(config::steamos_virtual_display.mode)
+                    << " reason=" << decision.reason
+                    << " physical_output_connected=" << (physical_output_connected ? "true" : "false")
+                    << " active_crtc_present=" << (active_crtc_present ? "true" : "false")
+                    << " verified_existing_gamescope=" << (verified_existing_gamescope ? "true" : "false");
 #if !defined(__linux__)
     error = "SteamOS virtual display is only available on Linux";
     manager.current = state_e::Disabled;
     return false;
 #else
+    if (decision.reason == "owned_session_active") {
+      manager.selection_reason = "retained_owned_private";
+      manager.packet_tracking.store(false, std::memory_order_release);
+      manager.encoded_packets.store(0, std::memory_order_relaxed);
+      manager.encoded_bytes.store(0, std::memory_order_relaxed);
+      manager.idr_packets.store(0, std::memory_order_relaxed);
+      manager.captured_frames.store(0, std::memory_order_relaxed);
+      BOOST_LOG(info) << "GAMESCOPE_SOURCE_REUSED origin=owned_private pid=" << manager.process_group
+                      << " width=" << request.width << " height=" << request.height
+                      << " fps=" << request.fps << " hdr=" << (launch_session.enable_hdr ? "true" : "false");
+      return true;
+    }
+    if (manager.current == state_e::Ready && manager.origin != session_origin_e::none) {
+      BOOST_LOG(info) << "SESSION_EVENT source_released reason=source_selection_changed"
+                      << " origin=" << to_string(manager.origin)
+                      << " process_owned=" << (manager.process_owned ? "true" : "false");
+      recover_failed_session_locked();
+    }
     if (manager.current == state_e::Failed) {
       manager.current = state_e::Recovering;
       recover_failed_session_locked();
@@ -762,7 +994,6 @@ namespace steamos_virtual_session {
       manager.current = state_e::Failed;
       return false;
     }
-    const auto request {normalize_display_request(launch_session.width, launch_session.height, launch_session.fps, config::steamos_virtual_display.default_width, config::steamos_virtual_display.default_height, config::steamos_virtual_display.default_fps)};
     const auto gpu {select_amd_dgpu(config::steamos_virtual_display.game_gpu, error)};
     if (!gpu) {
       manager.current = state_e::Failed;
@@ -823,7 +1054,84 @@ namespace steamos_virtual_session {
       manager.current = state_e::Failed;
       return false;
     }
+    if (config::steamos_virtual_display.session_source != session_source_policy_e::owned_private) {
+      std::string discovery_error;
+      const auto discovery_timeout {std::min(std::chrono::milliseconds {500}, std::chrono::milliseconds {config::steamos_virtual_display.pipewire_node_timeout_milliseconds})};
+      const auto sources {gamescope_source::discover_gamescope_sources(pipewire_runtime->string(), pipewire_remote, discovery_timeout, discovery_error)};
+      gamescope_source::source_selection_request_t selection_request {
+        .policy = config::steamos_virtual_display.session_source,
+        .required_render_node = gpu->render_node,
+      };
+      if (config::steamos_virtual_display.existing_gamescope_pid > 0) {
+        selection_request.explicit_gamescope_pid = config::steamos_virtual_display.existing_gamescope_pid;
+      }
+      const auto selected {gamescope_source::select_gamescope_source(sources, selection_request)};
+      if (selected.has_value()) {
+        manager.selection_reason = "verified_existing_gamescope";
+        manager.origin = session_origin_e::attached_existing;
+        manager.process_owned = false;
+        manager.runtime_owned = false;
+        manager.runtime_directory.clear();
+        manager.pipewire_runtime = pipewire_runtime->string();
+        manager.pipewire_remote = pipewire_remote;
+        manager.pipewire_node_id = selected->node_id;
+        manager.pipewire_object_serial = selected->object_serial;
+        manager.pipewire_producer_pid = selected->producer_pid;
+        manager.pulse_runtime = (*pipewire_runtime / "pulse").string();
+        manager.width = request.width;
+        manager.height = request.height;
+        manager.fps = request.fps;
+        manager.hdr = launch_session.enable_hdr;
+        manager.pci_bdf = gpu->pci_bdf;
+        manager.render_node = gpu->render_node;
+        manager.source_description = selected->node_description.empty() ? selected->application_name : selected->node_description;
+        manager.source_executable = selected->executable;
+        manager.source_process_start_time = selected->producer_start_time;
+        manager.presentation = desired_presentation(manager.origin);
+        manager.steam_location = std::string {steam_session::to_string(steam_session::classify_current_user_instance({
+          .gamescope_pid = selected->producer_pid,
+          .cgroup = steam_session::cgroup_for_process(selected->producer_pid),
+        }))};
+        manager.packet_tracking.store(false, std::memory_order_release);
+        manager.encoded_packets.store(0, std::memory_order_relaxed);
+        manager.encoded_bytes.store(0, std::memory_order_relaxed);
+        manager.idr_packets.store(0, std::memory_order_relaxed);
+        manager.captured_frames.store(0, std::memory_order_relaxed);
+  #if defined(__linux__)
+        manager.process_group = selected->producer_pid;
+  #endif
+        manager.current = state_e::WaitingForCapture;
+        BOOST_LOG(info) << "GAMESCOPE_SOURCE_ATTACHED origin=attached_existing pid=" << selected->producer_pid << " start_time=" << selected->producer_start_time << " node_id=" << selected->node_id << " object_serial=" << selected->object_serial << " render_node=" << selected->render_node << " steam_location=" << manager.steam_location;
+        return true;
+      }
+      BOOST_LOG(info) << "GAMESCOPE_SOURCE_UNAVAILABLE policy=" << to_string(config::steamos_virtual_display.session_source) << " reason=" << (discovery_error.empty() ? "selection_failed" : discovery_error);
+      if (selected.error() == gamescope_source::source_error_e::ambiguous) {
+        error = "Multiple verified existing Gamescope sources are available; select one explicit PID";
+        manager.current = state_e::Failed;
+        return false;
+      }
+      if (selected.error() == gamescope_source::source_error_e::explicit_pid_invalid) {
+        error = "The configured existing Gamescope PID is unavailable or failed identity validation";
+        manager.current = state_e::Failed;
+        return false;
+      }
+      if (config::steamos_virtual_display.session_source == session_source_policy_e::existing_gamescope || verified_existing_gamescope) {
+        error = verified_existing_gamescope ?
+                  "A verified Game Mode Gamescope exists but no unique same-GPU capture source is available" :
+                  "No unique verified existing Gamescope source is available";
+        manager.current = state_e::Failed;
+        return false;
+      }
+    }
     manager.runtime_directory = base / ("session-" + std::to_string(::getpid()) + "-" + std::to_string(launch_session.id));
+    manager.selection_reason = "new_owned_private";
+    manager.origin = session_origin_e::owned_private;
+    manager.process_owned = true;
+    manager.runtime_owned = true;
+    manager.presentation = desired_presentation(manager.origin);
+    manager.source_description = "SteamShine-owned private Gamescope";
+    manager.source_executable = config::steamos_virtual_display.gamescope_path;
+    manager.source_process_start_time = 0;
     manager.pci_bdf = gpu->pci_bdf;
     manager.render_node = gpu->render_node;
     manager.pipewire_runtime = pipewire_runtime->string();
@@ -835,6 +1143,7 @@ namespace steamos_virtual_session {
     manager.width = request.width;
     manager.height = request.height;
     manager.fps = request.fps;
+    manager.hdr = launch_session.enable_hdr;
     manager.packet_tracking.store(false, std::memory_order_release);
     manager.encoded_packets.store(0, std::memory_order_relaxed);
     manager.encoded_bytes.store(0, std::memory_order_relaxed);
@@ -915,6 +1224,16 @@ namespace steamos_virtual_session {
       return false;
     }
     manager.process_group = child;
+    if (const auto identity {gamescope_source::read_process_identity(child)}) {
+      manager.source_process_start_time = identity->start_time;
+      manager.source_executable = identity->executable.string();
+      manager.steam_location = std::string {steam_session::to_string(steam_session::classify_current_user_instance({
+        .gamescope_pid = child,
+        .runtime_directory = manager.runtime_directory.string(),
+        .wayland_display = "gamescope-0",
+        .cgroup = steam_session::cgroup_for_process(child),
+      }))};
+    }
     {
       std::ofstream pid_file {manager.runtime_directory / gamescope_pid_name.data(), std::ios::trunc};
       pid_file << child << '\n';
@@ -955,16 +1274,31 @@ namespace steamos_virtual_session {
   }
 
   bool capture_backend_required() {
+    const bool physical_output_connected {host_physical_output_connected()};
+    const bool active_crtc_present {host_active_crtc_present()};
+    const bool capturable_output_present {physical_desktop_capturable(
+      physical_output_connected,
+      active_crtc_present,
+      physical_compositor_capture_available.load(std::memory_order_acquire)
+    )};
     return decide_virtual_display({
-                                    config::steamos_virtual_display.enabled,
-                                    config::steamos_virtual_display.mode,
-                                    false,
-                                    false,
-                                    false,
-                                    false,
-                                    true,
+                                    .feature_enabled = config::steamos_virtual_display.enabled,
+                                    .mode = config::steamos_virtual_display.mode,
+                                    .physical_output_connected = physical_output_connected,
+                                    .active_crtc_present = active_crtc_present,
+                                    .capturable_output_present = capturable_output_present,
+                                    .existing_owned_session = active(),
+                                    .host_supported = true,
                                   })
       .required;
+  }
+
+  bool physical_output_connected() {
+    return host_physical_output_connected();
+  }
+
+  void set_physical_compositor_capture_available(const bool available) {
+    physical_compositor_capture_available.store(available, std::memory_order_release);
   }
 
   std::string_view to_string(const state_e state) {
@@ -997,6 +1331,21 @@ namespace steamos_virtual_session {
     std::scoped_lock lock {manager.mutex};
     status_snapshot_t snapshot;
     snapshot.state = manager.current;
+    snapshot.origin = manager.origin;
+    snapshot.process_owned = manager.process_owned;
+    snapshot.runtime_owned = manager.runtime_owned;
+    snapshot.source_description = manager.source_description;
+    snapshot.source_executable = manager.source_executable;
+    snapshot.source_process_start_time = manager.source_process_start_time;
+    snapshot.steam_location = manager.steam_location;
+    snapshot.migration_required = manager.migration_required;
+    snapshot.app_launch_rejected_reason = manager.app_launch_rejected_reason;
+    snapshot.app_launch_rejected_message = manager.app_launch_rejected_message;
+    snapshot.selection_reason = manager.selection_reason;
+    snapshot.presentation = manager.presentation;
+    snapshot.local_presenter_active = manager.local_presenter_active;
+    snapshot.local_presented_frames = manager.local_presented_frames.load(std::memory_order_relaxed);
+    snapshot.local_dropped_frames = manager.local_dropped_frames.load(std::memory_order_relaxed);
     snapshot.runtime_directory = manager.runtime_directory.string();
     snapshot.pci_bdf = manager.pci_bdf;
     snapshot.render_node = manager.render_node;
@@ -1062,12 +1411,20 @@ namespace steamos_virtual_session {
   }
 
   void mark_streaming_disconnected() {
-    std::scoped_lock lock {manager.mutex};
-    manager.stream_requested = false;
-    manager.packet_tracking.store(false, std::memory_order_release);
-    if (manager.current == state_e::Streaming) {
-      manager.current = state_e::Ready;
-      BOOST_LOG(info) << "SteamOS virtual display retained after stream disconnect";
+    bool stop_owned_session {};
+    {
+      std::scoped_lock lock {manager.mutex};
+      manager.stream_requested = false;
+      manager.packet_tracking.store(false, std::memory_order_release);
+      stop_owned_session = manager.origin == session_origin_e::owned_private && manager.process_owned && !config::steamos_virtual_display.keep_session_alive;
+      if (manager.current == state_e::Streaming && !stop_owned_session) {
+        manager.current = state_e::Ready;
+        BOOST_LOG(info) << "SteamOS virtual display retained after stream disconnect origin=" << (manager.origin == session_origin_e::owned_private ? "owned_private" : "attached_existing");
+      }
+    }
+    if (stop_owned_session) {
+      BOOST_LOG(info) << "SteamOS virtual display stopping owned session after stream disconnect";
+      stop();
     }
   }
 
@@ -1098,6 +1455,58 @@ namespace steamos_virtual_session {
     pipewire_runtime = manager.pipewire_runtime;
     pipewire_remote = manager.pipewire_remote;
     pulse_runtime = manager.pulse_runtime;
+    return true;
+  }
+
+  bool steam_command_allowed(const std::string_view command, std::string &error_message) {
+    if (!steam_session::command_references_steam(command)) {
+      return true;
+    }
+    steam_session::target_session_t target;
+    {
+      std::scoped_lock lock {manager.mutex};
+      if (manager.origin == session_origin_e::none || manager.process_group <= 0) {
+        return true;
+      }
+      target = {
+        .gamescope_pid = manager.process_group,
+        .runtime_directory = manager.runtime_directory.string(),
+        .wayland_display = "gamescope-0",
+        .cgroup = steam_session::cgroup_for_process(manager.process_group),
+      };
+    }
+    const auto location {steam_session::classify_current_user_instance(target)};
+    {
+      std::scoped_lock lock {manager.mutex};
+      manager.steam_location = std::string {steam_session::to_string(location)};
+    }
+    if (location == steam_session::instance_location_e::outside_target_gamescope) {
+      error_message = "Steam is already running outside the SteamShine Gamescope session; stop or migrate it before launching Steam here";
+      bool migration_required {};
+      {
+        std::scoped_lock lock {manager.mutex};
+        migration_required = manager.origin == session_origin_e::owned_private;
+        manager.migration_required = migration_required;
+        manager.app_launch_rejected_reason = "steam_outside_target_gamescope";
+        manager.app_launch_rejected_message = error_message;
+      }
+      BOOST_LOG(error) << "APP_LAUNCH_REJECTED reason=steam_outside_target_gamescope"
+                       << " migration_required=" << (migration_required ? "true" : "false")
+                       << " steam_location=outside_target_gamescope";
+      return false;
+    }
+    if (location == steam_session::instance_location_e::unknown) {
+      error_message = "Steam placement could not be verified; refusing to risk a second Steam instance";
+      {
+        std::scoped_lock lock {manager.mutex};
+        manager.migration_required = false;
+        manager.app_launch_rejected_reason = "steam_placement_unverified";
+        manager.app_launch_rejected_message = error_message;
+      }
+      BOOST_LOG(error) << "APP_LAUNCH_REJECTED reason=steam_placement_unverified"
+                       << " migration_required=false steam_location=unknown";
+      return false;
+    }
     return true;
   }
 
@@ -1145,6 +1554,117 @@ namespace steamos_virtual_session {
 #endif
   }
 
+  bool gamescope_input_required() {
+    std::scoped_lock lock {manager.mutex};
+    return manager.origin != session_origin_e::none &&
+           manager.process_group > 0 &&
+           (manager.current == state_e::WaitingForCapture || manager.current == state_e::Ready || manager.current == state_e::Streaming);
+  }
+
+  bool gamescope_input_endpoint(std::string &socket_path, std::string &error) {
+#if defined(__linux__)
+    std::scoped_lock lock {manager.mutex};
+    if (manager.process_group <= 0 || manager.source_process_start_time == 0 ||
+        (manager.current != state_e::WaitingForCapture && manager.current != state_e::Ready && manager.current != state_e::Streaming)) {
+      error = "gamescope_input_source_unavailable";
+      return false;
+    }
+    const auto identity {gamescope_source::read_process_identity(manager.process_group)};
+    if (!identity || identity->start_time != manager.source_process_start_time) {
+      error = "gamescope_input_identity_changed";
+      return false;
+    }
+    const std::filesystem::path runtime {
+      manager.origin == session_origin_e::owned_private ? manager.runtime_directory : std::filesystem::path {manager.pipewire_runtime}
+    };
+    if (runtime.empty()) {
+      error = "gamescope_input_runtime_unavailable";
+      return false;
+    }
+    std::ifstream unix_table {"/proc/net/unix"};
+    const std::string unix_contents {std::istreambuf_iterator<char> {unix_table}, {}};
+    const auto socket {select_gamescope_eis_socket(runtime, unix_contents, process_socket_inodes(manager.process_group))};
+    if (!socket) {
+      error = "gamescope_input_eis_socket_unverified";
+      return false;
+    }
+    struct stat socket_status {};
+    if (::lstat(socket->c_str(), &socket_status) != 0 || !S_ISSOCK(socket_status.st_mode) || socket_status.st_uid != ::getuid()) {
+      error = "gamescope_input_eis_socket_invalid";
+      return false;
+    }
+    socket_path = socket->string();
+    return true;
+#else
+    (void) socket_path;
+    error = "gamescope_input_unsupported";
+    return false;
+#endif
+  }
+
+  bool open_verified_gamescope_pipewire_consumer(pipewire_capture::stream_descriptor_t &descriptor, std::string &error) {
+#if defined(__linux__)
+    std::string runtime;
+    std::string remote;
+    int producer_pid {};
+    uint64_t producer_start_time {};
+    uint64_t object_serial {};
+    std::string render_node;
+    std::string source_label;
+    {
+      std::scoped_lock lock {manager.mutex};
+      if (manager.pipewire_runtime.empty() || manager.pipewire_remote.empty() || manager.process_group <= 0 || manager.source_process_start_time == 0 || manager.render_node.empty() ||
+          (manager.current != state_e::WaitingForCapture && manager.current != state_e::Ready && manager.current != state_e::Streaming)) {
+        error = "Selected Gamescope PipeWire source is unavailable";
+        return false;
+      }
+      runtime = manager.pipewire_runtime;
+      remote = manager.pipewire_remote;
+      producer_pid = manager.process_group;
+      producer_start_time = manager.source_process_start_time;
+      object_serial = manager.pipewire_object_serial.value_or(0);
+      render_node = manager.render_node;
+      source_label = manager.source_description;
+    }
+    const auto timeout {std::chrono::milliseconds {config::steamos_virtual_display.pipewire_node_timeout_milliseconds}};
+    const auto sources {gamescope_source::discover_gamescope_sources(runtime, remote, timeout, error)};
+    const auto source {std::find_if(sources.begin(), sources.end(), [producer_pid, producer_start_time, object_serial, &render_node](const gamescope_source::gamescope_source_t &candidate) {
+      return candidate.producer_pid == producer_pid && candidate.producer_start_time == producer_start_time && pipewire_capture::matches_selected_render_node(candidate.render_node, render_node) &&
+             (object_serial == 0 || candidate.object_serial == object_serial) && gamescope_source::source_identity_is_current(candidate);
+    })};
+    if (source == sources.end()) {
+      if (error.empty()) {
+        error = "Verified Gamescope PipeWire source disappeared or changed identity";
+      }
+      return false;
+    }
+    const auto fd {gamescope_source::open_host_pipewire_socket(runtime, remote, error)};
+    if (!fd) {
+      return false;
+    }
+    descriptor = {
+      .connected_core_fd = *fd,
+      .node_id = source->node_id,
+      .object_serial = source->object_serial,
+      .producer_pid = source->producer_pid,
+      .producer_start_time = source->producer_start_time,
+      .render_node = render_node,
+      .source_label = source_label.empty() ? source->node_description : source_label,
+    };
+    if (!pipewire_capture::has_verified_source_identity(descriptor)) {
+      close(descriptor.connected_core_fd);
+      descriptor.connected_core_fd = -1;
+      error = "Verified Gamescope PipeWire source has incomplete identity";
+      return false;
+    }
+    return true;
+#else
+    (void) descriptor;
+    error = "PipeWire consumers are available only on Linux";
+    return false;
+#endif
+  }
+
   void mark_gamescope_pipewire_node(const uint32_t node_id, const uint64_t object_serial, const int producer_pid) {
     std::scoped_lock lock {manager.mutex};
 #if defined(__linux__)
@@ -1165,7 +1685,7 @@ namespace steamos_virtual_session {
   bool active() {
     std::scoped_lock lock {manager.mutex};
 #if defined(__linux__)
-    return manager.process_group > 0 && !manager.runtime_directory.empty() &&
+    return manager.process_group > 0 && (manager.origin == session_origin_e::attached_existing || !manager.runtime_directory.empty()) &&
            (manager.current == state_e::WaitingForCapture || manager.current == state_e::Ready || manager.current == state_e::Streaming || manager.current == state_e::Failed);
 #else
     return false;
@@ -1192,7 +1712,7 @@ namespace steamos_virtual_session {
   void stop() {
     std::scoped_lock lock {manager.mutex};
 #if defined(__linux__)
-    if (manager.process_group > 0) {
+    if (manager.process_owned && manager.process_group > 0) {
       manager.current = state_e::Stopping;
       manager.packet_tracking.store(false, std::memory_order_release);
       BOOST_LOG(info) << "SteamOS virtual display stopping owned Gamescope session";
@@ -1202,6 +1722,8 @@ namespace steamos_virtual_session {
                       << " captured_frames=" << manager.captured_frames.load(std::memory_order_relaxed);
       stop_owned_process_group(manager.process_group, std::chrono::seconds {config::steamos_virtual_display.shutdown_timeout_seconds});
       manager.process_group = -1;
+    } else if (manager.origin == session_origin_e::attached_existing) {
+      BOOST_LOG(info) << "GAMESCOPE_SOURCE_DETACHED origin=attached_existing pid=" << manager.process_group << " process_owned=false runtime_owned=false";
     }
 #endif
     manager.current = state_e::Recovering;

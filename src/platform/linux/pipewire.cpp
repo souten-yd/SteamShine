@@ -17,6 +17,7 @@
 // local includes
 #include "cuda.h"
 #include "graphics.h"
+#include "pipewire_capture.h"
 #include "src/main.h"
 #include "src/platform/common.h"
 #include "src/steamos_virtual_session.h"
@@ -471,24 +472,26 @@ namespace pipewire {
       struct spa_pod_frame object_frame;
       struct spa_pod_frame modifier_frame;
       std::array<struct spa_rectangle, 3> sizes;
-      std::array<struct spa_fraction, 3> framerates;
+      const auto max_framerate_range {pipewire_capture::max_framerate_range(refresh_rate)};
+      const struct spa_fraction variable_framerate {SPA_FRACTION(0, 1)};
+      const std::array<struct spa_fraction, 3> max_framerates {
+        SPA_FRACTION(max_framerate_range.preferred, 1),
+        SPA_FRACTION(max_framerate_range.minimum, 1),
+        SPA_FRACTION(max_framerate_range.maximum, 1),
+      };
 
       sizes[0] = SPA_RECTANGLE(width, height);  // Preferred
       sizes[1] = SPA_RECTANGLE(1, 1);
       sizes[2] = SPA_RECTANGLE(8192, 4096);
-
-      framerates[0] = SPA_FRACTION(0, 1);  // default; we only want variable rate, thus bypassing compositor pacing
-      framerates[1] = SPA_FRACTION(0, 1);  // min
-      framerates[2] = SPA_FRACTION(0, 1);  // max
 
       spa_pod_builder_push_object(b, &object_frame, SPA_TYPE_OBJECT_Format, SPA_PARAM_EnumFormat);
       spa_pod_builder_add(b, SPA_FORMAT_mediaType, SPA_POD_Id(SPA_MEDIA_TYPE_video), 0);
       spa_pod_builder_add(b, SPA_FORMAT_mediaSubtype, SPA_POD_Id(SPA_MEDIA_SUBTYPE_raw), 0);
       spa_pod_builder_add(b, SPA_FORMAT_VIDEO_format, SPA_POD_Id(format), 0);
       spa_pod_builder_add(b, SPA_FORMAT_VIDEO_size, SPA_POD_CHOICE_RANGE_Rectangle(&sizes[0], &sizes[1], &sizes[2]), 0);
-      spa_pod_builder_add(b, SPA_FORMAT_VIDEO_framerate, SPA_POD_Fraction(&framerates[0]), 0);
+      spa_pod_builder_add(b, SPA_FORMAT_VIDEO_framerate, SPA_POD_Fraction(&variable_framerate), 0);
       if (negotiate_maxframerate_) {
-        spa_pod_builder_add(b, SPA_FORMAT_VIDEO_maxFramerate, SPA_POD_CHOICE_RANGE_Fraction(&framerates[0], &framerates[1], &framerates[2]), 0);
+        spa_pod_builder_add(b, SPA_FORMAT_VIDEO_maxFramerate, SPA_POD_CHOICE_RANGE_Fraction(&max_framerates[0], &max_framerates[1], &max_framerates[2]), 0);
       }
 
       if (format == SPA_VIDEO_FORMAT_xBGR_210LE) {
@@ -860,11 +863,16 @@ namespace pipewire {
       while (timeout_ms > 0) {
         negotiated_w = shared_state->negotiated_width.load();
         negotiated_h = shared_state->negotiated_height.load();
-        if (negotiated_w > 0 && negotiated_h > 0) {
+        const auto negotiation_state {pipewire_capture::negotiation_state(shared_state->stream_dead.load(), negotiated_w, negotiated_h)};
+        if (negotiation_state != pipewire_capture::negotiation_state_e::pending) {
           break;
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
         timeout_ms -= 10;
+      }
+      if (pipewire_capture::negotiation_state(shared_state->stream_dead.load(), negotiated_w, negotiated_h) == pipewire_capture::negotiation_state_e::failed) {
+        BOOST_LOG(error) << "[pipewire] Format negotiation failed before the first frame; refusing to start a dummy-only video stream."sv;
+        return -1;
       }
       // Set width and height to the values negotiated by pipewire
       if (negotiated_w > 0 && negotiated_h > 0 && (negotiated_w != width || negotiated_h != height)) {
