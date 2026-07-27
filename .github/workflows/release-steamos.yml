@@ -50,8 +50,9 @@ jobs:
           checksum="${artifact}.sha256"
           test -f "${checksum}"
           (cd "$(dirname "${artifact}")" && sha256sum -c "$(basename "${checksum}")")
-          tar --zstd -tf "${artifact}" | grep -Eq '(^|/)BUILD_INFO\.json$'
-          tar --zstd -tf "${artifact}" | grep -Eq '(^|/)RUNTIME_DEPENDENCIES\.txt$'
+          tar --zstd -tf "${artifact}" >artifact-entries.txt
+          grep -Eq '(^|/)BUILD_INFO\.json$' artifact-entries.txt
+          grep -Eq '(^|/)RUNTIME_DEPENDENCIES\.txt$' artifact-entries.txt
           printf 'artifact=%s\nchecksum=%s\n' "${artifact}" "${checksum}" >>"${GITHUB_ENV}"
       - name: Create release from the validated binary
         env:
