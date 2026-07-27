@@ -198,7 +198,13 @@ try {
     body: JSON.stringify({ named_certs: [{ uuid: 'xss-test', name: '<img src=x onerror="window.steamshineXss=true">' }] }),
   }));
   await steamshinePage.goto(`${baseUrl}/steamshine/clients`, { waitUntil: 'networkidle' });
-  securityResults.xss_escaped = await steamshinePage.evaluate(() => !window.steamshineXss && document.querySelectorAll('img').length === 0);
+  // The SteamShine shell legitimately renders a couple of <img> logo marks
+  // (sidebar brand + mobile top bar) on every authenticated page, so an
+  // absent onerror firing plus every real <img> pointing at our own known
+  // asset path is what proves the hostile name was escaped, not merely
+  // "there are zero <img> elements" (true before the redesign added a logo).
+  securityResults.xss_escaped = await steamshinePage.evaluate(() => !window.steamshineXss
+    && [...document.querySelectorAll('img')].every((img) => img.getAttribute('src')?.startsWith('/steamshine/images/')));
   await steamshinePage.unroute(clientRoute);
   if (!securityResults.xss_escaped) {
     throw new Error('SteamShine client rendering did not escape a hostile client name.');

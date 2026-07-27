@@ -942,4 +942,41 @@ pre {
   .page-header {
     align-items: flex-start;
   }
+
+  /* Monitor: keep the four metric tiles + CPU/GPU sections inside one
+     screen (e.g. iPhone 16 Plus) instead of needing a vertical scroll. */
+  .grid {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 0.6rem;
+  }
+
+  .metric-tile {
+    padding: 0.7rem 0.8rem;
+  }
+
+  .metric-value {
+    font-size: 1.3rem;
+  }
+
+  .sparkline, .sparkline-empty {
+    height: 22px;
+    margin-top: 0.35rem;
+  }
+
+  .metric-sub {
+    margin-top: 0.3rem;
+  }
+
+  .core-bars {
+    height: 26px;
+    margin-top: 0.5rem;
+  }
+
+  .stack {
+    gap: 0.75rem;
+  }
+
+  .section {
+    padding: 0.85rem 0.95rem;
+  }
 }
