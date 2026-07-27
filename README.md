@@ -166,10 +166,27 @@ SteamOS update.
 Everything is driven by one script. Run it with no arguments in a terminal and it opens a menu.
 
 ```bash
-./steamshine.sh install     # install and set up the systemd user service
+./steamshine.sh install -a  # install the latest GitHub release and start automatically
 ./steamshine.sh start
 ./steamshine.sh status
 ./steamshine.sh logs
+```
+
+`install` applies the recommended virtual-display settings (`enabled=true`, display mode `auto`, and
+session source `auto`), enables the systemd user service at login, and starts it immediately. It
+preserves unrelated Sunshine settings and keeps the original configuration at
+`~/.config/steamshine/backups/sunshine.conf.before-recommended-settings`. Repeated installation is
+safe. Use `--no-start` to install without enabling or starting the service, or `--no-service` to omit
+the user service entirely.
+
+```bash
+./steamshine.sh install -a
+./steamshine.sh status                         # confirm that the service is running
+./steamshine.sh check                          # check the host environment
+./steamshine.sh compatibility-check            # check SteamOS and Gamescope compatibility
+./steamshine.sh logs                           # show recent service logs
+./steamshine.sh restart                        # restart and retain autostart
+./steamshine.sh uninstall                      # remove it and disable autostart; keep configuration
 ```
 
 Then open `https://<host>:47990/steamshine/`, create your login, and pair your client from the **Pin**
@@ -179,8 +196,12 @@ On SteamOS the recommended install uses a prebuilt CI artifact, so no compiler o
 needed on the Deck itself:
 
 ```bash
-./steamshine.sh install --channel pr --pr 8
+./steamshine.sh install -a
 ```
+
+`-a` (or `--latest-release`) queries this repository's latest GitHub Release, downloads the single
+SteamOS x86_64 archive and its matching SHA-256 file into `~/.cache/steamshine/releases`, verifies
+both the release asset shape and checksum, then installs through the same immutable version store.
 
 The installer verifies the archive checksum, rejects unsafe or linked archive entries, and writes only
 under `~/.local`, `~/.config/steamshine`, `~/.local/state/steamshine` and `~/.cache/steamshine`.
