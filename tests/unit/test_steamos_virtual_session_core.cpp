@@ -443,6 +443,40 @@ namespace {
   }
 
   /**
+   * @brief Verify PipeWire maximum-frame-rate negotiation intersects KWin's positive range.
+   */
+  TEST(SteamOSVirtualSessionCore, AdvertisesPositivePipeWireMaximumFrameRateRange) {
+    const auto range {pipewire_capture::max_framerate_range(60)};
+
+    EXPECT_EQ(range.preferred, 60U);
+    EXPECT_EQ(range.minimum, 1U);
+    EXPECT_EQ(range.maximum, 60U);
+  }
+
+  /**
+   * @brief Verify an unspecified frame rate remains an unconstrained zero range.
+   */
+  TEST(SteamOSVirtualSessionCore, KeepsUnspecifiedPipeWireMaximumFrameRateRangeEmpty) {
+    const auto range {pipewire_capture::max_framerate_range(0)};
+
+    EXPECT_EQ(range.preferred, 0U);
+    EXPECT_EQ(range.minimum, 0U);
+    EXPECT_EQ(range.maximum, 0U);
+  }
+
+  /**
+   * @brief Verify a terminal PipeWire stream cannot become a dummy-only capture session.
+   */
+  TEST(SteamOSVirtualSessionCore, RejectsPipeWireNegotiationFailureBeforeFirstFormat) {
+    using pipewire_capture::negotiation_state_e;
+
+    EXPECT_EQ(pipewire_capture::negotiation_state(false, 0, 0), negotiation_state_e::pending);
+    EXPECT_EQ(pipewire_capture::negotiation_state(false, 3440, 1440), negotiation_state_e::complete);
+    EXPECT_EQ(pipewire_capture::negotiation_state(true, 0, 0), negotiation_state_e::failed);
+    EXPECT_EQ(pipewire_capture::negotiation_state(true, 3440, 1440), negotiation_state_e::failed);
+  }
+
+  /**
    * @brief Verify endpoint refresh accepts a later complete desktop environment only.
    */
   TEST(SteamOSVirtualSessionCore, RefreshesHostDesktopEndpointWhenItBecomesAvailable) {

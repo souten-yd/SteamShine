@@ -9,6 +9,24 @@
 
 namespace pipewire_capture {
   /**
+   * @brief Maximum-frame-rate range advertised to a PipeWire producer.
+   */
+  struct max_framerate_range_t {
+    uint32_t preferred {0};  ///< Preferred maximum frame rate in frames per second.
+    uint32_t minimum {0};  ///< Lowest accepted maximum frame rate in frames per second.
+    uint32_t maximum {0};  ///< Highest accepted maximum frame rate in frames per second.
+  };
+
+  /**
+   * @brief State of PipeWire format negotiation before capture begins.
+   */
+  enum class negotiation_state_e {
+    pending,  ///< No format or terminal stream error has arrived yet.
+    complete,  ///< A positive frame size has been negotiated.
+    failed,  ///< The stream terminated before negotiating a frame size.
+  };
+
+  /**
    * @brief Immutable identity for one verified PipeWire video producer.
    *
    * A consumer opens its own PipeWire core connection. The descriptor must
@@ -24,6 +42,29 @@ namespace pipewire_capture {
     std::string render_node;  ///< DRM render node exported by the producer.
     std::string source_label;  ///< Human-readable verified source label.
   };
+
+  /**
+   * @brief Build a producer-compatible maximum-frame-rate range.
+   *
+   * A raw PipeWire stream remains variable-rate through a separate `0/1`
+   * framerate property. The maximum-frame-rate choice must still contain
+   * positive values so producers such as KWin can intersect their supported
+   * refresh range with the consumer request.
+   *
+   * @param requested_fps Maximum frame rate requested by the streaming client.
+   * @return Preferred, minimum, and maximum values for PipeWire negotiation.
+   */
+  max_framerate_range_t max_framerate_range(uint32_t requested_fps);
+
+  /**
+   * @brief Classify whether PipeWire format negotiation can start capture.
+   *
+   * @param stream_dead Whether PipeWire reported a terminal stream state.
+   * @param width Negotiated frame width, or zero while unavailable.
+   * @param height Negotiated frame height, or zero while unavailable.
+   * @return Failed for a terminal stream, complete for a positive size, or pending.
+   */
+  negotiation_state_e negotiation_state(bool stream_dead, int width, int height);
 
   /**
    * @brief Validate the source identity required before opening a consumer.

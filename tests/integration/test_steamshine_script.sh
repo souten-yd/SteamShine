@@ -61,15 +61,46 @@ fi
 
 # A normal tar archive contains a leading ./ entry.  It is safe and must not be
 # mistaken for a parent-directory traversal by the immutable artifact installer.
-mkdir -p "${test_root}/stage/bin" "${test_root}/home/run"
+mkdir -p "${test_root}/stage/bin" "${test_root}/stage/scripts" "${test_root}/home/run" "${test_root}/home/.config/sunshine"
 install -m 755 /bin/true "${test_root}/stage/bin/steamshine"
 install -m 755 /bin/true "${test_root}/stage/bin/steamshine-input-visualizer"
+install -m 755 "${root_dir}/scripts/migrate-steamos-apps.py" "${test_root}/stage/scripts/migrate-steamos-apps.py"
+cat >"${test_root}/home/.config/sunshine/apps.json" <<'EOF'
+{"env":{"CUSTOM":"preserved"},"apps":[{"name":"Desktop","image-path":"custom.png"},{"name":"Custom Game","cmd":"custom-game"}]}
+EOF
 printf '{"target_architecture":"x86_64"}\n' >"${test_root}/stage/BUILD_INFO.json"
 printf '{}\n' >"${test_root}/stage/STEAMOS_BASELINE.json"
 tar --zstd -C "${test_root}/stage" -cf "${test_root}/steamshine-steamos-x86_64-test.tar.zst" .
 (cd "${test_root}" && sha256sum steamshine-steamos-x86_64-test.tar.zst >steamshine-steamos-x86_64-test.tar.zst.sha256)
 HOME="${test_root}/home" XDG_RUNTIME_DIR="${test_root}/home/run" \
   "${root_dir}/steamshine.sh" install --artifact "${test_root}/steamshine-steamos-x86_64-test.tar.zst" --no-service --non-interactive --yes
+python3 - "${test_root}/home/.config/sunshine/apps.json" <<'PY'
+import json
+import sys
+
+payload = json.load(open(sys.argv[1], encoding="utf-8"))
+assert payload["env"]["CUSTOM"] == "preserved"
+applications = {application["name"]: application for application in payload["apps"]}
+assert "configure-steamos-client-display.py apply" in applications["Desktop"]["prep-cmd"][0]["do"]
+assert applications["Custom Game"]["cmd"] == "custom-game"
+PY
+test -f "${test_root}/home/.config/sunshine/apps.json.steamshine-backup"
+
+# A relative file_apps setting follows Sunshine's app-data resolution instead
+# of being interpreted relative to the installer working directory.
+mkdir -p "${test_root}/custom-home/run" "${test_root}/custom-home/.config/steamshine" "${test_root}/custom-home/.config/sunshine/custom"
+printf 'file_apps = custom/apps.json # preserve this location\n' >"${test_root}/custom-home/.config/steamshine/sunshine.conf"
+printf '{"apps":[{"name":"Steam Big Picture"}]}\n' >"${test_root}/custom-home/.config/sunshine/custom/apps.json"
+HOME="${test_root}/custom-home" XDG_RUNTIME_DIR="${test_root}/custom-home/run" \
+  "${root_dir}/steamshine.sh" install --artifact "${test_root}/steamshine-steamos-x86_64-test.tar.zst" --no-service --non-interactive --yes
+python3 - "${test_root}/custom-home/.config/sunshine/custom/apps.json" <<'PY'
+import json
+import sys
+
+payload = json.load(open(sys.argv[1], encoding="utf-8"))
+assert "configure-steamos-client-display.py apply" in payload["apps"][0]["prep-cmd"][0]["do"]
+PY
+test -f "${test_root}/custom-home/.config/sunshine/custom/apps.json.steamshine-backup"
 
 # PR installation must ignore a newer docs-only success run and select the
 # newest successful run that actually contains the immutable delivery archive.

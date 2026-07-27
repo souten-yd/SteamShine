@@ -38,6 +38,8 @@ install -m 755 \
   "${root_dir}/scripts/collect-steamos-runtime-baseline.sh" \
   "${root_dir}/scripts/diagnose-gamescope-pipewire.sh" \
   "${root_dir}/scripts/diagnose-steamos-virtual-display.sh" \
+  "${root_dir}/scripts/configure-steamos-client-display.py" \
+  "${root_dir}/scripts/migrate-steamos-apps.py" \
   "${root_dir}/scripts/test-steamos-virtual-display.sh" \
   "${root_dir}/scripts/test-steamos-reconnect.sh" \
   "${root_dir}/scripts/test-steamos-latency.sh" \

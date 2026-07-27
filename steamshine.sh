@@ -197,7 +197,26 @@ install_artifact() {
     ln -sfn "${target}/current/bin/steamshine-input-visualizer" "${PREFIX}/bin/steamshine-input-visualizer"
   fi
 }
-install() { install_artifact; configure; "${NO_SERVICE}" || install_service; }
+configured_apps_file() {
+  local configured=""
+  if [[ -r "${CONFIG_FILE}" ]]; then
+    configured="$(sed -nE 's/^[[:space:]]*file_apps[[:space:]]*=[[:space:]]*([^#]*[^#[:space:]])[[:space:]]*(#.*)?$/\1/p' "${CONFIG_FILE}" | tail -n1)"
+  fi
+  configured="${configured:-apps.json}"
+  if [[ "${configured}" == /* ]]; then
+    printf '%s\n' "${configured}"
+  else
+    printf '%s\n' "${HOME}/.config/sunshine/${configured}"
+  fi
+}
+migrate_existing_apps() {
+  local helper="${PREFIX}/share/steamshine/current/scripts/migrate-steamos-apps.py" apps_file
+  apps_file="$(configured_apps_file)"
+  if "${DRY_RUN}"; then say "[dry-run] migrate existing applications in ${apps_file}"; return; fi
+  [[ -x "${helper}" ]] || return 0
+  "${helper}" "${apps_file}" || die 'Existing Sunshine applications could not be migrated safely.' "${EXIT_CONFIG}"
+}
+install() { install_artifact; configure; migrate_existing_apps; "${NO_SERVICE}" || install_service; }
 virtual_display_enabled() { [[ -r "${CONFIG_FILE}" ]] && grep -Eq '^steamos_virtual_display_enabled[[:space:]]*=[[:space:]]*true[[:space:]]*$' "${CONFIG_FILE}"; }
 import_desktop_environment() {
   local -a names=(XDG_RUNTIME_DIR WAYLAND_DISPLAY DISPLAY DBUS_SESSION_BUS_ADDRESS PIPEWIRE_REMOTE) values=() name

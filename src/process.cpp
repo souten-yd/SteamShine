@@ -217,6 +217,7 @@ namespace proc {
     _env["SUNSHINE_CLIENT_GCMAP"] = std::to_string(launch_session->gcmap);
     _env["SUNSHINE_CLIENT_HOST_AUDIO"] = launch_session->host_audio ? "true" : "false";
     _env["SUNSHINE_CLIENT_ENABLE_SOPS"] = launch_session->enable_sops ? "true" : "false";
+    _env["STEAMSHINE_VIRTUAL_DISPLAY_ORIGIN"] = std::string {steamos_virtual_session::to_string(virtual_status.origin)};
     int channelCount = launch_session->surround_info & 65535;
     switch (channelCount) {
       case 2:

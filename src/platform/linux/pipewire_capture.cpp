@@ -5,6 +5,27 @@
 #include "pipewire_capture.h"
 
 namespace pipewire_capture {
+  max_framerate_range_t max_framerate_range(const uint32_t requested_fps) {
+    if (requested_fps == 0) {
+      return {};
+    }
+    return {
+      .preferred = requested_fps,
+      .minimum = 1,
+      .maximum = requested_fps,
+    };
+  }
+
+  negotiation_state_e negotiation_state(const bool stream_dead, const int width, const int height) {
+    if (stream_dead) {
+      return negotiation_state_e::failed;
+    }
+    if (width > 0 && height > 0) {
+      return negotiation_state_e::complete;
+    }
+    return negotiation_state_e::pending;
+  }
+
   bool has_verified_source_identity(const stream_descriptor_t &descriptor) {
     return descriptor.node_id != UINT32_MAX && descriptor.object_serial != UINT64_MAX && descriptor.producer_pid > 0 && descriptor.producer_start_time > 0 && !descriptor.render_node.empty();
   }
