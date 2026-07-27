@@ -13,7 +13,7 @@ systemd unit. Do not substitute a locally built binary:
 | Session | Display state | Required video result | Required input result |
 | --- | --- | --- | --- |
 | Desktop | Connected physical display with working KWin ScreenCast or Portal capture | Prefer KWin ScreenCast, otherwise Portal; stream the physical Desktop even if sysfs reports its CRTC disabled; no green placeholder and no Steam requirement | Mouse, keyboard, touch, and gamepad operate the physical Desktop |
-| Desktop | No connected physical display or no working physical compositor capture source | Create or reuse the owned virtual desktop and show a usable Desktop | Input operates the streamed virtual Desktop |
+| Desktop | No connected physical display or no working physical compositor capture source | Create or reuse the owned virtual desktop and show a usable Desktop | Pointer cursor is visible and pointer/keyboard input operates the streamed virtual Desktop |
 | Game Mode | Verified existing Gamescope | Attach without stopping or starting a second Steam instance; show the current Gamescope/Big Picture surface | Mouse and keyboard operate that Gamescope surface through its verified EIS endpoint, never the physical Desktop |
 
 For the monitorless Desktop row, verify that the configured

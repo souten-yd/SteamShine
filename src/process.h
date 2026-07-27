@@ -39,7 +39,10 @@ namespace proc {
    *
    * A commandless Desktop entry remains a capture-only placebo on the physical
    * Desktop and attached Game Mode. Inside an owned private display it launches
-   * a non-singleton desktop surface so a monitorless stream is usable.
+   * a non-singleton desktop surface so a monitorless stream is usable. The
+   * packaged KDE folder-view command is constrained to XWayland because
+   * Gamescope does not compose a cursor for native XDG surfaces. Other
+   * configured commands remain unchanged.
    *
    * @param app_command Configured application command.
    * @param owned_virtual_display Whether the selected display is SteamShine-owned.

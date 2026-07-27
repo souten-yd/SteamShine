@@ -44,6 +44,11 @@ namespace proc {
   using namespace std::literals;
   namespace pt = boost::property_tree;
 
+  namespace {
+    constexpr std::string_view default_virtual_desktop_command {"plasmawindowed org.kde.plasma.folder"};  ///< Packaged KDE folder-view surface command.
+    constexpr std::string_view xwayland_virtual_desktop_command {"env QT_QPA_PLATFORM=xcb plasmawindowed org.kde.plasma.folder"};  ///< KDE folder-view surface constrained to Gamescope's cursor-capable XWayland path.
+  }  // namespace
+
   proc_t proc;  ///< Global process registry used to track and terminate child processes.
 
   std::string select_effective_command(
@@ -55,9 +60,12 @@ namespace proc {
       return std::string {app_command};
     }
     if (!virtual_desktop_command.empty()) {
+      if (virtual_desktop_command == default_virtual_desktop_command) {
+        return std::string {xwayland_virtual_desktop_command};
+      }
       return std::string {virtual_desktop_command};
     }
-    return "plasmawindowed org.kde.plasma.folder";
+    return std::string {xwayland_virtual_desktop_command};
   }
 
   void apply_session_display_environment(boost::process::v1::environment &environment, const std::optional<steamos_virtual_session::session_display_endpoint_t> &endpoint) {

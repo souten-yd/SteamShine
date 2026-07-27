@@ -26,8 +26,18 @@ TEST(ProcessCommandSelectionTest, LaunchesConfiguredOwnedVirtualDesktop) {
   EXPECT_EQ(proc::select_effective_command("", true, "virtual-desktop"), "virtual-desktop");
 }
 
+/**
+ * @brief Verify the packaged KDE surface uses Gamescope's cursor-capable XWayland path.
+ */
+TEST(ProcessCommandSelectionTest, ConstrainsPackagedVirtualDesktopToXwayland) {
+  EXPECT_EQ(
+    proc::select_effective_command("", true, "plasmawindowed org.kde.plasma.folder"),
+    "env QT_QPA_PLATFORM=xcb plasmawindowed org.kde.plasma.folder"
+  );
+}
+
 TEST(ProcessCommandSelectionTest, RestoresSafeOwnedVirtualDesktopDefault) {
-  EXPECT_EQ(proc::select_effective_command("", true, ""), "plasmawindowed org.kde.plasma.folder");
+  EXPECT_EQ(proc::select_effective_command("", true, ""), "env QT_QPA_PLATFORM=xcb plasmawindowed org.kde.plasma.folder");
 }
 
 /**
