@@ -82,9 +82,10 @@ configure() {
   if [[ -e "${CONFIG_FILE}" ]]; then say 'Already configured; preserving existing configuration.'; return; fi
   if "${DRY_RUN}"; then say "[dry-run] create ${CONFIG_FILE}"; return; fi
   cat >"${CONFIG_FILE}" <<EOF
-# SteamShine SteamOS settings. Virtual display is opt-in.
-steamos_virtual_display_enabled = false
+# SteamShine recommended SteamOS settings.
+steamos_virtual_display_enabled = true
 steamos_virtual_display_mode = auto
+steamos_session_source = auto
 steamos_gamescope_path = ${GAMESCOPE_PATH}
 steamos_virtual_desktop_command = plasmawindowed org.kde.plasma.folder
 steamos_runtime_directory = ${XDG_RUNTIME_DIR}/steamshine
@@ -98,6 +99,63 @@ steamos_default_height = ${DEFAULT_HEIGHT}
 steamos_default_fps = ${DEFAULT_FPS}
 steamos_cleanup_orphan_sessions = true
 EOF
+}
+# Apply the recommended Game Mode capture policy without replacing unrelated
+# Sunshine settings. Duplicate keys are collapsed so the result is unambiguous.
+configure_recommended() {
+  [[ -e "${CONFIG_FILE}" ]] || configure
+  if "${DRY_RUN}"; then
+    say "[dry-run] set recommended SteamOS settings in ${CONFIG_FILE}"
+    return
+  fi
+  local temporary backup_directory
+  temporary="$(mktemp "${CONFIG_FILE}.XXXXXX")"
+  backup_directory="$(dirname -- "${CONFIG_FILE}")/backups"
+  if ! awk '
+    BEGIN {
+      recommended["steamos_virtual_display_enabled"] = "true"
+      recommended["steamos_virtual_display_mode"] = "auto"
+      recommended["steamos_session_source"] = "auto"
+    }
+    {
+      matched = ""
+      for (key in recommended) {
+        if ($0 ~ "^[[:space:]]*" key "[[:space:]]*=") {
+          matched = key
+          break
+        }
+      }
+      if (matched != "") {
+        if (!written[matched]++) {
+          print matched " = " recommended[matched]
+        }
+        next
+      }
+      print
+    }
+    END {
+      for (key in recommended) {
+        if (!written[key]) {
+          print key " = " recommended[key]
+        }
+      }
+    }
+  ' "${CONFIG_FILE}" >"${temporary}"; then
+    rm -f -- "${temporary}"
+    die 'Recommended SteamOS settings could not be generated.' "${EXIT_CONFIG}"
+  fi
+  if cmp -s -- "${CONFIG_FILE}" "${temporary}"; then
+    rm -f -- "${temporary}"
+    say 'Recommended SteamOS settings are already configured'
+    return
+  fi
+  mkdir -p "${backup_directory}"
+  if [[ ! -f "${backup_directory}/sunshine.conf.before-recommended-settings" ]]; then
+    cp -- "${CONFIG_FILE}" "${backup_directory}/sunshine.conf.before-recommended-settings"
+  fi
+  chmod --reference="${CONFIG_FILE}" "${temporary}"
+  mv -f -- "${temporary}" "${CONFIG_FILE}"
+  say 'Recommended SteamOS settings applied'
 }
 service_file() { printf '%s\n' "${HOME}/.config/systemd/user/steamshine.service"; }
 install_service() {
@@ -216,7 +274,19 @@ migrate_existing_apps() {
   [[ -x "${helper}" ]] || return 0
   "${helper}" "${apps_file}" || die 'Existing Sunshine applications could not be migrated safely.' "${EXIT_CONFIG}"
 }
-install() { install_artifact; configure; migrate_existing_apps; "${NO_SERVICE}" || install_service; }
+install() {
+  install_artifact
+  configure
+  configure_recommended
+  migrate_existing_apps
+  "${NO_SERVICE}" || install_service
+  if "${NO_START}" || "${NO_SERVICE}"; then
+    say 'SteamShine is installed; automatic startup was not enabled'
+  else
+    start
+    say 'SteamShine is installed and configured for automatic startup'
+  fi
+}
 virtual_display_enabled() { [[ -r "${CONFIG_FILE}" ]] && grep -Eq '^steamos_virtual_display_enabled[[:space:]]*=[[:space:]]*true[[:space:]]*$' "${CONFIG_FILE}"; }
 import_desktop_environment() {
   local -a names=(XDG_RUNTIME_DIR WAYLAND_DISPLAY DISPLAY DBUS_SESSION_BUS_ADDRESS PIPEWIRE_REMOTE) values=() name
@@ -226,7 +296,17 @@ import_desktop_environment() {
   ((${#values[@]})) || return 0
   run systemctl --user import-environment "${values[@]}"
 }
-start() { "${NO_SERVICE}" && die 'start requires the user service.' "$EXIT_SERVICE"; if virtual_display_enabled; then compatibility_check; fi; import_desktop_environment; systemctl --user is-active --quiet steamshine && { say 'Already running'; return; }; run systemctl --user enable --now steamshine || die 'Service failed to start.' "$EXIT_SERVICE"; }
+start() {
+  "${NO_SERVICE}" && die 'start requires the user service.' "$EXIT_SERVICE"
+  if virtual_display_enabled; then compatibility_check; fi
+  import_desktop_environment
+  if systemctl --user is-active --quiet steamshine; then
+    run systemctl --user enable steamshine || die 'Service autostart could not be enabled.' "$EXIT_SERVICE"
+    say 'Already running; autostart is enabled'
+    return
+  fi
+  run systemctl --user enable --now steamshine || die 'Service failed to start.' "$EXIT_SERVICE"
+}
 stop() { run systemctl --user stop steamshine; }
 status() { systemctl --user status steamshine --no-pager; }
 logs() { journalctl --user -u steamshine --no-pager -n 200; }
@@ -277,12 +357,12 @@ compatibility_check() {
   vaapi_amd_driver_status
   "${collector}"
 }
-bootstrap() { install; "${NO_START}" || "${NO_SERVICE}" || start; "${DRY_RUN}" || diagnose; say 'SteamShine is ready'; }
-update() { git -C "${ROOT_DIR}" diff --quiet || die 'Uncommitted changes detected; update refused.'; run git -C "${ROOT_DIR}" fetch --all --prune; run git -C "${ROOT_DIR}" pull --ff-only; install; "${NO_START}" || start; }
+bootstrap() { install; "${DRY_RUN}" || diagnose; say 'SteamShine is ready'; }
+update() { git -C "${ROOT_DIR}" diff --quiet || die 'Uncommitted changes detected; update refused.'; run git -C "${ROOT_DIR}" fetch --all --prune; run git -C "${ROOT_DIR}" pull --ff-only; install; }
 repair() { configure; "${NO_SERVICE}" || install_service; [[ -x "${PREFIX}/bin/steamshine" ]] || install; }
 uninstall() {
   if "${PURGE}" && "${NON_INTERACTIVE}" && ! "${ASSUME_YES}"; then die '--purge in non-interactive mode requires --yes.' "$EXIT_USAGE"; fi
-  "${NO_SERVICE}" || stop || true
+  "${NO_SERVICE}" || run systemctl --user disable --now steamshine || true
   run rm -f "$(service_file)" "${PREFIX}/bin/steamshine" "${PREFIX}/bin/steamshine-input-visualizer"
   run rm -rf -- "${PREFIX}/share/steamshine" "${HOME}/.cache/steamshine" "${BUILD_DIR}" "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/steamshine"
   "${NO_SERVICE}" || run systemctl --user daemon-reload || true

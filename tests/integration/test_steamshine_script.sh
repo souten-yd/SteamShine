@@ -154,11 +154,14 @@ cat >"${test_root}/mock-bin/systemctl" <<'EOF'
 #!/usr/bin/env bash
 [[ -n "${SYSTEMCTL_LOG:-}" ]] && printf '%q ' "$@" >>"${SYSTEMCTL_LOG}"
 [[ -n "${SYSTEMCTL_LOG:-}" ]] && printf '\n' >>"${SYSTEMCTL_LOG}"
+if [[ "${SYSTEMCTL_INACTIVE:-}" == 1 && " $* " == *' --user is-active '* ]]; then
+  exit 1
+fi
 exit 0
 EOF
 chmod 755 "${test_root}/mock-bin/systemctl"
 HOME="${test_root}/home" XDG_RUNTIME_DIR="${test_root}/home/run" PATH="${test_root}/mock-bin:${PATH}" \
-  "${root_dir}/steamshine.sh" install --artifact "${test_root}/steamshine-steamos-x86_64-test.tar.zst" --non-interactive --yes
+  "${root_dir}/steamshine.sh" install --artifact "${test_root}/steamshine-steamos-x86_64-test.tar.zst" --no-start --non-interactive --yes
 service_unit="${test_root}/home/.config/systemd/user/steamshine.service"
 grep -Fq "ExecStart=${test_root}/home/.local/bin/steamshine ${test_root}/home/.config/steamshine/sunshine.conf" "${service_unit}"
 grep -Fq 'PassEnvironment=XDG_RUNTIME_DIR WAYLAND_DISPLAY DISPLAY DBUS_SESSION_BUS_ADDRESS PIPEWIRE_REMOTE' "${service_unit}"
@@ -170,16 +173,44 @@ fi
 test -x "${test_root}/home/.local/bin/steamshine"
 test -x "${test_root}/home/.local/bin/steamshine-input-visualizer"
 grep -Fq 'steamos_virtual_desktop_command = plasmawindowed org.kde.plasma.folder' "${test_root}/home/.config/steamshine/sunshine.conf"
+grep -Fq 'steamos_virtual_display_enabled = true' "${test_root}/home/.config/steamshine/sunshine.conf"
+grep -Fq 'steamos_virtual_display_mode = auto' "${test_root}/home/.config/steamshine/sunshine.conf"
+grep -Fq 'steamos_session_source = auto' "${test_root}/home/.config/steamshine/sunshine.conf"
 # A graphical launcher imports only non-empty desktop values before service
 # activation, preserving an existing manager environment when a value is absent.
 systemctl_log="${test_root}/systemctl.log"
+sed -i 's/^steamos_virtual_display_enabled = true$/steamos_virtual_display_enabled = false/' "${test_root}/home/.config/steamshine/sunshine.conf"
 env -u DISPLAY -u DBUS_SESSION_BUS_ADDRESS -u PIPEWIRE_REMOTE HOME="${test_root}/home" XDG_RUNTIME_DIR="${test_root}/home/run" WAYLAND_DISPLAY="wayland-0" PATH="${test_root}/mock-bin:${PATH}" SYSTEMCTL_LOG="${systemctl_log}" \
   "${root_dir}/steamshine.sh" start --non-interactive --yes
 grep -Fq -- '--user import-environment XDG_RUNTIME_DIR WAYLAND_DISPLAY' "${systemctl_log}"
+grep -Fq -- '--user enable steamshine' "${systemctl_log}"
 if grep -Eq '(^|[[:space:]])DISPLAY([[:space:]]|$)' "${systemctl_log}"; then
   echo 'The launcher must not import an empty desktop variable.' >&2
   exit 1
 fi
+# An inactive service is enabled and started in the same operation.
+: >"${systemctl_log}"
+HOME="${test_root}/home" XDG_RUNTIME_DIR="${test_root}/home/run" PATH="${test_root}/mock-bin:${PATH}" SYSTEMCTL_LOG="${systemctl_log}" SYSTEMCTL_INACTIVE=1 \
+  "${root_dir}/steamshine.sh" start --non-interactive --yes
+grep -Fq -- '--user enable --now steamshine' "${systemctl_log}"
+# The one-command install updates only its three policy keys, retains a
+# one-time backup, and remains idempotent on subsequent invocations.
+printf 'custom_setting = preserved\nsteamos_session_source = owned_private\nsteamos_session_source = existing_gamescope\n' >>"${test_root}/home/.config/steamshine/sunshine.conf"
+HOME="${test_root}/home" XDG_RUNTIME_DIR="${test_root}/home/run" PATH="${test_root}/mock-bin:${PATH}" \
+  "${root_dir}/steamshine.sh" install --artifact "${test_root}/steamshine-steamos-x86_64-test.tar.zst" --no-service --non-interactive --yes
+game_mode_config="${test_root}/home/.config/steamshine/sunshine.conf"
+game_mode_backup="${test_root}/home/.config/steamshine/backups/sunshine.conf.before-recommended-settings"
+grep -Fxq 'steamos_virtual_display_enabled = true' "${game_mode_config}"
+grep -Fxq 'steamos_virtual_display_mode = auto' "${game_mode_config}"
+test "$(grep -Fxc 'steamos_session_source = auto' "${game_mode_config}")" -eq 1
+grep -Fxq 'custom_setting = preserved' "${game_mode_config}"
+test -f "${game_mode_backup}"
+backup_checksum="$(sha256sum "${game_mode_backup}")"
+config_checksum="$(sha256sum "${game_mode_config}")"
+HOME="${test_root}/home" XDG_RUNTIME_DIR="${test_root}/home/run" PATH="${test_root}/mock-bin:${PATH}" \
+  "${root_dir}/steamshine.sh" install --artifact "${test_root}/steamshine-steamos-x86_64-test.tar.zst" --no-service --non-interactive --yes
+test "$(sha256sum "${game_mode_backup}")" = "${backup_checksum}"
+test "$(sha256sum "${game_mode_config}")" = "${config_checksum}"
 HOME="${test_root}/home" XDG_RUNTIME_DIR="${test_root}/home/run" \
   "${root_dir}/steamshine.sh" install --artifact "${test_root}/steamshine-steamos-x86_64-test.tar.zst" --no-service --non-interactive --yes
 

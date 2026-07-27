@@ -15,6 +15,13 @@ Examples:
 
 Supported commands are `menu`, `check`, `compatibility-check`, `install`, `build`, `configure`, `start`, `stop`, `restart`, `status`, `logs`, `diagnose`, `update`, `repair`, `uninstall`, `bootstrap`, `rollback`, and `hardware-test`. All modifying commands accept `--dry-run`.
 
+`install` is the one-command Game Mode path. It updates only
+`steamos_virtual_display_enabled=true`, `steamos_virtual_display_mode=auto`, and
+`steamos_session_source=auto`, enables the systemd user service, and starts it. Unrelated settings
+are preserved, the pre-change file is backed up once under the configuration `backups` directory,
+and repeated runs are idempotent. `--no-start` installs and configures without starting or enabling
+the service; `--no-service` also omits service installation.
+
 `install --artifact` and `install --channel pr` are immutable SteamOS user-space installs: they neither use a package manager nor require local build tools, and never disable SteamOS read-only mode. The separate interactive `menu` package-install option supports development hosts on SteamOS/Arch (`pacman`), Debian/Ubuntu (`apt`), and Fedora (`dnf`); it verifies each candidate package before requesting installation. User-local files remain under `~/.local`, `~/.config/steamshine`, `~/.local/state/steamshine`, and `$XDG_RUNTIME_DIR/steamshine`; normal uninstall removes only generated binaries, versions, cache, runtime files, and the user service, never shared packages or retained user configuration.
 
 Run `./steamshine.sh compatibility-check` after a SteamOS update. It verifies the measured SteamOS 3.8.16 baseline, ABI floors, Gamescope headless/device-selection options, and the expected RX 9070 XT render node. When the virtual-display feature is enabled, `start` runs the same gate before creating the user service. `hardware-test --interactive` records the gate first and stops the user service if its acceptance harness fails.

@@ -166,10 +166,27 @@ SteamOS update.
 Everything is driven by one script. Run it with no arguments in a terminal and it opens a menu.
 
 ```bash
-./steamshine.sh install     # install and set up the systemd user service
+./steamshine.sh install     # install, apply recommended settings, and start automatically
 ./steamshine.sh start
 ./steamshine.sh status
 ./steamshine.sh logs
+```
+
+`install` applies the recommended virtual-display settings (`enabled=true`, display mode `auto`, and
+session source `auto`), enables the systemd user service at login, and starts it immediately. It
+preserves unrelated Sunshine settings and keeps the original configuration at
+`~/.config/steamshine/backups/sunshine.conf.before-recommended-settings`. Repeated installation is
+safe. Use `--no-start` to install without enabling or starting the service, or `--no-service` to omit
+the user service entirely.
+
+```bash
+./steamshine.sh install --channel pr --pr 8 --non-interactive --yes
+./steamshine.sh status                         # confirm that the service is running
+./steamshine.sh check                          # check the host environment
+./steamshine.sh compatibility-check            # check SteamOS and Gamescope compatibility
+./steamshine.sh logs                           # show recent service logs
+./steamshine.sh restart                        # restart and retain autostart
+./steamshine.sh uninstall                      # remove it and disable autostart; keep configuration
 ```
 
 Then open `https://<host>:47990/steamshine/`, create your login, and pair your client from the **Pin**
@@ -196,7 +213,7 @@ Set these in your Sunshine config file, or from the panel's **Virtual display** 
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `steamos_virtual_display_enabled` | `false` | Master switch for everything above. |
+| `steamos_virtual_display_enabled` | `true` from `steamshine.sh install` | Master switch for everything above. The application-level fallback is `false`. |
 | `steamos_virtual_display_mode` | `auto` | `off` / `auto` / `force`. |
 | `steamos_session_source` | `auto` | `auto` / `existing_gamescope` / `owned_private`. |
 | `steamos_local_presentation` | `auto` | Mirror an owned session to an attached screen. |
