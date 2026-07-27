@@ -61,5 +61,7 @@ jobs:
         run: |
           set -euo pipefail
           gh release create "${RELEASE_TAG}" "${artifact}" "${checksum}" release-provenance.json \
+            --repo "${GITHUB_REPOSITORY}" \
+            --target "$(jq -r .source_sha release-provenance.json)" \
             --title "SteamShine ${RELEASE_TAG}" \
             --notes "Promoted without rebuild from successful SteamOS Runtime Build run ${{ inputs.source_run_id }}."
