@@ -326,7 +326,7 @@ try {
   await steamshinePage.locator('#login input[name="password"]').fill('web-e2e-password-2');
   await steamshinePage.locator('#login button').click();
   await waitForMonitor(steamshinePage);
-  await steamshinePage.locator('#logout').click();
+  await steamshinePage.locator('#mobile-logout').click();
   await steamshinePage.getByRole('heading', { name: 'Sign in' }).waitFor({ timeout: 5000 });
   securityResults.logout_session_status = await steamshinePage.evaluate(async () => (await fetch('/api/steamshine/v1/session')).status);
   if (securityResults.logout_session_status !== 401) throw new Error('Logout did not invalidate the SteamShine session.');
