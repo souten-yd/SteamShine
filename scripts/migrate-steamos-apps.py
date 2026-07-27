@@ -7,6 +7,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import tempfile
 from typing import Any
@@ -17,6 +18,40 @@ DISPLAY_HOOK = {
     "undo": "$(HOME)/.local/share/steamshine/current/scripts/configure-steamos-client-display.py revert",
 }
 TARGET_APPLICATIONS = {"Desktop", "Steam Big Picture"}
+LEGACY_FIXED_DISPLAY_STEAM_COMMAND = re.compile(
+    r"^setsid\s+env\s+DISPLAY=:\d+\s+steam\s+steam://open/bigpicture$"
+)
+STEAM_BIG_PICTURE_COMMAND = "setsid steam steam://open/bigpicture"
+
+
+def migrate_legacy_steam_command(application: dict[str, Any]) -> bool:
+    """Remove a fixed X11 display from the legacy packaged Steam command.
+
+    Only the former SteamShine default command is recognized. User-defined
+    detached commands remain byte-for-byte unchanged.
+
+    Args:
+        application: Sunshine application object to inspect and update.
+
+    Returns:
+        ``True`` when one or more legacy commands were replaced.
+
+    Raises:
+        ValueError: If Steam Big Picture has an invalid detached-command list.
+    """
+    if application.get("name") != "Steam Big Picture" or "detached" not in application:
+        return False
+    commands = application["detached"]
+    if not isinstance(commands, list) or not all(isinstance(command, str) for command in commands):
+        raise ValueError("Application Steam Big Picture has an invalid detached value")
+    migrated = [
+        STEAM_BIG_PICTURE_COMMAND if LEGACY_FIXED_DISPLAY_STEAM_COMMAND.fullmatch(command) else command
+        for command in commands
+    ]
+    if migrated == commands:
+        return False
+    application["detached"] = migrated
+    return True
 
 
 def add_display_hook(application: dict[str, Any]) -> bool:
@@ -66,6 +101,7 @@ def migrate(apps_path: Path) -> bool:
         if not isinstance(application, dict):
             raise ValueError("Applications JSON contains a non-object entry")
         changed = add_display_hook(application) or changed
+        changed = migrate_legacy_steam_command(application) or changed
     if not changed:
         return False
 

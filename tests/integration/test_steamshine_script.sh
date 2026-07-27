@@ -73,7 +73,7 @@ install -m 755 /bin/true "${test_root}/stage/bin/steamshine"
 install -m 755 /bin/true "${test_root}/stage/bin/steamshine-input-visualizer"
 install -m 755 "${root_dir}/scripts/migrate-steamos-apps.py" "${test_root}/stage/scripts/migrate-steamos-apps.py"
 cat >"${test_root}/home/.config/sunshine/apps.json" <<'EOF'
-{"env":{"CUSTOM":"preserved"},"apps":[{"name":"Desktop","image-path":"custom.png"},{"name":"Custom Game","cmd":"custom-game"}]}
+{"env":{"CUSTOM":"preserved"},"apps":[{"name":"Desktop","image-path":"custom.png"},{"name":"Steam Big Picture","detached":["setsid env DISPLAY=:1 steam steam://open/bigpicture"]},{"name":"Custom Game","cmd":"custom-game"}]}
 EOF
 printf '{"target_architecture":"x86_64"}\n' >"${test_root}/stage/BUILD_INFO.json"
 printf '{}\n' >"${test_root}/stage/STEAMOS_BASELINE.json"
@@ -130,6 +130,7 @@ payload = json.load(open(sys.argv[1], encoding="utf-8"))
 assert payload["env"]["CUSTOM"] == "preserved"
 applications = {application["name"]: application for application in payload["apps"]}
 assert "configure-steamos-client-display.py apply" in applications["Desktop"]["prep-cmd"][0]["do"]
+assert applications["Steam Big Picture"]["detached"] == ["setsid steam steam://open/bigpicture"]
 assert applications["Custom Game"]["cmd"] == "custom-game"
 PY
 test -f "${test_root}/home/.config/sunshine/apps.json.steamshine-backup"
