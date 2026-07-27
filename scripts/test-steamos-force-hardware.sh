@@ -63,11 +63,12 @@ mkdir -p "${temporary_runtime}"
 trap cleanup EXIT INT TERM
 
 # Do not modify the original file. Drop only this test's keys, then append the
-# force policy and a session-owned runtime base.
-sed -E '/^[[:space:]]*steamos_(virtual_display_enabled|virtual_display_mode|runtime_directory)[[:space:]]*=/d' "${config_file}" >"${temporary_config}"
+# force policy, non-persistent lifecycle, and a session-owned runtime base.
+sed -E '/^[[:space:]]*steamos_(virtual_display_enabled|virtual_display_mode|keep_session_alive|runtime_directory)[[:space:]]*=/d' "${config_file}" >"${temporary_config}"
 cat >>"${temporary_config}" <<EOF
 steamos_virtual_display_enabled = true
 steamos_virtual_display_mode = force
+steamos_keep_session_alive = false
 steamos_runtime_directory = ${temporary_runtime}
 EOF
 redact_config "${temporary_config}" >"${report_dir}/config-redacted.txt"
