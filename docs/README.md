@@ -1,44 +1,50 @@
-# SteamShine 設計文書
+# SteamShine documentation
 
-SteamOS向けSteamShineの設計文書一覧。
+The active planning context is intentionally limited to the documents below. Load these first and do not automatically load retired plans from Git history.
 
-## 優先順位と性能方針
+## Canonical project documents
 
-- [`STREAMING_PRIORITY_AND_PERFORMANCE_POLICY.md`](./STREAMING_PRIORITY_AND_PERFORMANCE_POLICY.md)
-  - Artemis／Moonlightと仮想Gamescope配信を最優先にする拘束仕様
-  - Web管理からアクセスできる全情報
-  - SSD書き込み、CPU／GPU負荷、監視間隔、性能予算
-  - Webブラウザゲーム配信を任意・既定無効とする方針
+1. [`PROJECT_ROADMAP.md`](./PROJECT_ROADMAP.md)
+   - SteamShine-primary product direction
+   - Moonlight arbitrary resolution/FPS
+   - HDR, codec, quality, adaptive bitrate, profiles, and release order
+   - PR boundaries, counterarguments, merge gates, and prohibited shortcuts
 
-## クライアント追従表示と自動bitrate
+2. [`STREAM_NEGOTIATION_HDR_QUALITY_DESIGN.md`](./STREAM_NEGOTIATION_HDR_QUALITY_DESIGN.md)
+   - detailed requested/selected/active/observed model
+   - source-aware geometry and refresh handling
+   - end-to-end HDR gates
+   - H.264/HEVC/AV1 policy using existing encoders
+   - frame pacing, bitrate envelope, adaptive controller, persistence, tests, and rollback
 
-- [`STEAMOS_ADAPTIVE_STREAMING_DESIGN.md`](./STEAMOS_ADAPTIVE_STREAMING_DESIGN.md)
-  - ホストの物理画面サイズに依存しないclient-native仮想canvas
-  - exact／fit／safe area／UI scaleとアスペクト比維持
-  - Moonlight標準loss reportとArtemis拡張telemetryによる自動bitrate
-  - AMD VAAPI／Vulkan Videoのruntime rate-control設計
-  - Webからの完全なstream観測、低負荷telemetry、SSD書き込み最小化
-  - Webブラウザゲーム配信をP0完成後の任意評価とする方針
+3. [`CODEX_GOAL_MODE_STREAMING.md`](./CODEX_GOAL_MODE_STREAMING.md)
+   - exact Goal Mode execution instructions for the next implementation PR
+   - required goal order, tests, hardware gates, commit sequence, and stop conditions
 
-## 仮想デスクトップ配信
+4. [`IMPLEMENTATION_STATUS.md`](./IMPLEMENTATION_STATUS.md)
+   - concise evidence-based status of what is merged, locally tested, hardware tested, or still pending
 
-- [`STEAMOS_VIRTUAL_SESSION_PLAN.md`](./STEAMOS_VIRTUAL_SESSION_PLAN.md)
-  - headless Gamescope、PipeWire、DMA-BUFを使った仮想ストリーミングセッション
-  - 解像度／FPS自動一致、Steam統合、音声、入力、復旧
+## Current implementation records
 
-## GPU・監視・遠隔管理
+- [`STEAMOS_AUTO_VIRTUAL_DISPLAY_IMPLEMENTATION.md`](./STEAMOS_AUTO_VIRTUAL_DISPLAY_IMPLEMENTATION.md)
+  - implemented SteamOS virtual-session lifecycle and ownership behavior
 
-- [`STEAMOS_CONTROL_PLANE_DESIGN.md`](./STEAMOS_CONTROL_PLANE_DESIGN.md)
-  - AMD GPU設定変更
-  - リソースモニター
-  - SSH／永続Webターミナル
-  - RDP／VNC／SSHリモートデスクトップ
-  - ControlDeckからの移植設計
+- [`STEAMOS_GAMESCOPE_PIPEWIRE_CAPTURE_PLAN.md`](./STEAMOS_GAMESCOPE_PIPEWIRE_CAPTURE_PLAN.md)
+  - Gamescope PipeWire/DMA-BUF capture architecture and implementation record
 
-## 実装時の判断順
+- [`configuration.md`](./configuration.md)
+  - configuration reference
 
-1. `STREAMING_PRIORITY_AND_PERFORMANCE_POLICY.md`のP0性能要件を守る。
-2. `STEAMOS_ADAPTIVE_STREAMING_DESIGN.md`のclient-native表示と自動bitrateの境界・fallbackを先に固定する。
-3. `STEAMOS_VIRTUAL_SESSION_PLAN.md`のArtemis／Moonlight経路を完成させる。
-4. `STEAMOS_CONTROL_PLANE_DESIGN.md`の管理機能を、配信データプレーンから分離して追加する。
-5. Webブラウザからのゲームプレイは、P0／P1完成後の任意評価とする。
+Implementation records describe the code that exists. They do not override the canonical roadmap for future work.
+
+## Documentation lifecycle
+
+Historical pre-implementation plans and temporary handoff files were removed from the active tree after their valid decisions were consolidated. See [`archive/README.md`](./archive/README.md) for the retired file list. Full history remains available through Git.
+
+Rules:
+
+- keep one active roadmap and one active detailed design for a workstream;
+- update `IMPLEMENTATION_STATUS.md` using measured facts, not planned claims;
+- remove temporary handoff files after the owning PR is merged;
+- do not retain multiple contradictory Goal plans;
+- preserve important historical evidence in PR descriptions, commits, reports, and Git history instead of default Codex context.
