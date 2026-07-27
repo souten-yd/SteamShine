@@ -255,6 +255,9 @@ try {
   if (!securityResults.csp_header.includes("default-src 'self'")) {
     throw new Error('SteamShine Monitor is missing its restrictive Content-Security-Policy header.');
   }
+  if (!securityResults.csp_header.includes("style-src 'self'") || !securityResults.csp_header.includes("style-src-attr 'unsafe-inline'")) {
+    throw new Error('SteamShine Monitor CSP does not narrowly permit required runtime style attributes.');
+  }
   securityResults.malformed_json_status = await steamshinePage.evaluate(async (csrf) => (await fetch('/api/steamshine/v1/pairing/pin', {
     method: 'POST', headers: { 'Content-Type': 'application/json', 'X-SteamShine-CSRF-Token': csrf }, body: '{',
   })).status, csrfValue);

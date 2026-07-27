@@ -671,6 +671,8 @@ namespace confighttp {
    *
    * @param response The HTTP response object.
    * @param request The HTTP request object.
+   * @note Inline scripts and style elements remain forbidden. Style attributes are allowed because
+   *       live metric bars and the bundled terminal renderer update element geometry at runtime.
    */
   void getSteamshinePage(const resp_https_t &response, const req_https_t &request) {
     if (!config::sunshine.steamshine_web_ui_enabled) {
@@ -682,7 +684,7 @@ namespace confighttp {
     const SimpleWeb::CaseInsensitiveMultimap headers {
       {"Content-Type", "text/html; charset=utf-8"},
       {"X-Frame-Options", "DENY"},
-      {"Content-Security-Policy", "default-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self';"},
+      {"Content-Security-Policy", "default-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'self';"},
       {"Cache-Control", "no-store"}
     };
     response->write(content, headers);
