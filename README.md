@@ -166,7 +166,7 @@ SteamOS update.
 Everything is driven by one script. Run it with no arguments in a terminal and it opens a menu.
 
 ```bash
-./steamshine.sh install -a  # install the latest GitHub release and start automatically
+./steamshine.sh install     # download the latest GitHub release, install, and start automatically
 ./steamshine.sh start
 ./steamshine.sh status
 ./steamshine.sh logs
@@ -176,12 +176,13 @@ Everything is driven by one script. Run it with no arguments in a terminal and i
 session source `auto`), enables the systemd user service at login, and starts it immediately. It
 preserves unrelated Sunshine settings and keeps the original configuration at
 `~/.config/steamshine/backups/sunshine.conf.before-recommended-settings`. Repeated installation is
-safe. Use `--no-start` to install without enabling or starting the service, or `--no-service` to omit
-the user service entirely.
+safe. Use `--no-start` to install and enable autostart without starting the service in the current
+session, or `--no-service` to omit unit creation, enablement, and startup entirely.
 
 ```bash
-./steamshine.sh install -a
+./steamshine.sh install
 ./steamshine.sh status                         # confirm that the service is running
+./steamshine.sh autostart-status               # inspect unit, process, binary, and boot health
 ./steamshine.sh check                          # check the host environment
 ./steamshine.sh compatibility-check            # check SteamOS and Gamescope compatibility
 ./steamshine.sh logs                           # show recent service logs
@@ -196,20 +197,29 @@ On SteamOS the recommended install uses a prebuilt CI artifact, so no compiler o
 needed on the Deck itself:
 
 ```bash
-./steamshine.sh install -a
+./steamshine.sh install
 ```
 
-`-a` (or `--latest-release`) queries this repository's latest GitHub Release, downloads the single
-SteamOS x86_64 archive and its matching SHA-256 file into `~/.cache/steamshine/releases`, verifies
-both the release asset shape and checksum, then installs through the same immutable version store.
+With no artifact-selection option, `install` queries this repository's latest GitHub Release,
+downloads the single SteamOS x86_64 archive and its matching SHA-256 file into
+`~/.cache/steamshine/releases`, verifies both the release asset shape and checksum, then installs
+through the same immutable version store. `-a` and `--latest-release` remain accepted as compatibility
+aliases but are no longer required.
 
 The installer verifies the archive checksum, rejects unsafe or linked archive entries, and writes only
 under `~/.local`, `~/.config/steamshine`, `~/.local/state/steamshine` and `~/.cache/steamshine`.
 Repeat installs are idempotent, the previous version is kept for `./steamshine.sh rollback`, and
 `uninstall` removes only what it created.
 
+The installer atomically writes `~/.config/systemd/user/steamshine.service`, reloads the user manager,
+and enables it for `default.target`. SteamOS starts that target when the Game Mode login creates the
+user manager, so neither Desktop Autostart nor `sudo` is involved. The unit supplies `%t` as the core
+runtime, PipeWire, and D-Bus location; display-specific values are discovered later and are not
+hard-coded startup dependencies. The installer deliberately does not enable login lingering.
+
 Other useful commands: `check`, `compatibility-check`, `build`, `configure`, `restart`, `diagnose`,
-`update`, `repair`, `rollback`, `hardware-test`. Every modifying command accepts `--dry-run`.
+`autostart-status`, `update`, `repair`, `rollback`, `hardware-test`. Every modifying command accepts
+`--dry-run`.
 
 ### The settings that matter
 
@@ -217,7 +227,7 @@ Set these in your Sunshine config file, or from the panel's **Virtual display** 
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `steamos_virtual_display_enabled` | `false` | Master switch for everything above. |
+| `steamos_virtual_display_enabled` | `true` from `steamshine.sh install` | Master switch for everything above. The application-level fallback is `false`. |
 | `steamos_virtual_display_mode` | `auto` | `off` / `auto` / `force`. |
 | `steamos_session_source` | `auto` | `auto` / `existing_gamescope` / `owned_private`. |
 | `steamos_local_presentation` | `auto` | Mirror an owned session to an attached screen. |
