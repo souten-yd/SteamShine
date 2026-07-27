@@ -9,7 +9,7 @@ PREFIX="${HOME}/.local"
 BUILD_DIR="${ROOT_DIR}/cmake-build-steamos"
 CONFIG_FILE="${HOME}/.config/steamshine/sunshine.conf"
 STATE_DIR="${HOME}/.local/state/steamshine"
-DRY_RUN=false NON_INTERACTIVE=false ASSUME_YES=false VERBOSE=false QUIET=false FORCE=false NO_START=false NO_BUILD=false NO_PACKAGES=false NO_SERVICE=false PURGE=false REMOVE_DEPENDENCIES=false CLEAN=false HARDWARE_INTERACTIVE=false BUILD_TYPE=Release
+DRY_RUN=false NON_INTERACTIVE=false ASSUME_YES=false VERBOSE=false QUIET=false FORCE=false NO_START=false NO_BUILD=false NO_PACKAGES=false NO_SERVICE=false PURGE=false REMOVE_DEPENDENCIES=false CLEAN=false HARDWARE_INTERACTIVE=false AUTO_RELEASE=false BUILD_TYPE=Release
 GAME_GPU="" CAPTURE_GPU="" ENCODER_GPU="" GAMESCOPE_PATH="gamescope" DEFAULT_WIDTH=1920 DEFAULT_HEIGHT=1080 DEFAULT_FPS=60
 CHANNEL="stable" PR_NUMBER="" RELEASE_TAG="" ARTIFACT_PATH=""
 
@@ -22,7 +22,7 @@ path_within() { local candidate="$1" parent="$2" canonical_candidate canonical_p
 usage() { cat <<'EOF'
 Usage: ./steamshine.sh <command> [options]
 Commands: menu check compatibility-check vaapi-driver-status install build configure start stop restart status logs diagnose update repair uninstall bootstrap rollback hardware-test
-Options: --non-interactive --yes --dry-run --verbose --quiet --force --no-start --no-build --no-packages --no-service --config PATH --prefix PATH --build-dir PATH --channel stable|nightly|pr --pr NUMBER --release TAG --artifact PATH --game-gpu ID --capture-gpu ID --encoder-gpu ID --gamescope-path PATH --default-width PX --default-height PX --default-fps FPS --log-file PATH --purge --remove-dependencies --clean --debug --release
+Options: -a, --latest-release --non-interactive --yes --dry-run --verbose --quiet --force --no-start --no-build --no-packages --no-service --config PATH --prefix PATH --build-dir PATH --channel stable|nightly|pr --pr NUMBER --release TAG --artifact PATH --game-gpu ID --capture-gpu ID --encoder-gpu ID --gamescope-path PATH --default-width PX --default-height PX --default-fps FPS --log-file PATH --purge --remove-dependencies --clean --debug --release
 EOF
 }
 require_bash() { [[ -n "${BASH_VERSION:-}" ]] || die 'Run this script with bash.' "$EXIT_USAGE"; }
@@ -30,9 +30,12 @@ parse() {
   COMMAND="${1:-}"; [[ $# -gt 0 ]] && shift || true
   if [[ "${COMMAND}" == "-h" || "${COMMAND}" == "--help" ]]; then usage; exit 0; fi
   while [[ $# -gt 0 ]]; do case "$1" in
-    --non-interactive) NON_INTERACTIVE=true;; --interactive) HARDWARE_INTERACTIVE=true;; --yes) ASSUME_YES=true;; --dry-run) DRY_RUN=true;; --verbose) VERBOSE=true;; --quiet) QUIET=true;; --force) FORCE=true;; --no-start) NO_START=true;; --no-build) NO_BUILD=true;; --no-packages) NO_PACKAGES=true;; --no-service) NO_SERVICE=true;; --purge) PURGE=true;; --remove-dependencies) REMOVE_DEPENDENCIES=true;; --clean) CLEAN=true;; --debug) BUILD_TYPE=Debug;; --release) BUILD_TYPE=Release;;
+    -a|--latest-release) AUTO_RELEASE=true;; --non-interactive) NON_INTERACTIVE=true;; --interactive) HARDWARE_INTERACTIVE=true;; --yes) ASSUME_YES=true;; --dry-run) DRY_RUN=true;; --verbose) VERBOSE=true;; --quiet) QUIET=true;; --force) FORCE=true;; --no-start) NO_START=true;; --no-build) NO_BUILD=true;; --no-packages) NO_PACKAGES=true;; --no-service) NO_SERVICE=true;; --purge) PURGE=true;; --remove-dependencies) REMOVE_DEPENDENCIES=true;; --clean) CLEAN=true;; --debug) BUILD_TYPE=Debug;; --release) BUILD_TYPE=Release;;
     --config|--prefix|--build-dir|--log-file|--channel|--pr|--artifact|--game-gpu|--capture-gpu|--encoder-gpu|--gamescope-path|--default-width|--default-height|--default-fps) [[ $# -ge 2 ]] || die "Missing value for $1" "$EXIT_USAGE"; case "$1" in --config) CONFIG_FILE="$2";; --prefix) PREFIX="$2";; --build-dir) BUILD_DIR="$2";; --channel) CHANNEL="$2";; --pr) PR_NUMBER="$2";; --artifact) ARTIFACT_PATH="$2";; --game-gpu) GAME_GPU="$2";; --capture-gpu) CAPTURE_GPU="$2";; --encoder-gpu) ENCODER_GPU="$2";; --gamescope-path) GAMESCOPE_PATH="$2";; --default-width) DEFAULT_WIDTH="$2";; --default-height) DEFAULT_HEIGHT="$2";; --default-fps) DEFAULT_FPS="$2";; esac; shift;;
     -h|--help) usage; exit 0;; *) die "Unknown option: $1" "$EXIT_USAGE";; esac; shift; done
+  if "${AUTO_RELEASE}" && { [[ -n "${ARTIFACT_PATH}" ]] || [[ -n "${PR_NUMBER}" ]]; }; then
+    die '-a/--latest-release cannot be combined with --artifact or --pr.' "$EXIT_USAGE"
+  fi
 }
 load_os_release() { [[ -r /etc/os-release ]] || die '/etc/os-release is required.' "$EXIT_UNSUPPORTED"; . /etc/os-release; }
 package_manager() { load_os_release; case "${ID}:${ID_LIKE:-}" in steamos:*|arch:*) printf 'pacman\n';; ubuntu:*|debian:*|*:*debian*) printf 'apt\n';; fedora:*|*:*fedora*) printf 'dnf\n';; *) die "Unsupported Linux distribution: ${ID}" "$EXIT_UNSUPPORTED";; esac; }
@@ -180,6 +183,10 @@ EOF
 }
 fetch_artifact() {
   [[ -n "${ARTIFACT_PATH}" ]] && return
+  if "${AUTO_RELEASE}"; then
+    fetch_latest_release
+    return
+  fi
   command -v gh >/dev/null || die 'Install gh or download the PR artifact from Actions and pass --artifact <path>.' "$EXIT_DEPENDENCY"
   local cache="${HOME}/.cache/steamshine/artifacts" run_id="" candidate artifact_name="" artifact_names run_cache
   run mkdir -p "${cache}"
@@ -207,6 +214,58 @@ fetch_artifact() {
   run gh run download "${run_id}" --repo souten-yd/SteamShine --name "${artifact_name}" --dir "${run_cache}"
   ARTIFACT_PATH="$(find "${run_cache}" -type f -name 'steamshine-steamos-*.tar.zst' -print -quit)"
   [[ -n "${ARTIFACT_PATH}" ]] || die "Artifact download did not contain ${artifact_name}." "$EXIT_DEPENDENCY"
+}
+fetch_latest_release() {
+  command -v curl >/dev/null || die 'curl is required to download the latest GitHub release.' "${EXIT_DEPENDENCY}"
+  command -v python3 >/dev/null || die 'python3 is required to inspect the latest GitHub release.' "${EXIT_DEPENDENCY}"
+  local api_url="${STEAMSHINE_RELEASE_API_URL:-https://api.github.com/repos/souten-yd/SteamShine/releases/latest}"
+  local cache="${HOME}/.cache/steamshine/releases" metadata temporary_artifact temporary_checksum
+  local -a release=()
+  run mkdir -p "${cache}"
+  metadata="$(mktemp "${cache}/latest-release.XXXXXX.json")"
+  if ! curl --proto '=https' --tlsv1.2 --fail --location --silent --show-error --output "${metadata}" "${api_url}"; then
+    rm -f -- "${metadata}"
+    die 'The latest GitHub release metadata could not be downloaded.' "${EXIT_DEPENDENCY}"
+  fi
+  mapfile -t release < <(python3 - "${metadata}" <<'PY'
+import json
+import re
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as release_file:
+    payload = json.load(release_file)
+
+assets = {asset.get("name", ""): asset.get("browser_download_url", "") for asset in payload.get("assets", [])}
+archives = [name for name in assets if re.fullmatch(r"steamshine-steamos-x86_64-[0-9A-Fa-f]+\.tar\.zst", name)]
+if len(archives) != 1:
+    raise SystemExit("latest release must contain exactly one SteamOS x86_64 archive")
+archive = archives[0]
+checksum = f"{archive}.sha256"
+if checksum not in assets:
+    raise SystemExit("latest release is missing the archive checksum")
+expected_prefix = "https://github.com/souten-yd/SteamShine/releases/download/"
+if not assets[archive].startswith(expected_prefix) or not assets[checksum].startswith(expected_prefix):
+    raise SystemExit("latest release contains an unexpected download URL")
+print(payload.get("tag_name", ""))
+print(archive)
+print(assets[archive])
+print(checksum)
+print(assets[checksum])
+PY
+  )
+  rm -f -- "${metadata}"
+  [[ ${#release[@]} -eq 5 && -n "${release[0]}" ]] || die 'The latest GitHub release assets are invalid.' "${EXIT_DEPENDENCY}"
+  temporary_artifact="$(mktemp "${cache}/${release[1]}.XXXXXX")"
+  temporary_checksum="$(mktemp "${cache}/${release[3]}.XXXXXX")"
+  if ! curl --proto '=https' --tlsv1.2 --fail --location --silent --show-error --output "${temporary_artifact}" "${release[2]}" ||
+    ! curl --proto '=https' --tlsv1.2 --fail --location --silent --show-error --output "${temporary_checksum}" "${release[4]}"; then
+    rm -f -- "${temporary_artifact}" "${temporary_checksum}"
+    die "SteamShine ${release[0]} could not be downloaded." "${EXIT_DEPENDENCY}"
+  fi
+  mv -f -- "${temporary_artifact}" "${cache}/${release[1]}"
+  mv -f -- "${temporary_checksum}" "${cache}/${release[3]}"
+  ARTIFACT_PATH="${cache}/${release[1]}"
+  say "Downloaded SteamShine ${release[0]}"
 }
 validate_artifact() {
   local artifact="$1" entry

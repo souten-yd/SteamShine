@@ -72,6 +72,47 @@ printf '{"target_architecture":"x86_64"}\n' >"${test_root}/stage/BUILD_INFO.json
 printf '{}\n' >"${test_root}/stage/STEAMOS_BASELINE.json"
 tar --zstd -C "${test_root}/stage" -cf "${test_root}/steamshine-steamos-x86_64-test.tar.zst" .
 (cd "${test_root}" && sha256sum steamshine-steamos-x86_64-test.tar.zst >steamshine-steamos-x86_64-test.tar.zst.sha256)
+
+# `install -a` resolves the newest published GitHub Release, downloads its
+# archive and detached checksum, and then enters the normal validated install.
+release_commit='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+release_archive="steamshine-steamos-x86_64-${release_commit}.tar.zst"
+mkdir -p "${test_root}/release-assets" "${test_root}/release-bin" "${test_root}/release-home/run"
+cp "${test_root}/steamshine-steamos-x86_64-test.tar.zst" "${test_root}/release-assets/${release_archive}"
+(cd "${test_root}/release-assets" && sha256sum "${release_archive}" >"${release_archive}.sha256")
+cat >"${test_root}/release-assets/latest.json" <<EOF
+{"tag_name":"steamos-test","assets":[{"name":"${release_archive}","browser_download_url":"https://github.com/souten-yd/SteamShine/releases/download/steamos-test/${release_archive}"},{"name":"${release_archive}.sha256","browser_download_url":"https://github.com/souten-yd/SteamShine/releases/download/steamos-test/${release_archive}.sha256"}]}
+EOF
+cat >"${test_root}/release-bin/curl" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+output='' url=''
+while (($#)); do
+  case "$1" in
+    --output) output="$2"; shift 2;;
+    --proto|--tlsv1.2) [[ "$1" == --proto ]] && shift 2 || shift;;
+    --fail|--location|--silent|--show-error) shift;;
+    *) url="$1"; shift;;
+  esac
+done
+case "${url}" in
+  */releases/latest) cp "${RELEASE_METADATA}" "${output}";;
+  *.tar.zst.sha256) cp "${RELEASE_CHECKSUM}" "${output}";;
+  *.tar.zst) cp "${RELEASE_ARTIFACT}" "${output}";;
+  *) exit 22;;
+esac
+EOF
+chmod 755 "${test_root}/release-bin/curl"
+RELEASE_METADATA="${test_root}/release-assets/latest.json" \
+  RELEASE_ARTIFACT="${test_root}/release-assets/${release_archive}" \
+  RELEASE_CHECKSUM="${test_root}/release-assets/${release_archive}.sha256" \
+  STEAMSHINE_RELEASE_API_URL='https://api.github.test/repos/souten-yd/SteamShine/releases/latest' \
+  HOME="${test_root}/release-home" XDG_RUNTIME_DIR="${test_root}/release-home/run" PATH="${test_root}/release-bin:${PATH}" \
+  "${root_dir}/steamshine.sh" install -a --no-service --non-interactive --yes
+test -x "${test_root}/release-home/.local/bin/steamshine"
+test -f "${test_root}/release-home/.cache/steamshine/releases/${release_archive}"
+grep -Fxq 'steamos_virtual_display_enabled = true' "${test_root}/release-home/.config/steamshine/sunshine.conf"
+
 HOME="${test_root}/home" XDG_RUNTIME_DIR="${test_root}/home/run" \
   "${root_dir}/steamshine.sh" install --artifact "${test_root}/steamshine-steamos-x86_64-test.tar.zst" --no-service --non-interactive --yes
 python3 - "${test_root}/home/.config/sunshine/apps.json" <<'PY'

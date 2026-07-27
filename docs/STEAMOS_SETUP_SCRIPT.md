@@ -6,7 +6,7 @@ Examples:
 
 ```bash
 ./steamshine.sh check
-./steamshine.sh install --non-interactive --yes
+./steamshine.sh install -a
 ./steamshine.sh bootstrap --non-interactive --yes
 ./steamshine.sh diagnose
 ./steamshine.sh uninstall
@@ -21,6 +21,11 @@ Supported commands are `menu`, `check`, `compatibility-check`, `install`, `build
 are preserved, the pre-change file is backed up once under the configuration `backups` directory,
 and repeated runs are idempotent. `--no-start` installs and configures without starting or enabling
 the service; `--no-service` also omits service installation.
+
+`install -a` (equivalently `install --latest-release`) downloads the newest published SteamShine
+GitHub Release. It requires exactly one `steamshine-steamos-x86_64-<commit>.tar.zst` asset and its
+matching `.sha256`, stores both under `~/.cache/steamshine/releases`, and then uses the normal
+checksum, archive-path, architecture, and immutable-version validation before installation.
 
 `install --artifact` and `install --channel pr` are immutable SteamOS user-space installs: they neither use a package manager nor require local build tools, and never disable SteamOS read-only mode. The separate interactive `menu` package-install option supports development hosts on SteamOS/Arch (`pacman`), Debian/Ubuntu (`apt`), and Fedora (`dnf`); it verifies each candidate package before requesting installation. User-local files remain under `~/.local`, `~/.config/steamshine`, `~/.local/state/steamshine`, and `$XDG_RUNTIME_DIR/steamshine`; normal uninstall removes only generated binaries, versions, cache, runtime files, and the user service, never shared packages or retained user configuration.
 
