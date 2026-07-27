@@ -24,5 +24,7 @@ grep -Fq 'STEAMSHINE_FORCE_HARDWARE_TEST=1' "${test_root}/guard.log"
 # configuration and never replace the user service unit's ExecStart.
 grep -Fq 'steamos_virtual_display_mode = force' "${root_dir}/scripts/test-steamos-force-hardware.sh"
 grep -Fq 'temporary_config' "${root_dir}/scripts/test-steamos-force-hardware.sh"
+grep -Fq "\${runtime_root}/ss-fh.XXXXXX" "${root_dir}/scripts/test-steamos-force-hardware.sh"
+grep -Fq "kill -KILL \"\${test_pid}\"" "${root_dir}/scripts/test-steamos-force-hardware.sh"
 grep -Fq 'systemctl --user start steamshine.service' "${root_dir}/scripts/test-steamos-force-hardware.sh"
 grep -Fq 'Web UI did not become ready within 30 seconds' "${root_dir}/scripts/test-steamos-force-hardware.sh"

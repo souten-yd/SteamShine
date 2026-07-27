@@ -290,9 +290,9 @@ namespace steamos_virtual_session {
   /**
    * @brief Resolve the EIS input socket owned by the selected verified Gamescope process.
    *
-   * The socket is accepted only when its inode is held by the selected PID,
-   * its path remains inside the selected runtime, and it is a current-user
-   * UNIX-domain socket.
+   * The socket is accepted only when its path remains inside the selected
+   * runtime, it is a current-user UNIX-domain socket, and the kernel-reported
+   * `SO_PEERCRED` PID matches the selected Gamescope identity.
    *
    * @param socket_path Receives the absolute EIS socket path.
    * @param error Receives a stable failure reason without credentials.

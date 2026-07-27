@@ -19,7 +19,6 @@
 #include <boost/property_tree/ptree.hpp>
 #include <cctype>
 #include <cerrno>
-#include <charconv>
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
@@ -91,6 +90,11 @@ namespace steamos_virtual_session {
       std::atomic_uint64_t captured_frames {0};  ///< Wayland DMA-BUF frames acquired for the owned session.
 #if defined(__linux__)
       pid_t process_group {-1};  ///< Process group containing Gamescope and its children.
+      std::filesystem::path verified_input_socket;  ///< EIS socket whose kernel peer matched the selected Gamescope.
+      std::uint64_t verified_input_socket_device {0};  ///< Device identity cached after peer verification.
+      std::uint64_t verified_input_socket_inode {0};  ///< Inode identity cached after peer verification.
+      pid_t verified_input_producer_pid {-1};  ///< Gamescope peer PID cached with the EIS socket.
+      std::uint64_t verified_input_producer_start_time {0};  ///< Gamescope start time cached with the EIS socket.
 #endif
     } manager;
 
@@ -215,32 +219,38 @@ namespace steamos_virtual_session {
     }
 
     /**
-     * @brief Read UNIX socket inodes currently held by one verified process.
+     * @brief Read the server PID authenticated by a connected UNIX-domain socket.
      *
-     * @param process Process whose file descriptors are inspected.
-     * @return Socket inode numbers parsed from `/proc/<pid>/fd` links.
+     * Linux supplies `SO_PEERCRED` from the kernel, so set-user-ID/capability
+     * process protections on `/proc/<pid>/fd` do not prevent identity checks.
+     *
+     * @param path Listening UNIX-domain socket to probe.
+     * @return Kernel-authenticated peer PID, or no value when connection fails.
      */
-    std::vector<std::uint64_t> process_socket_inodes(const pid_t process) {
-      std::vector<std::uint64_t> inodes;
-      std::error_code error;
-      const auto descriptor_directory {std::filesystem::path {"/proc"} / std::to_string(process) / "fd"};
-      for (const auto &entry : std::filesystem::directory_iterator {descriptor_directory, error}) {
-        if (error) {
-          break;
-        }
-        const auto target {std::filesystem::read_symlink(entry.path(), error).string()};
-        if (error || !target.starts_with("socket:[") || !target.ends_with(']')) {
-          error.clear();
-          continue;
-        }
-        const auto value {std::string_view {target}.substr(8, target.size() - 9)};
-        std::uint64_t inode {};
-        const auto parsed {std::from_chars(value.data(), value.data() + value.size(), inode)};
-        if (parsed.ec == std::errc {} && parsed.ptr == value.data() + value.size()) {
-          inodes.emplace_back(inode);
-        }
+    std::optional<pid_t> unix_socket_peer_pid(const std::filesystem::path &path) {
+      const auto native_path {path.string()};
+      sockaddr_un address {};
+      if (native_path.empty() || native_path.size() >= sizeof(address.sun_path)) {
+        return std::nullopt;
       }
-      return inodes;
+      const int descriptor {::socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0)};
+      if (descriptor < 0) {
+        return std::nullopt;
+      }
+      address.sun_family = AF_UNIX;
+      std::memcpy(address.sun_path, native_path.c_str(), native_path.size() + 1);
+      if (::connect(descriptor, reinterpret_cast<const sockaddr *>(&address), sizeof(address)) != 0) {
+        ::close(descriptor);
+        return std::nullopt;
+      }
+      ucred credentials {};
+      socklen_t credentials_size {sizeof(credentials)};
+      const bool verified {
+        ::getsockopt(descriptor, SOL_SOCKET, SO_PEERCRED, &credentials, &credentials_size) == 0 &&
+        credentials_size == sizeof(credentials) && credentials.pid > 0
+      };
+      ::close(descriptor);
+      return verified ? std::optional<pid_t> {credentials.pid} : std::nullopt;
     }
 
     /**
@@ -278,6 +288,11 @@ namespace steamos_virtual_session {
         stop_owned_process_group(manager.process_group, std::chrono::seconds {config::steamos_virtual_display.shutdown_timeout_seconds});
       }
       manager.process_group = -1;
+      manager.verified_input_socket.clear();
+      manager.verified_input_socket_device = 0;
+      manager.verified_input_socket_inode = 0;
+      manager.verified_input_producer_pid = -1;
+      manager.verified_input_producer_start_time = 0;
 #endif
       std::error_code error;
       if (manager.runtime_owned) {
@@ -2027,18 +2042,10 @@ namespace steamos_virtual_session {
       error = "gamescope_input_identity_changed";
       return false;
     }
-    const std::filesystem::path runtime {
-      manager.origin == session_origin_e::owned_private ? manager.runtime_directory : std::filesystem::path {manager.pipewire_runtime}
-    };
-    if (runtime.empty()) {
-      error = "gamescope_input_runtime_unavailable";
-      return false;
-    }
-    std::ifstream unix_table {"/proc/net/unix"};
-    const std::string unix_contents {std::istreambuf_iterator<char> {unix_table}, {}};
-    const auto socket {select_gamescope_eis_socket(runtime, unix_contents, process_socket_inodes(manager.process_group))};
+    const std::filesystem::path runtime {manager.display_endpoint.xdg_runtime_directory};
+    const auto socket {gamescope_eis_socket_path(runtime, manager.display_endpoint.gamescope_wayland_display)};
     if (!socket) {
-      error = "gamescope_input_eis_socket_unverified";
+      error = "gamescope_input_runtime_unavailable";
       return false;
     }
     struct stat socket_status {};
@@ -2046,7 +2053,27 @@ namespace steamos_virtual_session {
       error = "gamescope_input_eis_socket_invalid";
       return false;
     }
+    if (manager.verified_input_socket == *socket &&
+        manager.verified_input_socket_device == static_cast<std::uint64_t>(socket_status.st_dev) &&
+        manager.verified_input_socket_inode == static_cast<std::uint64_t>(socket_status.st_ino) &&
+        manager.verified_input_producer_pid == manager.process_group &&
+        manager.verified_input_producer_start_time == manager.source_process_start_time) {
+      socket_path = socket->string();
+      error.clear();
+      return true;
+    }
+    const auto peer_pid {unix_socket_peer_pid(*socket)};
+    if (!peer_pid || *peer_pid != manager.process_group) {
+      error = "gamescope_input_eis_socket_unverified";
+      return false;
+    }
+    manager.verified_input_socket = *socket;
+    manager.verified_input_socket_device = static_cast<std::uint64_t>(socket_status.st_dev);
+    manager.verified_input_socket_inode = static_cast<std::uint64_t>(socket_status.st_ino);
+    manager.verified_input_producer_pid = manager.process_group;
+    manager.verified_input_producer_start_time = manager.source_process_start_time;
     socket_path = socket->string();
+    error.clear();
     return true;
 #else
     (void) socket_path;

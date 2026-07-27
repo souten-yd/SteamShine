@@ -7,7 +7,6 @@
 #include <cstdint>
 #include <filesystem>
 #include <optional>
-#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -222,17 +221,15 @@ namespace steamos_virtual_session {
   );
 
   /**
-   * @brief Select a Gamescope EIS socket owned by the verified producer process.
+   * @brief Derive the EIS socket path advertised by a Gamescope Wayland display.
    *
-   * @param runtime_directory Trusted current-user runtime directory.
-   * @param unix_socket_table Contents of `/proc/net/unix`.
-   * @param producer_socket_inodes Socket inodes held by the verified Gamescope PID.
-   * @return Contained `gamescope-*-ei` path, or no value when none is unique.
+   * @param runtime_directory Trusted absolute runtime directory.
+   * @param gamescope_wayland_display Verified single-component Gamescope display name.
+   * @return Contained EIS socket path, or no value for an unsafe input.
    */
-  std::optional<std::filesystem::path> select_gamescope_eis_socket(
+  std::optional<std::filesystem::path> gamescope_eis_socket_path(
     const std::filesystem::path &runtime_directory,
-    std::string_view unix_socket_table,
-    std::span<const std::uint64_t> producer_socket_inodes
+    std::string_view gamescope_wayland_display
   );
 
   /**

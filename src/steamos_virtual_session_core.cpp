@@ -6,7 +6,6 @@
 
 #include <algorithm>
 #include <array>
-#include <charconv>
 #include <sstream>
 #include <string_view>
 
@@ -186,49 +185,16 @@ namespace steamos_virtual_session {
            (automatic_capture && physical_output_connected && !higher_priority_available);
   }
 
-  std::optional<std::filesystem::path> select_gamescope_eis_socket(
+  std::optional<std::filesystem::path> gamescope_eis_socket_path(
     const std::filesystem::path &runtime_directory,
-    const std::string_view unix_socket_table,
-    const std::span<const std::uint64_t> producer_socket_inodes
+    const std::string_view gamescope_wayland_display
   ) {
-    if (runtime_directory.empty() || !runtime_directory.is_absolute() || producer_socket_inodes.empty()) {
+    if (runtime_directory.empty() || !runtime_directory.is_absolute() ||
+        gamescope_wayland_display.empty() || gamescope_wayland_display == "." || gamescope_wayland_display == ".." ||
+        gamescope_wayland_display.find('/') != std::string_view::npos || gamescope_wayland_display.find('\0') != std::string_view::npos) {
       return std::nullopt;
     }
-    std::vector<std::filesystem::path> matches;
-    std::istringstream lines {std::string {unix_socket_table}};
-    std::string line;
-    while (std::getline(lines, line)) {
-      std::istringstream fields {line};
-      std::array<std::string, 8> values;
-      bool complete {true};
-      for (auto &value : values) {
-        if (!(fields >> value)) {
-          complete = false;
-          break;
-        }
-      }
-      if (!complete) {
-        continue;
-      }
-      std::uint64_t inode {};
-      const auto conversion {std::from_chars(values[6].data(), values[6].data() + values[6].size(), inode)};
-      if (conversion.ec != std::errc {} || conversion.ptr != values[6].data() + values[6].size() ||
-          std::ranges::find(producer_socket_inodes, inode) == producer_socket_inodes.end()) {
-        continue;
-      }
-      const std::filesystem::path candidate {values[7]};
-      const auto filename {candidate.filename().string()};
-      if (!candidate.is_absolute() ||
-          candidate.lexically_normal().parent_path() != runtime_directory.lexically_normal() ||
-          !filename.starts_with("gamescope-") ||
-          !filename.ends_with("-ei")) {
-        continue;
-      }
-      matches.emplace_back(candidate.lexically_normal());
-    }
-    std::ranges::sort(matches);
-    matches.erase(std::unique(matches.begin(), matches.end()), matches.end());
-    return matches.size() == 1 ? std::optional<std::filesystem::path> {matches.front()} : std::nullopt;
+    return runtime_directory.lexically_normal() / (std::string {gamescope_wayland_display} + "-ei");
   }
 
   display_request_t normalize_display_request(const int requested_width, const int requested_height, const int requested_fps, const int default_width, const int default_height, const int default_fps) {

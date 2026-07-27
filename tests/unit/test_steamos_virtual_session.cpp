@@ -104,6 +104,8 @@ namespace {
     output << "x11_child=$!\n";
     output << "python3 -c 'import os, socket, signal, sys; p=os.path.join(os.environ[\"XDG_RUNTIME_DIR\"], \"gamescope-0\"); s=socket.socket(socket.AF_UNIX); s.bind(p); s.listen(); signal.signal(signal.SIGTERM, lambda *_: sys.exit(0)); signal.signal(signal.SIGINT, lambda *_: sys.exit(0)); [signal.pause() for _ in iter(int, 1)]' &\n";
     output << "socket_child=$!\n";
+    output << "python3 -c 'import os, socket, signal, sys; p=os.path.join(os.environ[\"XDG_RUNTIME_DIR\"], \"gamescope-0-ei\"); s=socket.socket(socket.AF_UNIX); s.bind(p); s.listen(); signal.signal(signal.SIGTERM, lambda *_: sys.exit(0)); signal.signal(signal.SIGINT, lambda *_: sys.exit(0)); [signal.pause() for _ in iter(int, 1)]' &\n";
+    output << "eis_child=$!\n";
     output << "while [ \"$#\" -gt 0 ] && [ \"$1\" != '--' ]; do shift; done\n";
     output << "[ \"$#\" -gt 0 ] && shift\n";
     output << "\"$@\" &\n";
@@ -125,7 +127,7 @@ namespace {
       std::filesystem::permissions(executable, std::filesystem::perms::owner_exec, std::filesystem::perm_options::add);
       return executable;
     }
-    output << "trap 'kill \"$socket_child\" \"$x11_child\" \"$bootstrap_child\" 2>/dev/null; wait \"$socket_child\" \"$x11_child\" \"$bootstrap_child\" 2>/dev/null; [ -z \"$stale_x11_path\" ] || rm -f \"$stale_x11_path\"; exit 0' TERM INT\n";
+    output << "trap 'kill \"$socket_child\" \"$eis_child\" \"$x11_child\" \"$bootstrap_child\" 2>/dev/null; wait \"$socket_child\" \"$eis_child\" \"$x11_child\" \"$bootstrap_child\" 2>/dev/null; [ -z \"$stale_x11_path\" ] || rm -f \"$stale_x11_path\"; exit 0' TERM INT\n";
     output << "wait \"$socket_child\"\n";
     output.close();
     std::filesystem::permissions(executable, std::filesystem::perms::owner_exec, std::filesystem::perm_options::add);
@@ -627,6 +629,15 @@ TEST_F(SteamOSVirtualSessionTest, FakeGamescopeReadinessAndCleanup) {
   EXPECT_TRUE(steamos_virtual_session::capture_socket(socket_path));
   EXPECT_TRUE(std::filesystem::is_socket(socket_path));
   EXPECT_TRUE(steamos_virtual_session::capture_socket_required());
+  const auto eis_path {std::filesystem::path {endpoint->xdg_runtime_directory} / "gamescope-0-ei"};
+  for (int attempt = 0; attempt < 100 && !std::filesystem::is_socket(eis_path); ++attempt) {
+    std::this_thread::sleep_for(std::chrono::milliseconds {10});
+  }
+  ASSERT_TRUE(std::filesystem::is_socket(eis_path));
+  std::string input_socket_path;
+  std::string input_error;
+  EXPECT_FALSE(steamos_virtual_session::gamescope_input_endpoint(input_socket_path, input_error));
+  EXPECT_EQ(input_error, "gamescope_input_eis_socket_unverified");
   std::filesystem::remove(socket_path);
   EXPECT_FALSE(steamos_virtual_session::capture_socket(socket_path));
   EXPECT_TRUE(steamos_virtual_session::capture_socket_required());

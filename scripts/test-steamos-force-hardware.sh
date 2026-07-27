@@ -30,6 +30,13 @@ cleanup() {
   trap - EXIT INT TERM
   if [[ -n "${test_pid}" ]] && kill -0 "${test_pid}" 2>/dev/null; then
     kill "${test_pid}" 2>/dev/null || true
+    for _ in $(seq 1 50); do
+      kill -0 "${test_pid}" 2>/dev/null || break
+      sleep 0.1
+    done
+    if kill -0 "${test_pid}" 2>/dev/null; then
+      kill -KILL "${test_pid}" 2>/dev/null || true
+    fi
     wait "${test_pid}" 2>/dev/null || true
   fi
   if "${service_was_active}"; then
@@ -47,7 +54,9 @@ command -v curl >/dev/null || die 'curl is required.'
 [[ -x "${binary}" ]] || die "SteamShine binary is not executable: ${binary}"
 umask 077
 mkdir -p "${report_dir}"
-temporary_root="$(mktemp -d "${runtime_root}/steamshine-force-hardware.XXXXXX")"
+# Keep the runtime short enough for Qt/KIO to append its worker socket name
+# without exceeding Linux's UNIX-domain socket path limit.
+temporary_root="$(mktemp -d "${runtime_root}/ss-fh.XXXXXX")"
 temporary_config="${temporary_root}/sunshine.conf"
 temporary_runtime="${temporary_root}/runtime"
 mkdir -p "${temporary_runtime}"

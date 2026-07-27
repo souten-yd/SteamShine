@@ -170,27 +170,19 @@ namespace {
   }
 
   /**
-   * @brief Verify an EIS socket is accepted only when the selected Gamescope PID owns it.
+   * @brief Verify an EIS path is derived only from a contained display name.
    */
-  TEST(SteamOSVirtualSessionCore, SelectsProducerOwnedContainedEisSocket) {
-    const std::string sockets {
-      "Num RefCount Protocol Flags Type St Inode Path\n"
-      "0001: 00000002 00000000 00010000 0001 01 111 /run/user/1000/gamescope-0-ei\n"
-      "0002: 00000002 00000000 00010000 0001 01 222 /run/user/1000/other.sock\n"
-      "0003: 00000002 00000000 00010000 0001 01 333 /tmp/gamescope-1-ei\n"
-    };
-    const std::array<std::uint64_t, 1> owned {111};
-
+  TEST(SteamOSVirtualSessionCore, DerivesContainedGamescopeEisSocketPath) {
     EXPECT_EQ(
-      steamos_virtual_session::select_gamescope_eis_socket("/run/user/1000", sockets, owned),
-      std::filesystem::path {"/run/user/1000/gamescope-0-ei"}
+      steamos_virtual_session::gamescope_eis_socket_path("/run/user/1000/session", "gamescope-0"),
+      std::filesystem::path {"/run/user/1000/session/gamescope-0-ei"}
     );
-    const std::array<std::uint64_t, 2> ambiguous {111, 444};
-    const auto ambiguous_sockets {
-      sockets + "0004: 00000002 00000000 00010000 0001 01 444 /run/user/1000/gamescope-1-ei\n"
-    };
-    EXPECT_FALSE(steamos_virtual_session::select_gamescope_eis_socket("/run/user/1000", ambiguous_sockets, ambiguous).has_value());
-    EXPECT_FALSE(steamos_virtual_session::select_gamescope_eis_socket("/run/user/1000", sockets, std::array<std::uint64_t, 1> {333}).has_value());
+    EXPECT_FALSE(steamos_virtual_session::gamescope_eis_socket_path({}, "gamescope-0").has_value());
+    EXPECT_FALSE(steamos_virtual_session::gamescope_eis_socket_path("relative", "gamescope-0").has_value());
+    EXPECT_FALSE(steamos_virtual_session::gamescope_eis_socket_path("/run/user/1000/session", {}).has_value());
+    EXPECT_FALSE(steamos_virtual_session::gamescope_eis_socket_path("/run/user/1000/session", ".").has_value());
+    EXPECT_FALSE(steamos_virtual_session::gamescope_eis_socket_path("/run/user/1000/session", "..").has_value());
+    EXPECT_FALSE(steamos_virtual_session::gamescope_eis_socket_path("/run/user/1000/session", "../bus").has_value());
   }
 
   /**
