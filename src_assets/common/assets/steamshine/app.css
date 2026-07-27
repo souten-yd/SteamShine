@@ -40,6 +40,10 @@ html, body {
   min-height: 100vh;
   background: var(--bg);
   color: var(--text);
+  /* Safety net: an unbroken long value (a path, URL, socket address, ...) in
+     any card must wrap rather than widen the page on narrow viewports. */
+  overflow-wrap: break-word;
+  overflow-x: hidden;
 }
 
 body {
@@ -353,15 +357,19 @@ a {
   padding: 0.3rem 0;
   font-size: 0.85rem;
   border-bottom: 1px dashed rgb(255 255 255 / 6%);
+  min-width: 0;
 }
 
 .row dt, .row .k {
   color: var(--text-faint);
+  min-width: 0;
 }
 
 .row dd, .row .v {
   margin: 0;
   text-align: right;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 /* ---- Status ---- */
