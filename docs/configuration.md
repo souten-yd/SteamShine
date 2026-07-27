@@ -301,6 +301,14 @@ editing the `conf` file in a text editor. Use the examples as reference.
 
 <table><tr><td>Description</td><td colspan="2">Expose the upstream Sunshine compatibility route while it is enabled.</td></tr><tr><td>Default</td><td colspan="2">@code{} enabled @endcode</td></tr><tr><td>Example</td><td colspan="2">@code{} upstream_web_ui_visible = enabled @endcode</td></tr></table>
 
+### steamshine_gpu_active_profile
+
+<table><tr><td>Description</td><td colspan="2">Name of the GPU/CPU performance profile most recently applied by SteamShine.</td></tr><tr><td>Default</td><td colspan="2">Empty</td></tr><tr><td>Example</td><td colspan="2">@code{} steamshine_gpu_active_profile = Balanced @endcode</td></tr></table>
+
+### steamshine_gpu_profiles
+
+<table><tr><td>Description</td><td colspan="2">JSON-encoded custom GPU/CPU performance profiles managed by the SteamShine GPU page.</td></tr><tr><td>Default</td><td colspan="2">Empty</td></tr><tr><td>Example</td><td colspan="2">@code{} steamshine_gpu_profiles = [] @endcode</td></tr></table>
+
 ## Input
 
 ### controller

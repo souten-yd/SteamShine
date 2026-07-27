@@ -48,6 +48,7 @@ if(NOT Boost_FOUND)
     # more components required for compiling boost targets
     list(APPEND BOOST_COMPONENTS
             asio
+            beast  # header-only; used by the SteamShine Terminal WebSocket server
             crc
             format
             process

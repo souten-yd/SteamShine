@@ -23,7 +23,7 @@ const homeDirectory = join(workDirectory, 'home');
 const logFile = join(reportDirectory, 'steamshine-web-browser.log');
 const traceFile = join(reportDirectory, 'upstream-browser-trace.zip');
 const screenshotFile = join(reportDirectory, 'upstream-browser-failure.png');
-const successScreenshotFile = join(reportDirectory, 'steamshine-dashboard.png');
+const successScreenshotFile = join(reportDirectory, 'steamshine-monitor.png');
 const configFile = join(homeDirectory, 'sunshine.conf');
 const consoleErrors = [];
 const failedRequests = [];
@@ -49,6 +49,19 @@ async function waitForWelcome(page) {
     await new Promise((resolve) => setTimeout(resolve, 1000));
   }
   throw lastError ?? new Error('Timed out waiting for the upstream welcome page.');
+}
+
+/** Wait until the SteamShine Monitor has rendered live metric values. */
+async function waitForMonitor(page) {
+  await page.getByRole('heading', { name: 'Monitor', exact: true }).waitFor({ timeout: 5000 });
+  await page.waitForFunction(
+    () => {
+      const value = document.querySelector('.metric-tile .metric-value');
+      return value !== null && value.textContent?.trim() !== '—';
+    },
+    undefined,
+    { timeout: 5000 },
+  );
 }
 
 /** Stop the spawned server and remove only the temporary browser test HOME. */
@@ -100,11 +113,16 @@ try {
   if ((await setupPage.locator('body').innerText()).includes('<%-')) {
     throw new Error('The rendered welcome page contains an unresolved EJS template marker.');
   }
-  await setupPage.locator('#usernameInput').fill('web-e2e');
-  await setupPage.locator('#passwordInput').fill('web-e2e-password');
-  await setupPage.locator('#confirmPasswordInput').fill('web-e2e-password');
-  await setupPage.locator('form').evaluate((form) => form.requestSubmit());
-  await setupPage.getByText('Success').waitFor({ timeout: 5000 });
+  const setupRouteResponse = await setupPage.goto(`${baseUrl}/steamshine/login`, { waitUntil: 'domcontentloaded' });
+  if (setupRouteResponse?.status() !== 200) {
+    throw new Error(`SteamShine credential setup returned ${setupRouteResponse?.status()}.`);
+  }
+  await setupPage.getByRole('heading', { name: 'Create shared credentials' }).waitFor({ timeout: 5000 });
+  await setupPage.locator('#setup input[name="username"]').fill('web-e2e');
+  await setupPage.locator('#setup input[name="password"]').fill('web-e2e-password');
+  await setupPage.locator('#setup input[name="confirm_password"]').fill('web-e2e-password');
+  await setupPage.locator('#setup button').click();
+  await setupPage.getByRole('heading', { name: 'Sign in' }).waitFor({ timeout: 5000 });
   const defaultRouteResponse = await setupPage.goto(`${baseUrl}/`, { waitUntil: 'networkidle' });
   if (defaultRouteResponse?.status() !== 200 || !(await setupPage.getByRole('heading', { name: 'Sign in' }).isVisible())) {
     throw new Error('SteamShine was not served at the configured default Web UI route.');
@@ -151,24 +169,25 @@ try {
 
   const steamshineContext = await browser.newContext({ ignoreHTTPSErrors: true });
   const steamshinePage = await steamshineContext.newPage();
-  const steamshineResponse = await steamshinePage.goto(`${baseUrl}/steamshine/dashboard`, { waitUntil: 'networkidle' });
+  const steamshineResponse = await steamshinePage.goto(`${baseUrl}/steamshine/monitor`, { waitUntil: 'domcontentloaded' });
   if (steamshineResponse?.status() !== 200) {
-    throw new Error(`SteamShine dashboard returned ${steamshineResponse?.status()}.`);
+    throw new Error(`SteamShine Monitor returned ${steamshineResponse?.status()}.`);
   }
   await steamshinePage.locator('#login input[name="username"]').fill('web-e2e');
   await steamshinePage.locator('#login input[name="password"]').fill('web-e2e-password');
   await steamshinePage.locator('#login button').click();
-  await steamshinePage.getByText('Welcome, web-e2e').waitFor({ timeout: 5000 });
+  await waitForMonitor(steamshinePage);
   for (const viewport of [
     { name: 'desktop', width: 1440, height: 900 },
     { name: 'tablet', width: 768, height: 1024 },
     { name: 'steam_deck', width: 800, height: 1280 },
   ]) {
     await steamshinePage.setViewportSize({ width: viewport.width, height: viewport.height });
-    const response = await steamshinePage.goto(`${baseUrl}/steamshine/dashboard`, { waitUntil: 'networkidle' });
+    const response = await steamshinePage.goto(`${baseUrl}/steamshine/monitor`, { waitUntil: 'domcontentloaded' });
+    await waitForMonitor(steamshinePage);
     const horizontalOverflow = await steamshinePage.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
     if (response?.status() !== 200 || horizontalOverflow) {
-      throw new Error(`SteamShine dashboard is not responsive at ${viewport.name}.`);
+      throw new Error(`SteamShine Monitor is not responsive at ${viewport.name}.`);
     }
     responsiveViewports.push({ ...viewport, status: response.status(), horizontal_overflow: horizontalOverflow });
   }
@@ -198,7 +217,13 @@ try {
     body: JSON.stringify({ named_certs: [{ uuid: 'xss-test', name: '<img src=x onerror="window.steamshineXss=true">' }] }),
   }));
   await steamshinePage.goto(`${baseUrl}/steamshine/clients`, { waitUntil: 'networkidle' });
-  securityResults.xss_escaped = await steamshinePage.evaluate(() => !window.steamshineXss && document.querySelectorAll('img').length === 0);
+  // The SteamShine shell legitimately renders a couple of <img> logo marks
+  // (sidebar brand + mobile top bar) on every authenticated page, so an
+  // absent onerror firing plus every real <img> pointing at our own known
+  // asset path is what proves the hostile name was escaped, not merely
+  // "there are zero <img> elements" (true before the redesign added a logo).
+  securityResults.xss_escaped = await steamshinePage.evaluate(() => !window.steamshineXss
+    && [...document.querySelectorAll('img')].every((img) => img.getAttribute('src')?.startsWith('/steamshine/images/')));
   await steamshinePage.unroute(clientRoute);
   if (!securityResults.xss_escaped) {
     throw new Error('SteamShine client rendering did not escape a hostile client name.');
@@ -225,10 +250,13 @@ try {
   if (securityResults.virtual_display_config_status !== 200) {
     throw new Error(`SteamShine virtual display configuration returned ${securityResults.virtual_display_config_status}.`);
   }
-  const cspResponse = await steamshinePage.request.get(`${baseUrl}/steamshine/dashboard`);
+  const cspResponse = await steamshinePage.request.get(`${baseUrl}/steamshine/monitor`);
   securityResults.csp_header = cspResponse.headers()['content-security-policy'] || '';
   if (!securityResults.csp_header.includes("default-src 'self'")) {
-    throw new Error('SteamShine dashboard is missing its restrictive Content-Security-Policy header.');
+    throw new Error('SteamShine Monitor is missing its restrictive Content-Security-Policy header.');
+  }
+  if (!securityResults.csp_header.includes("style-src 'self'") || !securityResults.csp_header.includes("style-src-attr 'unsafe-inline'")) {
+    throw new Error('SteamShine Monitor CSP does not narrowly permit required runtime style attributes.');
   }
   securityResults.malformed_json_status = await steamshinePage.evaluate(async (csrf) => (await fetch('/api/steamshine/v1/pairing/pin', {
     method: 'POST', headers: { 'Content-Type': 'application/json', 'X-SteamShine-CSRF-Token': csrf }, body: '{',
@@ -300,8 +328,8 @@ try {
   await steamshinePage.locator('#login input[name="username"]').fill('web-e2e');
   await steamshinePage.locator('#login input[name="password"]').fill('web-e2e-password-2');
   await steamshinePage.locator('#login button').click();
-  await steamshinePage.getByText('Welcome, web-e2e').waitFor({ timeout: 5000 });
-  await steamshinePage.locator('#logout').click();
+  await waitForMonitor(steamshinePage);
+  await steamshinePage.locator('#mobile-logout').click();
   await steamshinePage.getByRole('heading', { name: 'Sign in' }).waitFor({ timeout: 5000 });
   securityResults.logout_session_status = await steamshinePage.evaluate(async () => (await fetch('/api/steamshine/v1/session')).status);
   if (securityResults.logout_session_status !== 401) throw new Error('Logout did not invalidate the SteamShine session.');
@@ -342,7 +370,7 @@ try {
     setup: 'passed',
     login: 'passed',
     invalid_pin_rejected: true,
-    steamshine_dashboard_status: 200,
+    steamshine_monitor_status: 200,
     steamshine_login: 'passed',
     steamshine_secure_session_cookie: true,
     steamshine_invalid_pin_rejected: true,
@@ -363,7 +391,7 @@ try {
   await writeFile(join(reportDirectory, 'web-coexistence-report.json'), JSON.stringify({
     commit_sha: process.env.STEAMSHINE_COMMIT_SHA || process.env.GITHUB_SHA || 'local',
     artifact_sha256: process.env.STEAMSHINE_ARTIFACT_SHA256 || null,
-    upstream_url: `${baseUrl}/`, steamshine_url: `${baseUrl}/steamshine/dashboard`, shared_credential_login: true,
+    upstream_url: `${baseUrl}/`, steamshine_url: `${baseUrl}/steamshine/monitor`, shared_credential_login: true,
     simultaneous_routes: true,
     client_sync: 'not_exercised_without_a_mock_pairing_backend',
     service_mock_client_sync: 'covered_by_WebServicesTest.SharesPairingAndClientState',

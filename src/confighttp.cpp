@@ -9,6 +9,7 @@
 // standard includes
 #include <algorithm>
 #include <chrono>
+#include <cstdint>
 #include <deque>
 #include <filesystem>
 #include <format>
@@ -16,14 +17,30 @@
 #include <map>
 #include <mutex>
 #include <string_view>
+#include <thread>
+#include <unordered_map>
 
 // lib includes
 #include <boost/algorithm/string.hpp>
+#include <boost/asio/io_context.hpp>
+#include <boost/asio/ip/tcp.hpp>
+#include <boost/asio/ssl.hpp>
 #include <boost/asio/ssl/context.hpp>
 #include <boost/filesystem.hpp>
 #include <nlohmann/json.hpp>
 #include <Simple-Web-Server/crypto.hpp>
 #include <Simple-Web-Server/server_https.hpp>
+
+// The SteamShine Terminal WebSocket uses Boost.Beast directly: the shared
+// Simple-Web-Server fork used for every other route has no WebSocket support,
+// and the sibling Simple-WebSocket-Server project is unmaintained against
+// modern Boost.Asio (io_service/get_io_service/expires_from_now were all
+// removed upstream). Beast ships with the same Boost release Sunshine
+// already depends on, so it stays in lockstep automatically.
+#include <boost/beast/core.hpp>
+#include <boost/beast/http.hpp>
+#include <boost/beast/websocket.hpp>
+#include <boost/beast/websocket/ssl.hpp>
 
 #ifdef _WIN32
   #include "platform/windows/misc.h"
@@ -46,6 +63,9 @@
 #include "platform/common.h"
 #include "process.h"
 #include "rtsp.h"
+#include "steamshine_gpuctl.h"
+#include "steamshine_hwmonitor.h"
+#include "steamshine_terminal.h"
 #include "utility.h"
 #include "uuid.h"
 #include "web_services.h"
@@ -83,7 +103,6 @@ namespace confighttp {
    * @brief Handler signature for configuration UI HTTPS routes.
    */
   using https_handler_t = std::function<void(resp_https_t, req_https_t)>;
-
   /**
    * @brief Client certificate operations accepted by the configuration API.
    */
@@ -652,6 +671,8 @@ namespace confighttp {
    *
    * @param response The HTTP response object.
    * @param request The HTTP request object.
+   * @note Inline scripts and style elements remain forbidden. Style attributes are allowed because
+   *       live metric bars and the bundled terminal renderer update element geometry at runtime.
    */
   void getSteamshinePage(const resp_https_t &response, const req_https_t &request) {
     if (!config::sunshine.steamshine_web_ui_enabled) {
@@ -663,7 +684,7 @@ namespace confighttp {
     const SimpleWeb::CaseInsensitiveMultimap headers {
       {"Content-Type", "text/html; charset=utf-8"},
       {"X-Frame-Options", "DENY"},
-      {"Content-Security-Policy", "default-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self';"},
+      {"Content-Security-Policy", "default-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'self';"},
       {"Cache-Control", "no-store"}
     };
     response->write(content, headers);
@@ -682,12 +703,14 @@ namespace confighttp {
     }
     print_req(request);
     const fs::path root = fs::weakly_canonical(fs::path {SUNSHINE_ASSETS_DIR} / "steamshine");
-    const fs::path requested_name = fs::path {request->path}.filename();
-    if (requested_name != "app.css" && requested_name != "app.js") {
+    // Resolve the requested path (which may reference nested static assets such as
+    // images/*.png or vendor/xterm/*.js) against root and reject any traversal outside it.
+    const fs::path relative = fs::path {request->path}.lexically_relative("/steamshine");
+    const fs::path requested = fs::weakly_canonical(root / relative);
+    if (!isChildPath(requested, root) || !fs::exists(requested) || !fs::is_regular_file(requested)) {
       not_found(response, request);
       return;
     }
-    const fs::path requested = root / requested_name;
     const auto mime_type = mime_types.find(requested.extension().string().substr(1));
     if (mime_type == mime_types.end()) {
       bad_request(response, request);
@@ -1528,6 +1551,36 @@ namespace confighttp {
   }
 
   /**
+   * @brief Obtain one named cookie from a SteamShine Terminal WebSocket handshake request.
+   *
+   * Mirrors get_cookie_value(), duplicated because the pre-handshake request
+   * here is a Boost.Beast HTTP request rather than a Simple-Web-Server one.
+   *
+   * @param cookie_header Raw `Cookie` header value, or empty when absent.
+   * @param name Cookie name to find.
+   * @return Cookie value or an empty string when it was not present.
+   */
+  std::string get_ws_cookie_value(std::string_view cookies, const std::string_view name) {
+    if (cookies.empty()) {
+      return {};
+    }
+    while (!cookies.empty()) {
+      const auto separator = cookies.find(';');
+      const auto cookie = cookies.substr(0, separator);
+      const auto equals = cookie.find('=');
+      const auto cookie_name = cookie.substr(0, equals);
+      if (equals != std::string_view::npos && boost::algorithm::trim_copy(std::string {cookie_name}) == name) {
+        return std::string {cookie.substr(equals + 1)};
+      }
+      if (separator == std::string_view::npos) {
+        break;
+      }
+      cookies.remove_prefix(separator + 1);
+    }
+    return {};
+  }
+
+  /**
    * @brief Read a bounded JSON request body for a SteamShine facade handler.
    *
    * @param response The HTTP response object.
@@ -1702,6 +1755,380 @@ namespace confighttp {
       return;
     }
     send_steamshine_response(response, status_snapshot_service.snapshot());
+  }
+
+  /**
+   * @brief Return a live CPU/memory/AMD GPU telemetry snapshot to SteamShine.
+   *
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   */
+  void steamshine_system_metrics(const resp_https_t &response, const req_https_t &request) {
+    if (require_steamshine_session(response, request).empty()) {
+      return;
+    }
+    send_steamshine_response(response, steamshine_hwmonitor::sample());
+  }
+
+  /**
+   * @brief Coerce a legacy boolean-ish JSON field (bool or `"true"`/`"false"` string) to `bool`.
+   */
+  bool steamshine_coerce_bool(const nlohmann::json &node, const char *key) {
+    if (!node.contains(key)) {
+      return false;
+    }
+    const auto &value = node.at(key);
+    if (value.is_boolean()) {
+      return value.get<bool>();
+    }
+    if (value.is_string()) {
+      return value.get<std::string>() == "true";
+    }
+    return false;
+  }
+
+  /**
+   * @brief Return the configured application list to SteamShine, with a per-entry running flag.
+   *
+   * Reuses the same `config::stream.file_apps` store as the legacy `/api/apps`
+   * endpoint, but under the SteamShine session/CSRF scheme rather than the
+   * legacy Basic-auth session so the new frontend does not need to juggle
+   * two different authentication mechanisms on one page.
+   *
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   */
+  void steamshine_get_apps(const resp_https_t &response, const req_https_t &request) {
+    if (require_steamshine_session(response, request).empty()) {
+      return;
+    }
+    try {
+      const std::string file = file_handler::read_file(config::stream.file_apps.c_str());
+      const nlohmann::json file_tree = nlohmann::json::parse(file);
+      const auto apps = file_tree.value("apps", nlohmann::json::array());
+      const bool anything_running = proc::proc.running() != 0;
+      const std::string running_name = anything_running ? proc::proc.get_last_run_app_name() : std::string {};
+      nlohmann::json result = nlohmann::json::array();
+      for (std::size_t i = 0; i < apps.size(); ++i) {
+        const auto &app = apps[i];
+        const auto name = app.value("name", "");
+        nlohmann::json entry;
+        entry["index"] = static_cast<int>(i);
+        entry["name"] = name;
+        entry["cmd"] = app.value("cmd", "");
+        entry["image-path"] = app.value("image-path", "");
+        entry["elevated"] = steamshine_coerce_bool(app, "elevated");
+        entry["running"] = anything_running && name == running_name;
+        result.push_back(entry);
+      }
+      send_steamshine_response(response, {{"apps", result}});
+    } catch (std::exception &e) {
+      BOOST_LOG(warning) << "steamshine_get_apps: "sv << e.what();
+      bad_request(response, request, e.what());
+    }
+  }
+
+  /**
+   * @brief Create or update one application entry from the SteamShine Applications page.
+   *
+   * Only the curated field subset shown on that page (name/cmd/image-path/elevated)
+   * is touched; when updating an existing entry, every other key already stored
+   * for it (prep-cmd, detached commands, output path, ...) is preserved untouched.
+   *
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   */
+  void steamshine_save_app(const resp_https_t &response, const req_https_t &request) {
+    if (require_steamshine_mutation(response, request).empty()) {
+      return;
+    }
+    nlohmann::json input;
+    if (!read_steamshine_json(response, request, input)) {
+      return;
+    }
+    try {
+      if (!input.contains("name") || !input["name"].is_string() || input["name"].get<std::string>().empty()) {
+        bad_request(response, request, "Missing application name");
+        return;
+      }
+      const int index = input.value("index", -1);
+      const std::string file = file_handler::read_file(config::stream.file_apps.c_str());
+      nlohmann::json file_tree = nlohmann::json::parse(file);
+      if (!file_tree.contains("apps") || !file_tree["apps"].is_array()) {
+        file_tree["apps"] = nlohmann::json::array();
+      }
+      auto &apps_node = file_tree["apps"];
+      if (index == -1) {
+        nlohmann::json entry;
+        entry["name"] = input["name"];
+        entry["cmd"] = input.value("cmd", "");
+        entry["image-path"] = input.value("image-path", "");
+        entry["elevated"] = input.value("elevated", false);
+        apps_node.push_back(entry);
+      } else {
+        if (index < 0 || index >= static_cast<int>(apps_node.size())) {
+          bad_request(response, request, "Invalid application index");
+          return;
+        }
+        auto &existing = apps_node[index];
+        existing["name"] = input["name"];
+        existing["cmd"] = input.value("cmd", "");
+        existing["image-path"] = input.value("image-path", "");
+        existing["elevated"] = input.value("elevated", false);
+      }
+      std::sort(apps_node.begin(), apps_node.end(), [](const nlohmann::json &a, const nlohmann::json &b) {
+        return a.value("name", "") < b.value("name", "");
+      });
+      file_handler::write_file(config::stream.file_apps.c_str(), file_tree.dump(4));
+      proc::refresh(config::stream.file_apps);
+      send_steamshine_response(response, {{"status", true}});
+    } catch (std::exception &e) {
+      BOOST_LOG(warning) << "steamshine_save_app: "sv << e.what();
+      bad_request(response, request, e.what());
+    }
+  }
+
+  /**
+   * @brief Delete one application entry from the SteamShine Applications page.
+   *
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   */
+  void steamshine_delete_app(const resp_https_t &response, const req_https_t &request) {
+    if (require_steamshine_mutation(response, request).empty()) {
+      return;
+    }
+    try {
+      const int index = std::stoi(request->path_match[1]);
+      const std::string file = file_handler::read_file(config::stream.file_apps.c_str());
+      nlohmann::json file_tree = nlohmann::json::parse(file);
+      auto &apps_node = file_tree["apps"];
+      if (index < 0 || index >= static_cast<int>(apps_node.size())) {
+        bad_request(response, request, "Invalid application index");
+        return;
+      }
+      apps_node.erase(apps_node.begin() + index);
+      file_handler::write_file(config::stream.file_apps.c_str(), file_tree.dump(4));
+      proc::refresh(config::stream.file_apps);
+      send_steamshine_response(response, {{"status", true}});
+    } catch (std::exception &e) {
+      BOOST_LOG(warning) << "steamshine_delete_app: "sv << e.what();
+      bad_request(response, request, e.what());
+    }
+  }
+
+  /**
+   * @brief Terminate the currently running application from the SteamShine Applications page.
+   *
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   */
+  void steamshine_close_app(const resp_https_t &response, const req_https_t &request) {
+    if (require_steamshine_mutation(response, request).empty()) {
+      return;
+    }
+    proc::proc.terminate();
+    send_steamshine_response(response, {{"status", true}});
+  }
+
+  /**
+   * @brief Return detected AMD GPU/CPU performance-control capabilities to SteamShine.
+   *
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   */
+  void steamshine_gpu_capabilities(const resp_https_t &response, const req_https_t &request) {
+    if (require_steamshine_session(response, request).empty()) {
+      return;
+    }
+    send_steamshine_response(response, steamshine_gpuctl::capabilities());
+  }
+
+  /**
+   * @brief Return built-in and custom GPU/CPU performance profiles, plus the active one.
+   *
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   */
+  void steamshine_gpu_profiles(const resp_https_t &response, const req_https_t &request) {
+    if (require_steamshine_session(response, request).empty()) {
+      return;
+    }
+    nlohmann::json profiles = nlohmann::json::array();
+    for (const auto &profile : steamshine_gpuctl::builtin_profiles()) {
+      profiles.push_back(profile);
+    }
+    for (const auto &profile : steamshine_gpuctl::custom_profiles()) {
+      profiles.push_back(profile);
+    }
+    send_steamshine_response(response, {{"profiles", profiles}, {"active", steamshine_gpuctl::active_profile_name()}});
+  }
+
+  /**
+   * @brief Create or update one custom GPU/CPU performance profile.
+   *
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   */
+  void steamshine_save_gpu_profile(const resp_https_t &response, const req_https_t &request) {
+    if (require_steamshine_mutation(response, request).empty()) {
+      return;
+    }
+    nlohmann::json input;
+    if (!read_steamshine_json(response, request, input)) {
+      return;
+    }
+    try {
+      const auto profile {input.get<steamshine_gpuctl::profile_t>()};
+      std::string error;
+      if (!steamshine_gpuctl::save_custom_profile(profile, error)) {
+        bad_request(response, request, error);
+        return;
+      }
+      send_steamshine_response(response, {{"status", true}});
+    } catch (std::exception &e) {
+      BOOST_LOG(warning) << "steamshine_save_gpu_profile: "sv << e.what();
+      bad_request(response, request, e.what());
+    }
+  }
+
+  /**
+   * @brief Delete one custom GPU/CPU performance profile by name.
+   *
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   */
+  void steamshine_delete_gpu_profile(const resp_https_t &response, const req_https_t &request) {
+    if (require_steamshine_mutation(response, request).empty()) {
+      return;
+    }
+    std::string error;
+    if (!steamshine_gpuctl::delete_custom_profile(request->path_match[1], error)) {
+      bad_request(response, request, error);
+      return;
+    }
+    send_steamshine_response(response, {{"status", true}});
+  }
+
+  /**
+   * @brief Apply one GPU/CPU performance profile by name.
+   *
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   */
+  void steamshine_activate_gpu_profile(const resp_https_t &response, const req_https_t &request) {
+    if (require_steamshine_mutation(response, request).empty()) {
+      return;
+    }
+    const auto result {steamshine_gpuctl::activate_profile(request->path_match[1])};
+    if (!result.success) {
+      bad_request(response, request, "Profile not found");
+      return;
+    }
+    send_steamshine_response(response, result);
+  }
+
+  /**
+   * @brief Report whether a Terminal shell session is currently running.
+   *
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   */
+  void steamshine_terminal_status(const resp_https_t &response, const req_https_t &request) {
+    if (require_steamshine_session(response, request).empty()) {
+      return;
+    }
+    // The Terminal WebSocket listens on its own port (Simple-Web-Server, used
+    // for every other route, has no WebSocket support); the frontend needs
+    // this to know where to connect since it cannot be the same port as the
+    // page it was loaded from.
+    send_steamshine_response(response, {{"running", steamshine_terminal::running()}, {"ws_port", net::map_port(PORT_STEAMSHINE_TERMINAL)}});
+  }
+
+  /**
+   * @brief Start the single Terminal shell session if one is not already running.
+   *
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   */
+  void steamshine_terminal_start(const resp_https_t &response, const req_https_t &request) {
+    if (require_steamshine_mutation(response, request).empty()) {
+      return;
+    }
+    send_steamshine_response(response, {{"running", steamshine_terminal::ensure_started()}});
+  }
+
+  /**
+   * @brief Terminate the current Terminal shell session, if any.
+   *
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   */
+  void steamshine_terminal_stop(const resp_https_t &response, const req_https_t &request) {
+    if (require_steamshine_mutation(response, request).empty()) {
+      return;
+    }
+    steamshine_terminal::stop();
+    send_steamshine_response(response, {{"status", true}});
+  }
+
+  /**
+   * @brief Return the full Sunshine configuration to the SteamShine Advanced Settings page.
+   *
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   */
+  void steamshine_get_config(const resp_https_t &response, const req_https_t &request) {
+    if (require_steamshine_session(response, request).empty()) {
+      return;
+    }
+    nlohmann::json output;
+    auto vars = config::parse_config(file_handler::read_file(config::sunshine.config_file.c_str()));
+    for (auto &[name, value] : vars) {
+      output[name] = std::move(value);
+    }
+    send_steamshine_response(response, output);
+  }
+
+  /**
+   * @brief Merge posted keys into the existing Sunshine configuration.
+   *
+   * Unlike the legacy `/api/config` POST (which intentionally rewrites the
+   * whole config file from exactly the keys the full-form Vue editor posts),
+   * this endpoint backs a curated settings page that only ever posts a small
+   * subset of keys. It therefore merges onto the current on-disk configuration
+   * instead of replacing it, so saving from the curated page cannot silently
+   * discard settings the page does not show.
+   *
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   */
+  void steamshine_save_config(const resp_https_t &response, const req_https_t &request) {
+    if (require_steamshine_mutation(response, request).empty()) {
+      return;
+    }
+    nlohmann::json input;
+    if (!read_steamshine_json(response, request, input)) {
+      return;
+    }
+    try {
+      auto merged = config::parse_config(file_handler::read_file(config::sunshine.config_file.c_str()));
+      for (const auto &[key, value] : input.items()) {
+        if (value.is_null() || (value.is_string() && value.get<std::string>().empty())) {
+          continue;
+        }
+        merged[key] = value.is_string() ? value.get<std::string>() : value.dump();
+      }
+      std::stringstream config_stream;
+      for (const auto &[key, value] : merged) {
+        config_stream << key << " = " << value << std::endl;
+      }
+      file_handler::write_file(config::sunshine.config_file.c_str(), config_stream.str());
+      send_steamshine_response(response, {{"status", true}});
+    } catch (std::exception &e) {
+      BOOST_LOG(warning) << "steamshine_save_config: "sv << e.what();
+      bad_request(response, request, e.what());
+    }
   }
 
   /**
@@ -2177,6 +2604,107 @@ namespace confighttp {
   }
 
   /**
+   * @brief Serve one SteamShine Terminal WebSocket connection to completion.
+   *
+   * Performs the TLS handshake, reads the HTTP upgrade request manually
+   * (rather than letting Boost.Beast's `ws.accept()` read it) so the
+   * `steamshine_session` cookie can be validated before the WebSocket
+   * handshake is allowed to complete, completes the handshake, then blocks
+   * reading client frames until the connection closes. No input/output is
+   * relayed until the first client message proves CSRF-token possession.
+   * Runs on its own detached thread; see accept_and_run_ws() in start().
+   *
+   * @param socket Freshly accepted TCP socket.
+   * @param ssl_ctx Shared TLS context (certificate already loaded).
+   */
+  void handle_terminal_ws_connection(boost::asio::ip::tcp::socket socket, boost::asio::ssl::context &ssl_ctx) {
+    namespace websocket = boost::beast::websocket;
+    namespace http = boost::beast::http;
+    try {
+      boost::asio::ssl::stream<boost::asio::ip::tcp::socket> stream {std::move(socket), ssl_ctx};
+      stream.handshake(boost::asio::ssl::stream_base::server);
+
+      boost::beast::flat_buffer handshake_buffer;
+      http::request<http::string_body> request;
+      http::read(stream, handshake_buffer, request);
+
+      const std::string cookie_header {request.count(http::field::cookie) ? std::string {request[http::field::cookie]} : std::string {}};
+      const auto session_id {get_ws_cookie_value(cookie_header, "steamshine_session")};
+      const auto handshake_session {session_service.validate(session_id)};
+      if (!config::sunshine.steamshine_web_ui_enabled || !handshake_session.has_value() || !websocket::is_upgrade(request)) {
+        http::response<http::string_body> response {http::status::unauthorized, request.version()};
+        response.prepare_payload();
+        http::write(stream, response);
+        return;
+      }
+
+      websocket::stream<boost::asio::ssl::stream<boost::asio::ip::tcp::socket>> ws {std::move(stream)};
+      ws.binary(true);
+      ws.accept(request);
+
+      // Declaration order matters: locals are destroyed in reverse order, so
+      // `unsubscribe_guard` (declared last) runs its destructor *first* --
+      // before `write_mutex`/`ws` are torn down -- guaranteeing no output
+      // callback can still be executing (or start) once they go away.
+      std::mutex write_mutex;
+      bool authenticated {false};
+      std::uint64_t subscription_id {0};
+
+      struct unsubscribe_guard_t {
+        bool &authenticated;
+        std::uint64_t &subscription_id;
+
+        ~unsubscribe_guard_t() {
+          if (authenticated) {
+            steamshine_terminal::unsubscribe(subscription_id);
+          }
+        }
+      } unsubscribe_guard {authenticated, subscription_id};
+
+      boost::beast::flat_buffer read_buffer;
+      while (true) {
+        read_buffer.clear();
+        ws.read(read_buffer);  // Throws on peer close/error, breaking the loop below via the outer catch.
+        nlohmann::json payload;
+        try {
+          payload = nlohmann::json::parse(boost::beast::buffers_to_string(read_buffer.data()));
+        } catch (const nlohmann::json::exception &) {
+          continue;
+        }
+        if (!authenticated) {
+          // Re-validate fresh in case the session expired between handshake and this message.
+          const auto session {session_service.validate(session_id)};
+          if (!session.has_value() || payload.value("type", "") != "auth" || payload.value("csrf_token", "") != session->csrf_token) {
+            break;
+          }
+          steamshine_terminal::ensure_started();
+          subscription_id = steamshine_terminal::subscribe([&ws, &write_mutex](std::string_view chunk) {
+            std::lock_guard lock {write_mutex};
+            try {
+              ws.write(boost::asio::buffer(chunk.data(), chunk.size()));
+            } catch (...) {
+              // The read loop will observe the same failure and clean up.
+            }
+          });
+          authenticated = true;
+          continue;
+        }
+        const auto type {payload.value("type", "")};
+        if (type == "input") {
+          steamshine_terminal::write_input(payload.value("data", ""));
+        } else if (type == "resize") {
+          steamshine_terminal::resize(
+            static_cast<unsigned short>(std::clamp(payload.value("cols", 80), 1, 500)),
+            static_cast<unsigned short>(std::clamp(payload.value("rows", 24), 1, 200))
+          );
+        }
+      }
+    } catch (const std::exception &e) {
+      BOOST_LOG(debug) << "SteamShine Terminal connection ended: "sv << e.what();
+    }
+  }
+
+  /**
    * @brief Start the HTTPS configuration server.
    */
   void start() {
@@ -2251,7 +2779,7 @@ namespace confighttp {
     server.resource["^/pin/?$"]["GET"] = page_handler("pin.html");
     server.resource["^/troubleshooting/?$"]["GET"] = page_handler("troubleshooting.html");
     server.resource["^/welcome/?$"]["GET"] = page_handler("welcome.html", false, true);
-    server.resource["^/steamshine/?(?:setup|login|dashboard|config|pairing|clients|logs)?/?$"]["GET"] = getSteamshinePage;
+    server.resource["^/steamshine/?(?:setup|login|monitor|applications|gpu|settings|config|pairing|clients|terminal)?/?$"]["GET"] = getSteamshinePage;
 
     // rest api
     server.resource["^/api/browse$"]["GET"] = browseDirectory;
@@ -2283,6 +2811,21 @@ namespace confighttp {
     server.resource["^/api/steamshine/v1/auth/login$"]["POST"] = steamshine_handler(steamshine_login);
     server.resource["^/api/steamshine/v1/auth/logout$"]["POST"] = steamshine_handler(steamshine_logout);
     server.resource["^/api/steamshine/v1/status$"]["GET"] = steamshine_handler(steamshine_status);
+    server.resource["^/api/steamshine/v1/system/metrics$"]["GET"] = steamshine_handler(steamshine_system_metrics);
+    server.resource["^/api/steamshine/v1/apps$"]["GET"] = steamshine_handler(steamshine_get_apps);
+    server.resource["^/api/steamshine/v1/apps$"]["POST"] = steamshine_handler(steamshine_save_app);
+    server.resource["^/api/steamshine/v1/apps/([0-9]+)$"]["DELETE"] = steamshine_handler(steamshine_delete_app);
+    server.resource["^/api/steamshine/v1/apps/([0-9]+)/close$"]["POST"] = steamshine_handler(steamshine_close_app);
+    server.resource["^/api/steamshine/v1/config$"]["GET"] = steamshine_handler(steamshine_get_config);
+    server.resource["^/api/steamshine/v1/config$"]["POST"] = steamshine_handler(steamshine_save_config);
+    server.resource["^/api/steamshine/v1/gpu/capabilities$"]["GET"] = steamshine_handler(steamshine_gpu_capabilities);
+    server.resource["^/api/steamshine/v1/gpu/profiles$"]["GET"] = steamshine_handler(steamshine_gpu_profiles);
+    server.resource["^/api/steamshine/v1/gpu/profiles$"]["POST"] = steamshine_handler(steamshine_save_gpu_profile);
+    server.resource["^/api/steamshine/v1/gpu/profiles/([^/]+)$"]["DELETE"] = steamshine_handler(steamshine_delete_gpu_profile);
+    server.resource["^/api/steamshine/v1/gpu/profiles/([^/]+)/activate$"]["POST"] = steamshine_handler(steamshine_activate_gpu_profile);
+    server.resource["^/api/steamshine/v1/terminal/status$"]["GET"] = steamshine_handler(steamshine_terminal_status);
+    server.resource["^/api/steamshine/v1/terminal/start$"]["POST"] = steamshine_handler(steamshine_terminal_start);
+    server.resource["^/api/steamshine/v1/terminal/stop$"]["POST"] = steamshine_handler(steamshine_terminal_stop);
     server.resource["^/api/steamshine/v1/config/virtual-display$"]["GET"] = steamshine_handler(steamshine_virtual_display_config);
     server.resource["^/api/steamshine/v1/config/virtual-display$"]["POST"] = steamshine_handler(steamshine_save_virtual_display_config);
     server.resource["^/api/steamshine/v1/config/virtual-display/sources$"]["GET"] = steamshine_handler(steamshine_gamescope_sources);
@@ -2295,7 +2838,7 @@ namespace confighttp {
     // static/dynamic resources
     server.resource["^/images/sunshine.ico$"]["GET"] = getFaviconImage;
     server.resource["^/images/logo-sunshine-45.png$"]["GET"] = getSunshineLogoImage;
-    server.resource["^/steamshine/.+\\.(css|js)$"]["GET"] = getSteamshineAsset;
+    server.resource["^/steamshine/.+\\.(css|js|png|jpg|jpeg|svg|ico)$"]["GET"] = getSteamshineAsset;
     server.resource["^/assets\\/.+$"]["GET"] = getAsset;
 
     server.config.reuse_address = true;
@@ -2325,11 +2868,58 @@ namespace confighttp {
     };
     std::jthread tcp {accept_and_run, &server};
 
+    // SteamShine Terminal: a dedicated Secure WebSocket acceptor (the shared
+    // Simple-Web-Server fork used above has no WebSocket support) carrying a
+    // single PTY-backed shell session (see steamshine_terminal.cpp). The
+    // handshake's `steamshine_session` cookie is validated before the
+    // WebSocket handshake completes, and no input/output is allowed until the
+    // client proves CSRF-token possession with its first message -- the same
+    // two checks require_steamshine_mutation() performs for every other
+    // mutating SteamShine endpoint. One thread per connection is acceptable
+    // here: this is a single-user admin feature, not a public-facing server.
+    const auto port_terminal_ws = net::map_port(PORT_STEAMSHINE_TERMINAL);
+    boost::asio::io_context terminal_ioc {1};
+    boost::asio::ssl::context terminal_ssl_ctx {boost::asio::ssl::context::tlsv12};
+    boost::asio::ip::tcp::acceptor terminal_acceptor {terminal_ioc};
+
+    auto accept_and_run_ws = [&] {
+      platf::set_thread_name("confighttp::terminal_ws");
+      try {
+        terminal_ssl_ctx.use_certificate_chain_file(config::nvhttp.cert);
+        terminal_ssl_ctx.use_private_key_file(config::nvhttp.pkey, boost::asio::ssl::context::pem);
+
+        const boost::asio::ip::tcp::endpoint endpoint {boost::asio::ip::make_address(net::get_bind_address(address_family)), port_terminal_ws};
+        terminal_acceptor.open(endpoint.protocol());
+        terminal_acceptor.set_option(boost::asio::ip::tcp::acceptor::reuse_address(true));
+        terminal_acceptor.bind(endpoint);
+        terminal_acceptor.listen();
+
+        while (true) {
+          boost::asio::ip::tcp::socket socket {terminal_ioc};
+          boost::system::error_code accept_error;
+          terminal_acceptor.accept(socket, accept_error);
+          if (accept_error) {
+            break;  // Acceptor was closed by stop(), or another fatal error.
+          }
+          std::thread {handle_terminal_ws_connection, std::move(socket), std::ref(terminal_ssl_ctx)}.detach();
+        }
+      } catch (const std::exception &err) {
+        if (shutdown_event->peek()) {
+          return;
+        }
+        BOOST_LOG(warning) << "Couldn't start SteamShine Terminal WebSocket server on port ["sv << port_terminal_ws << "]: "sv << err.what();
+      }
+    };
+    std::jthread terminal_ws_thread {accept_and_run_ws};
+
     // Wait for any event
     shutdown_event->view();
 
     server.stop();
+    boost::system::error_code close_error;
+    terminal_acceptor.close(close_error);
 
     tcp.join();
+    terminal_ws_thread.join();
   }
 }  // namespace confighttp

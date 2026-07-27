@@ -4,14 +4,17 @@
 echo "Loading uhid kernel module for DS5 emulation."
 modprobe uhid
 
-# Ensure Sunshine can grab images from KMS
+# Ensure Sunshine can grab images from KMS, and can briefly reach root-owned
+# GPU/CPU performance sysfs files for the SteamShine GPU profile feature
+# (CAP_DAC_OVERRIDE is only ever raised to the effective set for the instant
+# of one sysfs write; see src/steamshine_gpuctl.cpp).
 path_to_setcap=$(which setcap)
 path_to_sunshine=$(readlink -f "$(which sunshine)")
 if [ -x "$path_to_setcap" ] ; then
-  echo "Setting CAP_SYS_ADMIN, CAP_SYS_NICE capabilities on Sunshine binary."
-  echo "$path_to_setcap cap_sys_admin,cap_sys_nice+p $path_to_sunshine"
-  $path_to_setcap cap_sys_admin,cap_sys_nice+p $path_to_sunshine
-  echo "CAP_SYS_ADMIN, CAP_SYS_NICE capabilities set on Sunshine binary."
+  echo "Setting CAP_SYS_ADMIN, CAP_SYS_NICE, CAP_DAC_OVERRIDE capabilities on Sunshine binary."
+  echo "$path_to_setcap cap_sys_admin,cap_sys_nice,cap_dac_override+p $path_to_sunshine"
+  $path_to_setcap cap_sys_admin,cap_sys_nice,cap_dac_override+p $path_to_sunshine
+  echo "CAP_SYS_ADMIN, CAP_SYS_NICE, CAP_DAC_OVERRIDE capabilities set on Sunshine binary."
 else
   echo "error: setcap not found or not executable."
 fi

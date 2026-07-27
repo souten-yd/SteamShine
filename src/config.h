@@ -406,6 +406,9 @@ namespace config {
     // List of allowed origins for CSRF protection (e.g., "https://example.com,https://app.example.com")
     // Comma-separated list of additional origins. Default includes localhost variants and web UI port.
     std::vector<std::string> csrf_allowed_origins;  ///< Additional origins allowed by CSRF validation.
+
+    std::string steamshine_gpu_active_profile;  ///< Name of the GPU/CPU performance profile applied at last activation.
+    std::string steamshine_gpu_profiles;  ///< JSON-encoded array of custom GPU/CPU performance profiles.
   };
 
   extern video_t video;

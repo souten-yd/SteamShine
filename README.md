@@ -1,519 +1,274 @@
 <div align="center">
-  <img
-    src="sunshine.svg"
-    alt="Sunshine icon"
-    width="256"
-/>
-  <h1 align="center">Sunshine</h1>
-  <h4 align="center">Self-hosted game stream host for Moonlight.</h4>
+  <img src="steamshine.png" alt="SteamShine" width="160" />
+  <h1>SteamShine</h1>
+  <p><strong>A game-streaming host for SteamOS that doesn't need a monitor attached.</strong></p>
+  <p>
+    <img alt="Platform" src="https://img.shields.io/badge/platform-SteamOS%20%2F%20Linux-1b1b1f" />
+    <img alt="GPU" src="https://img.shields.io/badge/GPU-AMD-1b1b1f" />
+    <img alt="Clients" src="https://img.shields.io/badge/clients-Moonlight%20%2F%20Artemis-1b1b1f" />
+    <img alt="License" src="https://img.shields.io/badge/license-GPL--3.0-1b1b1f" />
+  </p>
 </div>
 
-<div align="center">
-  <a href="https://github.com/LizardByte/Sunshine"><img src="https://img.shields.io/github/stars/lizardbyte/sunshine.svg?logo=github&style=for-the-badge" alt="GitHub stars"></a>
-  <a href="https://github.com/LizardByte/Sunshine/releases/latest"><img src="https://img.shields.io/github/downloads/lizardbyte/sunshine/total.svg?style=for-the-badge&logo=github" alt="GitHub Releases"></a>
-  <a href="https://hub.docker.com/r/lizardbyte/sunshine"><img src="https://img.shields.io/docker/pulls/lizardbyte/sunshine.svg?style=for-the-badge&logo=docker" alt="Docker"></a>
-  <a href="https://github.com/LizardByte/Sunshine/pkgs/container/sunshine"><img src="https://img.shields.io/badge/dynamic/json.svg?url=https%3A%2F%2Fipitio.github.io%2Fbackage%2FLizardByte%2FSunshine%2Fsunshine.json&query=%24.downloads&label=ghcr%20pulls&style=for-the-badge&logo=github" alt="GHCR"></a>
-  <a href="https://flathub.org/apps/dev.lizardbyte.app.Sunshine"><img src="https://img.shields.io/flathub/downloads/dev.lizardbyte.app.Sunshine.svg?style=for-the-badge&logo=flathub" alt="Flathub installs"></a>
-  <a href="https://flathub.org/apps/dev.lizardbyte.app.Sunshine"><img src="https://img.shields.io/flathub/v/dev.lizardbyte.app.Sunshine.svg?style=for-the-badge&logo=flathub" alt="Flathub Version"></a>
-  <a href="https://github.com/microsoft/winget-pkgs/tree/master/manifests/l/LizardByte/Sunshine"><img src="https://img.shields.io/winget/v/LizardByte.Sunshine.svg?style=for-the-badge&logo=data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAAHuSURBVFhH7ZfNTtRQGIYZiMDwN/IrCAqIhMSNKxcmymVwG+5dcDVsWHgDrtxwCYQVl+BChzDEwSnPY+eQ0sxoOz1mQuBNnpyvTdvz9jun5/SrjfxnJUkyQbMEz2ELduF1l0YUA3QyTrMAa2AnPtyOXsELeAYNyKtV2EC3k3lYgTOwg09ghy/BTp7CKBRV844BOpmmMV2+ySb4BmInG7AKY7AHH+EYqqhZo9PPBG/BVDlOizAD/XQFmnoPXzxRQX8M/CCYS48L6RIc4ygGHK9WGg9HZSZMUNRPVwNJGg5Hg2Qgqh4N3FsDsb6EmgYm07iwwvUxstdxJTwgmILf4CfZ6bb5OHANX8GN5x20IVxnG8ge94pt2xpwU3GnCwayF4Q2G2vgFLzHndFzQdk4q77nNfCdwL28qNyMtmEf3A1/QV5FjDiPWo5jrwf8TWZChTlgJvL4F9QL50/A43qVidTvLcuoM2wDQ1+IkgefgUpLcYwMVBqCKNJA2b0gKNocOIITOIef8C/F/CdMbh/GklynsSawKLHS8d9/B1x2LUqsfFyy3TMsWj5A1cLkotDbYO4JjWWZlZEGv8EbOIR1CAVN2eG8W5oNKgxaeC6DmTJjZs7ixUxpznLPLT+v4sXpoMLcLI3mzFSonDXIEI/M3QCIO4YuimBJ/gAAAABJRU5ErkJggg==" alt="Winget Version"></a>
-  <a href="https://github.com/LizardByte/Sunshine/actions/workflows/ci.yml?query=branch%3Amaster"><img src="https://img.shields.io/github/actions/workflow/status/lizardbyte/sunshine/ci.yml.svg?branch=master&label=CI%20build&logo=github&style=for-the-badge" alt="GitHub Workflow Status (CI)"></a>
-  <a href="https://github.com/LizardByte/Sunshine/actions/workflows/localize.yml?query=branch%3Amaster"><img src="https://img.shields.io/github/actions/workflow/status/lizardbyte/sunshine/localize.yml.svg?branch=master&label=localize%20build&logo=github&style=for-the-badge" alt="GitHub Workflow Status (localize)"></a>
-  <a href="https://codecov.io/gh/LizardByte/Sunshine"><img src="https://img.shields.io/endpoint.svg?url=https%3A%2F%2Fapp.lizardbyte.dev%2Fdashboard%2Fshields%2Fcodecov%2FSunshine.json&style=for-the-badge&logo=codecov" alt="Codecov"></a>
-  <a href="https://sonarcloud.io/project/overview?id=LizardByte_Sunshine"><img src="https://img.shields.io/sonar/quality_gate/LizardByte_Sunshine.svg?server=https%3A%2F%2Fsonarcloud.io&style=for-the-badge&logo=sonarqubecloud&label=sonarcloud" alt="SonarCloud"></a>
-</div>
+---
 
-## ℹ️ About
+## What it is
 
-Sunshine is a self-hosted game stream host for Moonlight.
-Offering low-latency, cloud gaming server capabilities with support for AMD, Intel, and Nvidia GPUs for hardware
-encoding. Software encoding is also available. You can connect to Sunshine from any Moonlight client on a variety of
-devices. A web UI is provided to allow configuration, and client pairing, from your favorite web browser. Pair from
-the local server or any mobile device.
+SteamShine is a self-hosted game-stream host, compatible with [Moonlight](https://moonlight-stream.org/)
+and Artemis clients. It's a fork of [Sunshine](https://github.com/LizardByte/Sunshine) reworked around
+one specific machine: **a Steam Deck or SteamOS box acting as a headless streaming console.**
 
-LizardByte has the full documentation hosted on [Read the Docs](https://docs.lizardbyte.dev/projects/sunshine)
+If you've tried to use a Deck (or any SteamOS machine) as a stream host, you already know the two
+annoyances. Without a monitor or a dummy HDMI plug, there's often nothing to capture. And when there
+*is* a display, you stream at *its* resolution rather than your client's — so a tablet gets a
+letterboxed Deck screen, and a 4K TV gets an upscaled one.
 
-* [Stable Docs](https://docs.lizardbyte.dev/projects/sunshine/latest/)
-* [Beta Docs](https://docs.lizardbyte.dev/projects/sunshine/master/)
+SteamShine addresses both, and adds a control panel you can drive from the phone or tablet you're
+about to play on.
 
-## 🎮 Feature Compatibility
+---
 
-<table>
-    <caption id="gamepad_emulation">Gamepad Emulation</caption>
-    <tr>
-        <th>Feature</th>
-        <th>FreeBSD</th>
-        <th>Linux</th>
-        <th>macOS</th>
-        <th>Windows</th>
-    </tr>
-    <tr>
-        <td colspan="5" align="center">
-        What type of gamepads can be emulated on the host.<br>
-        Clients may support other gamepads.
-        </td>
-    </tr>
-    <tr>
-        <td>DualShock / DS4 (PlayStation 4)</td>
-        <td>➖</td>
-        <td>➖</td>
-        <td>❌</td>
-        <td>✅</td>
-    </tr>
-    <tr>
-        <td>DualSense / DS5 (PlayStation 5)</td>
-        <td>❌</td>
-        <td>✅</td>
-        <td>❌</td>
-        <td>❌</td>
-    </tr>
-    <tr>
-        <td>Nintendo Switch Pro</td>
-        <td>✅</td>
-        <td>✅</td>
-        <td>❌</td>
-        <td>❌</td>
-    </tr>
-    <tr>
-        <td>Xbox 360</td>
-        <td>➖</td>
-        <td>➖</td>
-        <td>❌</td>
-        <td>✅</td>
-    </tr>
-    <tr>
-        <td>Xbox One/Series</td>
-        <td>✅</td>
-        <td>✅</td>
-        <td>❌</td>
-        <td>❌</td>
-    </tr>
-</table>
+## Why you might like it
 
-<table>
-    <caption id="encoding_api">Encoding API</caption>
-    <tr>
-        <th>Encoding API</th>
-        <th>GPU Vendor</th>
-        <th>FreeBSD</th>
-        <th>Linux</th>
-        <th>macOS</th>
-        <th>Windows</th>
-    </tr>
-    <tr>
-        <td>AMF</td>
-        <td>AMD</td>
-        <td>➖</td>
-        <td>➖</td>
-        <td>➖</td>
-        <td>✅</td>
-    </tr>
-    <tr>
-        <td>Media Foundation</td>
-        <td>Qualcomm</td>
-        <td>➖</td>
-        <td>➖</td>
-        <td>➖</td>
-        <td>✅</td>
-    </tr>
-    <tr>
-        <td>NVENC</td>
-        <td>NVIDIA</td>
-        <td>➖</td>
-        <td>✅</td>
-        <td>➖</td>
-        <td>✅</td>
-    </tr>
-    <tr>
-        <td>QuickSync</td>
-        <td>Intel</td>
-        <td>➖</td>
-        <td>➖</td>
-        <td>➖</td>
-        <td>✅</td>
-    </tr>
-    <tr>
-        <td rowspan="3">VAAPI</td>
-        <td>AMD</td>
-        <td>✅</td>
-        <td>✅</td>
-        <td>➖</td>
-        <td>➖</td>
-    </tr>
-    <tr>
-        <td>Intel</td>
-        <td>✅</td>
-        <td>✅</td>
-        <td>➖</td>
-        <td>➖</td>
-    </tr>
-    <tr>
-        <td>NVIDIA</td>
-        <td>➖</td>
-        <td>✅</td>
-        <td>➖</td>
-        <td>➖</td>
-    </tr>
-    <tr>
-        <td rowspan="2">Video Toolbox</td>
-        <td>Apple</td>
-        <td>➖</td>
-        <td>➖</td>
-        <td>✅</td>
-        <td>➖</td>
-    </tr>
-    <tr>
-        <td>Intel</td>
-        <td>➖</td>
-        <td>➖</td>
-        <td>✅</td>
-        <td>➖</td>
-    </tr>
-    <tr>
-        <td rowspan="3">Vulkan Video</td>
-        <td>AMD</td>
-        <td>🟡</td>
-        <td>✅</td>
-        <td>➖</td>
-        <td>➖</td>
-    </tr>
-    <tr>
-        <td>Intel</td>
-        <td>🟡</td>
-        <td>🟡</td>
-        <td>➖</td>
-        <td>➖</td>
-    </tr>
-    <tr>
-        <td>NVIDIA</td>
-        <td>➖</td>
-        <td>🟡</td>
-        <td>➖</td>
-        <td>➖</td>
-    </tr>
-    <tr>
-        <td>Software</td>
-        <td>Any</td>
-        <td>✅</td>
-        <td>✅</td>
-        <td>✅</td>
-        <td>✅</td>
-    </tr>
-</table>
+- **No monitor, no dummy plug.** SteamShine can build the display it streams from, in memory.
+- **The session matches your client.** Your handheld asks for 3040×1904 at 90 Hz; that's the display
+  the game actually runs on — not a rescale of something else.
+- **It won't fight with Game Mode.** If Steam is already running in Game Mode, SteamShine attaches to
+  that session and streams it. It never terminates a session it doesn't own.
+- **A control panel built for a touchscreen.** Live telemetry, GPU power profiles, pairing, apps, and
+  a real shell — in a dark, single-column layout that works on a phone held one-handed.
+- **Everything stays in your home directory.** The SteamOS installer writes only under `~/.local` and
+  `~/.config`. No `sudo`, no `pacman`, and SteamOS read-only mode is never disabled.
+- **It's still Sunshine underneath.** Pairing, transport, encoders, and the original web UI all work
+  the way you expect.
 
-<table>
-    <caption id="screen_capture">Screen Capture</caption>
-    <tr>
-        <th>Capture Method</th>
-        <th>FreeBSD</th>
-        <th>Linux</th>
-        <th>macOS</th>
-        <th>Windows</th>
-    </tr>
-    <tr>
-        <td>DXGI Desktop Duplication</td>
-        <td>➖</td>
-        <td>➖</td>
-        <td>➖</td>
-        <td>✅</td>
-    </tr>
-    <tr>
-        <td>KMS/DRM</td>
-        <td>✅</td>
-        <td>✅</td>
-        <td>➖</td>
-        <td>➖</td>
-    </tr>
-    <tr>
-        <td>NvFBC (X11 only)</td>
-        <td>➖</td>
-        <td>✅</td>
-        <td>➖</td>
-        <td>➖</td>
-    </tr>
-    <tr>
-        <td>ScreenCaptureKit</td>
-        <td>➖</td>
-        <td>➖</td>
-        <td>✅</td>
-        <td>➖</td>
-    </tr>
-    <tr>
-        <td>Wayland (wlroots)</td>
-        <td>✅</td>
-        <td>✅</td>
-        <td>➖</td>
-        <td>➖</td>
-    </tr>
-    <tr>
-        <td>Windows.Graphics.Capture</td>
-        <td>➖</td>
-        <td>➖</td>
-        <td>➖</td>
-        <td>🟡</td>
-    </tr>
-    <tr>
-        <td>&nbsp;&nbsp;↳ Portable</td>
-        <td>➖</td>
-        <td>➖</td>
-        <td>➖</td>
-        <td>✅</td>
-    </tr>
-    <tr>
-        <td>&nbsp;&nbsp;↳ Service</td>
-        <td>➖</td>
-        <td>➖</td>
-        <td>➖</td>
-        <td>❌</td>
-    </tr>
-    <tr>
-        <td>X11</td>
-        <td>✅</td>
-        <td>✅</td>
-        <td>➖</td>
-        <td>➖</td>
-    </tr>
-    <tr>
-        <td>XDG Desktop Portal</td>
-        <td>✅</td>
-        <td>✅</td>
-        <td>➖</td>
-        <td>➖</td>
-    </tr>
-    <tr>
-        <td>KWin Screencast</td>
-        <td>✅</td>
-        <td>✅</td>
-        <td>➖</td>
-        <td>➖</td>
-    </tr>
-</table>
+---
 
-<table>
-    <caption id="capture_encoding_compat">Capture → Encoding Compatibility (Linux/FreeBSD)</caption>
-    <tr>
-        <th>Capture Method</th>
-        <th>VAAPI</th>
-        <th>Vulkan Video</th>
-        <th>NVENC (CUDA)</th>
-        <th>Software</th>
-    </tr>
-    <tr>
-        <td>KMS/DRM</td>
-        <td>✅</td>
-        <td>✅</td>
-        <td>✅</td>
-        <td>✅</td>
-    </tr>
-    <tr>
-        <td>NvFBC</td>
-        <td>❌</td>
-        <td>❌</td>
-        <td>✅</td>
-        <td>❌</td>
-    </tr>
-    <tr>
-        <td>Wayland (wlroots)</td>
-        <td>✅</td>
-        <td>❌</td>
-        <td>✅</td>
-        <td>✅</td>
-    </tr>
-    <tr>
-        <td>X11</td>
-        <td>✅</td>
-        <td>❌</td>
-        <td>✅</td>
-        <td>✅</td>
-    </tr>
-    <tr>
-        <td>XDG Desktop Portal</td>
-        <td>✅</td>
-        <td>✅</td>
-        <td>✅</td>
-        <td>✅</td>
-    </tr>
-    <tr>
-        <td>KWin Screencast</td>
-        <td>✅</td>
-        <td>✅</td>
-        <td>✅</td>
-        <td>✅</td>
-    </tr>
-</table>
+## The virtual display, in plain terms
 
-**Legend:** ✅ Supported | 🟡 Partial Support | ❌ Not Yet Supported | ➖ Not Applicable
+This is the heart of the fork, and it's simpler than the name suggests.
 
-## 🖥️ System Requirements
+A streaming host normally captures whatever is on a real screen. SteamShine can instead start a
+**private Gamescope session** — a compositor with no monitor behind it — created at exactly the size
+and refresh rate your client asked for. The game runs in there, frames go straight to the GPU encoder
+without ever being drawn on a physical panel, and Moonlight receives them.
 
-> [!WARNING]
-> These tables are a work in progress. Do not purchase hardware based on this information.
+```
+   Moonlight asks for 1920×1080 @ 60
+              │
+              ▼
+   ┌───────────────────────────┐
+   │  Private Gamescope        │   created at 1920×1080 @ 60
+   │  (headless — no monitor)  │
+   └────────────┬──────────────┘
+                │  PipeWire / DMA-BUF   (no CPU copy)
+                ▼
+        AMD hardware encoder            Vulkan Video or VA-API
+                │
+                ▼
+        Moonlight / Artemis
+```
 
-<table>
-    <caption id="minimum_requirements">Minimum Requirements</caption>
-    <tr>
-        <th>Component</th>
-        <th>Requirement</th>
-    </tr>
-    <tr>
-        <td rowspan="3">GPU</td>
-        <td>AMD: VCE 1.0 or higher, see: <a href="https://github.com/obsproject/obs-amd-encoder/wiki/Hardware-Support">obs-amd hardware support</a></td>
-    </tr>
-    <tr>
-        <td>
-            Intel:<br>
-            &nbsp;&nbsp;FreeBSD/Linux: VAAPI-compatible, see: <a href="https://www.intel.com/content/www/us/en/developer/articles/technical/linuxmedia-vaapi.html">VAAPI hardware support</a><br>
-            &nbsp;&nbsp;Windows: Skylake or newer with QuickSync encoding support
-        </td>
-    </tr>
-    <tr>
-        <td>Nvidia: NVENC enabled cards, see: <a href="https://developer.nvidia.com/video-encode-and-decode-gpu-support-matrix-new">nvenc support matrix</a></td>
-    </tr>
-    <tr>
-        <td rowspan="2">CPU</td>
-        <td>AMD: Ryzen 3 or higher</td>
-    </tr>
-    <tr>
-        <td>Intel: Core i3 or higher</td>
-    </tr>
-    <tr>
-        <td>RAM</td>
-        <td>4GB or more</td>
-    </tr>
-    <tr>
-        <td rowspan="6">OS</td>
-        <td>FreeBSD: 14.4+</td>
-    </tr>
-    <tr>
-        <td>Linux/Debian: 13+ (trixie)</td>
-    </tr>
-    <tr>
-        <td>Linux/Fedora: 43+</td>
-    </tr>
-    <tr>
-        <td>Linux/Ubuntu: 22.04+ (jammy)</td>
-    </tr>
-    <tr>
-        <td>macOS: 14.2+</td>
-    </tr>
-    <tr>
-        <td>Windows: 11+ (Windows Server does not support virtual gamepads)</td>
-    </tr>
-    <tr>
-        <td rowspan="2">Network</td>
-        <td>Host: 5GHz, 802.11ac</td>
-    </tr>
-    <tr>
-        <td>Client: 5GHz, 802.11ac</td>
-    </tr>
-</table>
+You choose the policy; the default is the middle one:
 
-<table>
-    <caption id="4k_suggestions">4k Suggestions</caption>
-    <tr>
-        <th>Component</th>
-        <th>Requirement</th>
-    </tr>
-    <tr>
-        <td rowspan="3">GPU</td>
-        <td>AMD: Video Coding Engine 3.1 or higher</td>
-    </tr>
-    <tr>
-        <td>
-            Intel:<br>
-            &nbsp;&nbsp;FreeBSD/Linux: HD Graphics 510 or higher<br>
-            &nbsp;&nbsp;Windows: Skylake or newer with QuickSync encoding support
-        </td>
-    </tr>
-    <tr>
-        <td>
-            Nvidia:<br>
-            &nbsp;&nbsp;FreeBSD/Linux: GeForce RTX 2000 series or higher<br>
-            &nbsp;&nbsp;Windows: Geforce GTX 1080 or higher
-        </td>
-    </tr>
-    <tr>
-        <td rowspan="2">CPU</td>
-        <td>AMD: Ryzen 5 or higher</td>
-    </tr>
-    <tr>
-        <td>Intel: Core i5 or higher</td>
-    </tr>
-    <tr>
-        <td rowspan="2">Network</td>
-        <td>Host: CAT5e ethernet or better</td>
-    </tr>
-    <tr>
-        <td>Client: CAT5e ethernet or better</td>
-    </tr>
-</table>
+| Mode | What happens |
+| --- | --- |
+| `off` | Behaves like stock Sunshine. Captures a real display. |
+| `auto` | Uses a real display when one is genuinely capturable; otherwise creates the private session. |
+| `force` | Always uses a private session, even with a monitor plugged in. Never falls back. |
 
-<table>
-    <caption id="hdr_suggestions">HDR Suggestions</caption>
-    <tr>
-        <th>Component</th>
-        <th>Requirement</th>
-    </tr>
-    <tr>
-        <td rowspan="3">GPU</td>
-        <td>AMD: Video Coding Engine 3.4 or higher</td>
-    </tr>
-    <tr>
-        <td>Intel: HD Graphics 730 or higher</td>
-    </tr>
-    <tr>
-        <td>Nvidia: Pascal-based GPU (GTX 10-series) or higher</td>
-    </tr>
-    <tr>
-        <td rowspan="2">CPU</td>
-        <td>AMD: Ryzen 5 or higher</td>
-    </tr>
-    <tr>
-        <td>Intel: Core i5 or higher</td>
-    </tr>
-    <tr>
-        <td rowspan="2">Network</td>
-        <td>Host: CAT5e ethernet or better</td>
-    </tr>
-    <tr>
-        <td>Client: CAT5e ethernet or better</td>
-    </tr>
-</table>
+And you choose where that session comes from:
 
-## ❓ Support
+| Source | What happens |
+| --- | --- |
+| `auto` | Attach to a verified Game Mode session if there is one, otherwise create a private one. |
+| `existing_gamescope` | Only ever attach to the running Game Mode session. |
+| `owned_private` | Always create a fresh private session. |
 
-Our support methods are listed in our [LizardByte Docs](https://docs.lizardbyte.dev/latest/about/support.html).
+A few behaviours worth knowing, because they're the ones that bite:
 
-## 💲 Sponsors and Supporters
+- **Attached is not owned.** When SteamShine attaches to your Game Mode session, it never signals that
+  process or removes its runtime directory. Only sessions it created itself are ever torn down.
+- **A brief disconnect doesn't kill your game.** By default the session is retained so Moonlight's
+  resume lands you back where you were. Turn `steamos_keep_session_alive` off if you'd rather it stop.
+- **Steam stays a single instance.** If Steam is already running outside the session SteamShine owns,
+  launch requests that would start a second copy are refused with an explanation instead of quietly
+  creating a mess. SteamShine will never stop your Steam for you.
+- **It fails closed, on purpose.** If the private session's socket goes missing mid-stream, capture
+  stops. It does not silently reconnect to your desktop and start broadcasting that instead.
+- **Optional local mirror.** If a screen *is* attached, an owned session can be mirrored to it, so you
+  can see on the Deck what the remote client sees.
 
-<p align="center">
-  <img src='https://cdn.jsdelivr.net/gh/LizardByte/contributors@dist/sponsors.svg' alt="Sponsors"/>
-</p>
+---
 
-## 👥 Contributors
+## The control panel
 
-Thank you to all the contributors who have helped make Sunshine better!
+The original Sunshine web UI is still there and unchanged. SteamShine adds a second one at
+`https://<host>:47990/steamshine/`, designed for the device in your hands rather than a desktop browser.
 
-### GitHub
+| Page | What it does |
+| --- | --- |
+| **Monitor** | CPU, RAM, GPU and VRAM tiles with rolling sparklines, per-core bars, load average and uptime, plus GPU hotspot, fan RPM and power draw against its cap. Refreshes every 2 s. |
+| **Apps** | The list Moonlight clients can launch — add, edit, delete, and stop whatever is running now. |
+| **GPU** | AMD power profiles. Four built-ins (Silent / Balanced / Performance / OC) scaled from what your hardware actually reports, plus custom profiles: power limit, CPU governor and max clock, and GPU clock/voltage offsets where the driver exposes them. |
+| **Settings** | The handful of options people actually change, plus a **Virtual display** page for the policies above. |
+| **Pin** | Four-digit Moonlight pairing. |
+| **Clients** | Paired clients, and revoking them. |
+| **Terminal** | A real shell on the host, in the browser, over its own WebSocket. |
 
-<p align="center">
-  <img src='https://cdn.jsdelivr.net/gh/LizardByte/contributors@dist/github.Sunshine.svg' alt="GitHub contributors"/>
-</p>
+Telemetry is read straight from `/proc` and `/sys` — no `amd-smi` or `sensors` subprocess is spawned
+every second, and simply having the panel open creates no extra capture or encoder session. The
+control plane is deliberately kept out of the video path: if the web server stalls, the stream doesn't.
 
-### CrowdIn
+The panel has its own login, session cookie and CSRF tokens. It can be turned off entirely
+(`steamshine_web_ui_enabled`) or promoted to the root URL (`steamshine_web_ui_default`); configuration
+validation won't let you disable both UIs and lock yourself out.
 
-<p align="center">
-  <img src='https://cdn.jsdelivr.net/gh/LizardByte/contributors@dist/crowdin.606145.svg' alt="CrowdIn contributors"/>
-</p>
+**Two features deserve a straight word.** The GPU page writes to root-owned sysfs files, which it does
+by raising a single capability (`CAP_DAC_OVERRIDE`) around each individual write and dropping it
+immediately after — against an allow-list of paths resolved from real sysfs enumeration, with every
+value clamped to the range the hardware reports. The Terminal is a genuine shell running as the same
+unprivileged user as the service: convenient, and roughly equivalent to leaving SSH open. Both sit
+behind the same authentication as everything else, but decide for yourself whether you want them
+reachable on your network.
 
-<div class="section_buttons">
+---
 
-| Previous |                                       Next |
-|:---------|-------------------------------------------:|
-|          | [Getting Started](docs/getting_started.md) |
+## What comes from Sunshine
 
-</div>
+The parts that aren't SteamOS-specific are Sunshine's, and they work as they always have: Moonlight
+pairing and transport, gamepad emulation, audio, HDR signalling, the configuration store, and the
+original web UI. On the SteamOS path, encoding uses **Vulkan Video** (H.264, HEVC, AV1) or **VA-API**
+on your AMD GPU, importing DMA-BUF frames directly rather than copying through system memory.
 
-<details style="display: none;">
-  <summary></summary>
-  [TOC]
-</details>
+A few streaming-side additions live here too: bounded input, capture, encoder and network queues that
+keep the newest work rather than growing a latency backlog; input routed into the Gamescope session
+over EIS/libei so it lands in the game and not on your desktop; and a packaged
+`Input Latency Visualizer` app for measuring end-to-end responsiveness yourself.
+
+---
+
+## Requirements
+
+- **SteamOS 3.8, or a comparable Arch-based Linux**, on x86_64. SteamOS 3.8.16 is the measured baseline.
+- **An AMD GPU.** Capture, encode and the GPU profile page are all built around `amdgpu`.
+- **Gamescope** with `--backend headless` and `--prefer-vk-device` (SteamOS 3.8 ships this), and
+  **PipeWire**, for the virtual display. Without them the rest still runs.
+- **A Moonlight or Artemis client** on whatever you plan to play on.
+
+`./steamshine.sh compatibility-check` verifies all of the above, and is worth running after any
+SteamOS update.
+
+---
+
+## Getting started
+
+Everything is driven by one script. Run it with no arguments in a terminal and it opens a menu.
+
+```bash
+./steamshine.sh install     # install and set up the systemd user service
+./steamshine.sh start
+./steamshine.sh status
+./steamshine.sh logs
+```
+
+Then open `https://<host>:47990/steamshine/`, create your login, and pair your client from the **Pin**
+page.
+
+On SteamOS the recommended install uses a prebuilt CI artifact, so no compiler or build tooling is
+needed on the Deck itself:
+
+```bash
+./steamshine.sh install --channel pr --pr 8
+```
+
+The installer verifies the archive checksum, rejects unsafe or linked archive entries, and writes only
+under `~/.local`, `~/.config/steamshine`, `~/.local/state/steamshine` and `~/.cache/steamshine`.
+Repeat installs are idempotent, the previous version is kept for `./steamshine.sh rollback`, and
+`uninstall` removes only what it created.
+
+Other useful commands: `check`, `compatibility-check`, `build`, `configure`, `restart`, `diagnose`,
+`update`, `repair`, `rollback`, `hardware-test`. Every modifying command accepts `--dry-run`.
+
+### The settings that matter
+
+Set these in your Sunshine config file, or from the panel's **Virtual display** page:
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `steamos_virtual_display_enabled` | `false` | Master switch for everything above. |
+| `steamos_virtual_display_mode` | `auto` | `off` / `auto` / `force`. |
+| `steamos_session_source` | `auto` | `auto` / `existing_gamescope` / `owned_private`. |
+| `steamos_local_presentation` | `auto` | Mirror an owned session to an attached screen. |
+| `steamos_keep_session_alive` | `true` | Retain an owned session across a disconnect. |
+| `steamshine_web_ui_enabled` | `true` | Serve the SteamShine panel. |
+| `steamshine_web_ui_default` | `false` | Put the panel at `/` instead of Sunshine's UI. |
+
+GPU selection (`steamos_game_gpu`, `steamos_capture_gpu`, `steamos_encoder_gpu`), the Gamescope path,
+timeouts and default display size are configurable too; see
+[docs/STEAMOS_AUTO_VIRTUAL_DISPLAY_IMPLEMENTATION.md](docs/STEAMOS_AUTO_VIRTUAL_DISPLAY_IMPLEMENTATION.md)
+for the full list. Left blank, GPU selection picks the AMD render node with the most dedicated VRAM,
+and refuses to guess when two candidates are ambiguous.
+
+---
+
+## Project status
+
+An honest summary, because it should affect whether you install this today.
+
+SteamShine works. The virtual-display pipeline — headless Gamescope, PipeWire discovery, DMA-BUF
+capture, Vulkan encoding, video, audio, touch and mouse input, and session retention across
+disconnects — has been validated end to end on real hardware (SteamOS 3.8.16, RX 9070 XT), including
+ten cable disconnect/reconnect cycles. CI covers formatting, linting, build, lifecycle tests, packaging
+and installer smoke tests on every change.
+
+What is still outstanding, stated plainly:
+
+- Keyboard and gamepad input, fully monitorless operation, and explicit-stop cleanup are pending a
+  final hardware acceptance pass.
+- Attaching to a **Game Mode** session needs its own acceptance run; the Desktop Mode result doesn't
+  substitute for it.
+- HDR is a firm release target, not a shipped one. SDR is what's validated today.
+- The redesigned control panel is verified in a browser against a running binary, but its GPU *write*
+  path and the Terminal WebSocket have not yet been exercised on live hardware.
+- Testing has concentrated on one host and one GPU. Other AMD hardware should work; nobody has proven
+  it yet.
+
+If you want a mature, broadly-tested host on any OS, install upstream Sunshine — it's excellent. If
+you have a SteamOS machine you want to run headless and you don't mind being early, this is built for
+exactly that, and reports from other hardware are genuinely useful.
+
+---
+
+## Documentation
+
+| Document | Contents |
+| --- | --- |
+| [INSTALLATION.md](docs/INSTALLATION.md) | Install paths and artifact verification. |
+| [STEAMOS_SETUP_SCRIPT.md](docs/STEAMOS_SETUP_SCRIPT.md) | Every `steamshine.sh` command and exit code. |
+| [STEAMOS_AUTO_VIRTUAL_DISPLAY_IMPLEMENTATION.md](docs/STEAMOS_AUTO_VIRTUAL_DISPLAY_IMPLEMENTATION.md) | How the virtual display actually works. |
+| [STEAMOS_ADAPTIVE_STREAMING_DESIGN.md](docs/STEAMOS_ADAPTIVE_STREAMING_DESIGN.md) | Client-adaptive resolution and bitrate. |
+| [STREAMING_PRIORITY_AND_PERFORMANCE_POLICY.md](docs/STREAMING_PRIORITY_AND_PERFORMANCE_POLICY.md) | Why the control plane never touches the video path. |
+| [IMPLEMENTATION_STATUS.md](docs/IMPLEMENTATION_STATUS.md) | Per-feature status, in more detail than above. |
+| [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | When it doesn't come up cleanly. |
+
+---
+
+## Relationship to Sunshine
+
+SteamShine began as a fork of [LizardByte/Sunshine](https://github.com/LizardByte/Sunshine) and reuses
+a great deal of it. It is developed independently at
+[souten-yd/SteamShine](https://github.com/souten-yd/SteamShine) and does not currently track upstream
+releases.
+
+If you want to pull a specific upstream change in yourself: the files most likely to conflict are the
+ones this fork modified heavily (`src/confighttp.cpp`, `src/config.*`, `src/platform/linux/misc.cpp`,
+the Linux packaging scripts). The SteamOS-specific files (`src/steamos_virtual_session*`,
+`src/steamshine_*`, and the `src_assets/common/assets/steamshine/` panel) don't exist upstream and
+won't conflict at all.
+
+Sincere thanks to the Sunshine and Moonlight projects — none of this would exist without them.
+
+## License
+
+GPL-3.0, the same as upstream Sunshine. See [LICENSE](LICENSE).

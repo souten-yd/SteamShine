@@ -120,7 +120,10 @@ jobs:
               packaging/linux/*|scripts/package-steamos-artifact.sh) categories[packaging]=1 ;;
               steamshine.sh|scripts/*.sh|tests/integration/test_steamshine_script.sh|tests/integration/test_steamos_force_hardware_script.sh|tests/integration/test_web_asset_validation.sh|tests/fixtures/steamos/*) categories[shell]=1 ;;
               src/steamos_virtual_session_core.*|tests/unit/test_steamos_virtual_session_core.cpp) categories[cpp-core]=1 ;;
-              src/platform/linux/*|src/stream.*|src/process.*|src/nvhttp.*|src/config.*|src/confighttp.*|src/web_services.*|src_assets/common/assets/*|tests/web/*|package.json|package-lock.json|vite.config.js) categories[web]=1 ;;
+              # Pure frontend assets: no C++ recompile needed to validate these.
+              src_assets/common/assets/*|tests/web/*|package.json|package-lock.json|vite.config.js) categories[web-assets]=1 ;;
+              # The C++ side of the web server: a compiled binary is required to validate these.
+              src/platform/linux/*|src/stream.*|src/process.*|src/nvhttp.*|src/config.*|src/confighttp.*|src/web_services.*) categories[web]=1 ;;
               CMakeLists.txt|cmake/*|tests/CMakeLists.txt|.github/workflows/*|ci/steamos/*) categories[build-system]=1 ;;
               *) categories[unclassified]=1 ;;
             esac
@@ -130,6 +133,7 @@ jobs:
           if [[ "${FORCE_FULL}" != true && "${category_list}" == docs ]]; then mode=docs; fi
           if [[ "${FORCE_FULL}" != true && "${category_list}" == shell ]]; then mode=shell; fi
           if [[ "${FORCE_FULL}" != true && "${category_list}" == cpp-core ]]; then mode=cpp-core; fi
+          if [[ "${FORCE_FULL}" != true && "${category_list}" == web-assets ]]; then mode=web-assets; fi
           printf 'mode=%s\n' "${mode}" >>"${GITHUB_OUTPUT}"
           printf 'categories=%s\n' "${category_list:-unclassified}" >>"${GITHUB_OUTPUT}"
 
@@ -175,6 +179,22 @@ jobs:
             cmake -S tests/steamos_core -B cmake-build-steamos-fast -G Ninja -DCMAKE_BUILD_TYPE=Release
             cmake --build cmake-build-steamos-fast --target test_steamos_virtual_session_core --parallel 2
             cmake-build-steamos-fast/test_steamos_virtual_session_core --gtest_color=yes
+          fi
+          if [[ "${mode}" == web-assets ]]; then
+            # Frontend-only change: validate without paying for a full C++
+            # recompile. This runs the same npm/vite build and the same
+            # build-steamshine-web-assets.py copy the CMake web-ui and
+            # steamshine-web-ui targets run, just without configuring the
+            # whole C++ project first (that configure step alone would pull
+            # in Boost/FFmpeg unrelated to this change).
+            node --check src_assets/common/assets/steamshine/app.js
+            node --check tests/web/upstream-browser-e2e.mjs
+            python3 -m py_compile scripts/build-steamshine-web-assets.py scripts/validate-web-assets.py
+            mkdir -p dist-web-assets
+            npm ci --ignore-scripts
+            SUNSHINE_SOURCE_ASSETS_DIR="${GITHUB_WORKSPACE}/src_assets" SUNSHINE_ASSETS_DIR="${GITHUB_WORKSPACE}/dist-web-assets" npm run build
+            python3 scripts/build-steamshine-web-assets.py src_assets/common/assets/steamshine dist-web-assets/assets/steamshine
+            python3 scripts/validate-web-assets.py dist-web-assets/assets/web --steamshine-root dist-web-assets/assets/steamshine
           fi
 
   full-validation:
