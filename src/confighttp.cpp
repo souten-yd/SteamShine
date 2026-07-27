@@ -2647,6 +2647,7 @@ namespace confighttp {
       std::mutex write_mutex;
       bool authenticated {false};
       std::uint64_t subscription_id {0};
+
       struct unsubscribe_guard_t {
         bool &authenticated;
         std::uint64_t &subscription_id;

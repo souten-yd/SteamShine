@@ -210,7 +210,7 @@ namespace steamshine_gpuctl {
       return raised;
     }
 #else
-    bool with_capability(int /*cap*/, const std::function<void()> &/*fn*/) {
+    bool with_capability(int /*cap*/, const std::function<void()> & /*fn*/) {
       return false;
     }
 #endif
@@ -365,8 +365,8 @@ namespace steamshine_gpuctl {
     auto profiles {custom_profiles_locked()};
     const auto before_size {profiles.size()};
     profiles.erase(std::remove_if(profiles.begin(), profiles.end(), [&](const profile_t &existing) {
-      return existing.name == name;
-    }),
+                     return existing.name == name;
+                   }),
                    profiles.end());
     if (profiles.size() == before_size) {
       error = "Profile not found";
