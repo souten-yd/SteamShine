@@ -10,10 +10,13 @@
 #include "platform/linux/host_desktop_endpoint.h"
 #include "platform/linux/steam_session.h"
 #include "rtsp.h"
+#include "utility.h"
 
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <boost/property_tree/json_parser.hpp>
+#include <boost/property_tree/ptree.hpp>
 #include <cctype>
 #include <cerrno>
 #include <charconv>
@@ -27,6 +30,7 @@
 #include <iterator>
 #include <mutex>
 #include <optional>
+#include <sstream>
 #include <string_view>
 #include <thread>
 #include <vector>
@@ -61,6 +65,7 @@ namespace steamos_virtual_session {
       bool migration_required {false};  ///< Whether Desktop Steam needs an explicitly confirmed migration.
       std::string app_launch_rejected_reason;  ///< Stable reason for the latest application launch rejection.
       std::string app_launch_rejected_message;  ///< Safe detail for the latest application launch rejection.
+      session_display_endpoint_t display_endpoint;  ///< Verified endpoint for application launches.
       std::string selection_reason;  ///< Stable reason for the current Desktop or Gamescope capture choice.
       presentation_e presentation {presentation_e::remote_only};  ///< Desired remote/local presentation paths.
       bool local_presenter_active {false};  ///< Whether a local presenter has attached successfully.
@@ -92,6 +97,8 @@ namespace steamos_virtual_session {
     constexpr std::string_view owner_marker_name {"steamshine-owner"};
     constexpr std::string_view owner_marker_contents {"steamshine-steamos-virtual-session-v1\n"};
     constexpr std::string_view gamescope_pid_name {"gamescope.pid"};
+    constexpr std::string_view display_endpoint_report_name {"display-endpoint.json"};
+    std::atomic_uint64_t next_display_generation {1};  ///< Monotonic endpoint generation allocator.
 
     /**
      * @brief Resolve the login user's PipeWire runtime independently of private Wayland state.
@@ -283,6 +290,7 @@ namespace steamos_virtual_session {
       manager.source_description.clear();
       manager.source_executable.clear();
       manager.source_process_start_time = 0;
+      manager.display_endpoint = {};
       if (manager.app_launch_rejected_reason.empty()) {
         manager.steam_location = "unknown";
       }
@@ -737,6 +745,325 @@ namespace steamos_virtual_session {
     }
 
     /**
+     * @brief Resolve a local X11 display name to its UNIX socket.
+     *
+     * @param display Display spelling such as `:1`, `:2.0`, or `:27`.
+     * @return X11 socket path, or no value for remote or malformed displays.
+     */
+    std::optional<std::filesystem::path> x11_socket_path(const std::string_view display) {
+      if (display.size() < 2 || display.front() != ':') {
+        return std::nullopt;
+      }
+      const auto screen_separator {display.find('.', 1)};
+      const auto number {display.substr(1, screen_separator == std::string_view::npos ? std::string_view::npos : screen_separator - 1)};
+      if (number.empty() || !std::ranges::all_of(number, [](const unsigned char character) {
+            return std::isdigit(character);
+          })) {
+        return std::nullopt;
+      }
+      return std::filesystem::path {"/tmp/.X11-unix"} / ("X" + std::string {number});
+    }
+
+    /**
+     * @brief Validate a current-user regular file without following a final symlink.
+     *
+     * @param path Candidate file path.
+     * @return True only for a current-user regular non-symlink file.
+     */
+    bool current_user_regular_file(const std::filesystem::path &path) {
+      struct stat file_stat {};
+      return !path.empty() && path.is_absolute() && ::lstat(path.c_str(), &file_stat) == 0 && S_ISREG(file_stat.st_mode) && file_stat.st_uid == ::getuid() && (file_stat.st_mode & 0077) == 0;
+    }
+
+    /**
+     * @brief Validate a current-user UNIX socket without accepting a symlink.
+     *
+     * @param path Candidate socket path.
+     * @return True only for a current-user UNIX-domain socket.
+     */
+    bool current_user_socket(const std::filesystem::path &path) {
+      struct stat socket_stat {};
+      return ::lstat(path.c_str(), &socket_stat) == 0 && S_ISSOCK(socket_stat.st_mode) && socket_stat.st_uid == ::getuid();
+    }
+
+    /**
+     * @brief Verify that a current-user UNIX socket accepts a local connection.
+     *
+     * A filesystem socket can remain after its server exits. Connecting with a
+     * short non-blocking deadline prevents a stale Xwayland path from becoming
+     * a verified application endpoint.
+     *
+     * @param path Candidate UNIX-domain socket path.
+     * @return True only when the owned socket accepts a connection.
+     */
+    bool current_user_connectable_socket(const std::filesystem::path &path) {
+      const auto value {path.string()};
+      if (!current_user_socket(path) || value.empty() || value.size() >= sizeof(sockaddr_un::sun_path)) {
+        return false;
+      }
+      const int connection {::socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0)};
+      if (connection < 0) {
+        return false;
+      }
+      const auto close_connection {util::fail_guard([connection]() {
+        ::close(connection);
+      })};
+      sockaddr_un address {};
+      address.sun_family = AF_UNIX;
+      std::memcpy(address.sun_path, value.c_str(), value.size() + 1);
+      if (::connect(connection, reinterpret_cast<const sockaddr *>(&address), offsetof(sockaddr_un, sun_path) + value.size() + 1) == 0) {
+        return true;
+      }
+      if (errno != EINPROGRESS) {
+        return false;
+      }
+      pollfd descriptor {
+        .fd = connection,
+        .events = POLLOUT,
+      };
+      if (::poll(&descriptor, 1, 100) != 1) {
+        return false;
+      }
+      int socket_error {};
+      socklen_t error_size {sizeof(socket_error)};
+      return ::getsockopt(connection, SOL_SOCKET, SO_ERROR, &socket_error, &error_size) == 0 && socket_error == 0;
+    }
+
+    /**
+     * @brief Create the owner-only Xauthority path inherited by owned Gamescope.
+     *
+     * Gamescope 3.16 starts its private Xwayland without an `-auth` argument,
+     * but X11 clients still honor `XAUTHORITY`. Supplying an empty private file
+     * preserves Gamescope's access policy while giving every later application
+     * the same explicit, validated endpoint path.
+     *
+     * @param runtime_directory Newly-created owner-only session directory.
+     * @param error Receives a stable operator-facing failure description.
+     * @return Xauthority path, or no value when it could not be created safely.
+     */
+    std::optional<std::filesystem::path> create_owned_xauthority(const std::filesystem::path &runtime_directory, std::string &error) {
+      const auto path {runtime_directory / "xauthority"};
+      const int authority {::open(path.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, 0600)};
+      if (authority < 0) {
+        error = "Failed to create the owned Xwayland authority file";
+        return std::nullopt;
+      }
+      struct stat authority_stat {};
+      const bool valid {::fstat(authority, &authority_stat) == 0 && S_ISREG(authority_stat.st_mode) && authority_stat.st_uid == ::getuid() && (authority_stat.st_mode & 0777) == 0600};
+      ::close(authority);
+      if (!valid) {
+        ::unlink(path.c_str());
+        error = "Failed to restrict the owned Xwayland authority file";
+        return std::nullopt;
+      }
+      return path;
+    }
+
+    /**
+     * @brief Retain a local session bus address only when its socket is user-owned.
+     *
+     * @param address Candidate `DBUS_SESSION_BUS_ADDRESS` value.
+     * @return Original address when verified, otherwise an empty string.
+     */
+    std::string verified_dbus_session_bus_address(const std::string_view address) {
+      constexpr std::string_view prefix {"unix:path="};
+      if (!address.starts_with(prefix)) {
+        return {};
+      }
+      const auto path {address.substr(prefix.size())};
+      if (path.empty() || path.find_first_of(",;") != std::string_view::npos || !current_user_socket(std::filesystem::path {path})) {
+        return {};
+      }
+      return std::string {address};
+    }
+
+    /**
+     * @brief Read and verify an owned Gamescope bootstrap endpoint report.
+     *
+     * @param runtime_directory Owned private runtime directory.
+     * @param gamescope_pid Expected Gamescope producer PID.
+     * @param gamescope_start_time Expected producer start time.
+     * @param generation Expected session generation.
+     * @param pipewire_runtime Verified host PipeWire runtime.
+     * @param pipewire_remote Verified host PipeWire remote.
+     * @param pulse_runtime Host PulseAudio compatibility runtime.
+     * @return Verified endpoint or a rejected snapshot with a stable error.
+     */
+    session_display_endpoint_t read_owned_display_endpoint(
+      const std::filesystem::path &runtime_directory,
+      const int gamescope_pid,
+      const uint64_t gamescope_start_time,
+      const uint64_t generation,
+      const std::string &pipewire_runtime,
+      const std::string &pipewire_remote,
+      const std::string &pulse_runtime
+    ) {
+      session_display_endpoint_t endpoint {
+        .origin = session_origin_e::owned_private,
+        .producer_pid = gamescope_pid,
+        .producer_start_time = gamescope_start_time,
+        .generation = generation,
+        .verification = display_verification_e::rejected,
+      };
+      const auto report_path {runtime_directory / display_endpoint_report_name};
+      struct stat report_stat {};
+      if (::lstat(report_path.c_str(), &report_stat) != 0) {
+        endpoint.error = "xwayland_display_missing";
+        return endpoint;
+      }
+      if (!S_ISREG(report_stat.st_mode) || report_stat.st_uid != ::getuid() || (report_stat.st_mode & 0777) != 0600) {
+        endpoint.error = "xwayland_identity_unverified";
+        return endpoint;
+      }
+      try {
+        std::ifstream input {report_path};
+        boost::property_tree::ptree report;
+        boost::property_tree::read_json(input, report);
+        if (report.get("owner", std::string {}) != "steamshine" || report.get("generation", uint64_t {}) != generation || report.get("xdg_runtime_directory", std::string {}) != runtime_directory.string()) {
+          endpoint.error = "xwayland_identity_unverified";
+          return endpoint;
+        }
+        const int bootstrap_pid {report.get("bootstrap_pid", -1)};
+        const uint64_t bootstrap_start_time {report.get("bootstrap_start_time", uint64_t {})};
+        const auto bootstrap_identity {gamescope_source::read_process_identity(bootstrap_pid)};
+        if (!bootstrap_identity || bootstrap_identity->uid != static_cast<int>(::getuid()) || bootstrap_identity->start_time != bootstrap_start_time || ::getpgid(bootstrap_pid) != gamescope_pid) {
+          endpoint.error = "xwayland_identity_unverified";
+          return endpoint;
+        }
+        endpoint.environment_source_pid = bootstrap_pid;
+        endpoint.environment_source_start_time = bootstrap_start_time;
+        const auto current_identity {gamescope_source::read_process_identity(gamescope_pid)};
+        if (!current_identity || current_identity->uid != static_cast<int>(::getuid()) || current_identity->start_time != gamescope_start_time) {
+          endpoint.error = "xwayland_identity_unverified";
+          return endpoint;
+        }
+        endpoint.xdg_runtime_directory = runtime_directory.string();
+        endpoint.wayland_display = report.get("wayland_display", std::string {});
+        endpoint.gamescope_wayland_display = report.get("gamescope_wayland_display", std::string {});
+        endpoint.x11_display = report.get("display", std::string {});
+        endpoint.xauthority = report.get("xauthority", std::string {});
+        endpoint.dbus_session_bus_address = verified_dbus_session_bus_address(report.get("dbus_session_bus_address", std::string {}));
+        endpoint.pipewire_runtime_directory = pipewire_runtime;
+        endpoint.pipewire_remote = pipewire_remote;
+        endpoint.pulse_runtime_path = pulse_runtime;
+        const auto x11_socket {x11_socket_path(endpoint.x11_display)};
+        if (!x11_socket) {
+          endpoint.error = "xwayland_display_missing";
+          return endpoint;
+        }
+        if (!current_user_connectable_socket(*x11_socket)) {
+          endpoint.error = "xwayland_identity_unverified";
+          return endpoint;
+        }
+        if (!current_user_regular_file(endpoint.xauthority)) {
+          endpoint.error = endpoint.xauthority.empty() ? "xwayland_auth_missing" : "xwayland_identity_unverified";
+          return endpoint;
+        }
+        if (!path_is_within_runtime_root(endpoint.xauthority, runtime_directory)) {
+          endpoint.error = "xwayland_identity_unverified";
+          return endpoint;
+        }
+        if (endpoint.wayland_display.empty()) {
+          endpoint.wayland_display = "gamescope-0";
+        }
+        if (endpoint.gamescope_wayland_display.empty()) {
+          endpoint.gamescope_wayland_display = endpoint.wayland_display;
+        }
+        const auto wayland_socket {runtime_directory / endpoint.wayland_display};
+        const auto gamescope_wayland_socket {runtime_directory / endpoint.gamescope_wayland_display};
+        if (endpoint.wayland_display.find('/') != std::string::npos || endpoint.gamescope_wayland_display.find('/') != std::string::npos || !path_is_within_runtime_root(wayland_socket, runtime_directory) || !path_is_within_runtime_root(gamescope_wayland_socket, runtime_directory) || !current_user_socket(wayland_socket) || !current_user_socket(gamescope_wayland_socket)) {
+          endpoint.error = "xwayland_identity_unverified";
+          return endpoint;
+        }
+        endpoint.verification = display_verification_e::verified;
+        endpoint.error.clear();
+      } catch (const std::exception &) {
+        endpoint.error = "xwayland_identity_unverified";
+      }
+      return endpoint;
+    }
+
+    /**
+     * @brief Validate a display endpoint read from a resident Steam process.
+     *
+     * @param environment Allow-listed resident Steam environment.
+     * @param gamescope_pid Verified parent Gamescope PID.
+     * @param gamescope_start_time Verified parent Gamescope start time.
+     * @param generation New endpoint generation.
+     * @param pipewire_runtime Verified host PipeWire runtime.
+     * @param pipewire_remote Verified host PipeWire remote.
+     * @return Verified endpoint or a rejected snapshot with a stable reason.
+     */
+    session_display_endpoint_t attached_display_endpoint(
+      const steam_session::resident_environment_t &environment,
+      const int gamescope_pid,
+      const uint64_t gamescope_start_time,
+      const uint64_t generation,
+      const std::string &pipewire_runtime,
+      const std::string &pipewire_remote
+    ) {
+      session_display_endpoint_t endpoint {
+        .origin = session_origin_e::attached_existing,
+        .xdg_runtime_directory = environment.xdg_runtime_directory,
+        .wayland_display = environment.wayland_display,
+        .gamescope_wayland_display = environment.gamescope_wayland_display,
+        .x11_display = environment.x11_display,
+        .xauthority = environment.xauthority,
+        .pipewire_runtime_directory = pipewire_runtime,
+        .pipewire_remote = pipewire_remote,
+        .pulse_runtime_path = (std::filesystem::path {pipewire_runtime} / "pulse").string(),
+        .dbus_session_bus_address = verified_dbus_session_bus_address(environment.dbus_session_bus_address),
+        .producer_pid = gamescope_pid,
+        .producer_start_time = gamescope_start_time,
+        .environment_source_pid = environment.steam_pid,
+        .environment_source_start_time = environment.steam_start_time,
+        .generation = generation,
+        .verification = display_verification_e::rejected,
+      };
+      const auto producer {gamescope_source::read_process_identity(gamescope_pid)};
+      if (!producer || producer->uid != static_cast<int>(::getuid()) || producer->start_time != gamescope_start_time) {
+        endpoint.error = "xwayland_identity_unverified";
+        return endpoint;
+      }
+      const auto x11_socket {x11_socket_path(endpoint.x11_display)};
+      if (!x11_socket) {
+        endpoint.error = "xwayland_display_missing";
+        return endpoint;
+      }
+      if (!current_user_connectable_socket(*x11_socket)) {
+        endpoint.error = "xwayland_identity_unverified";
+        return endpoint;
+      }
+      if (!current_user_regular_file(endpoint.xauthority)) {
+        endpoint.error = endpoint.xauthority.empty() ? "xwayland_auth_missing" : "xwayland_identity_unverified";
+        return endpoint;
+      }
+      struct stat runtime_stat {};
+      const std::filesystem::path runtime {endpoint.xdg_runtime_directory};
+      if (!runtime.is_absolute() || ::lstat(runtime.c_str(), &runtime_stat) != 0 || !S_ISDIR(runtime_stat.st_mode) || runtime_stat.st_uid != ::getuid()) {
+        endpoint.error = "xwayland_identity_unverified";
+        return endpoint;
+      }
+      if (!path_is_within_runtime_root(endpoint.xauthority, runtime)) {
+        endpoint.error = "xwayland_identity_unverified";
+        return endpoint;
+      }
+      if (!endpoint.wayland_display.empty() && (endpoint.wayland_display.find('/') != std::string::npos || !current_user_socket(runtime / endpoint.wayland_display))) {
+        endpoint.error = "xwayland_identity_unverified";
+        return endpoint;
+      }
+      if (endpoint.gamescope_wayland_display.empty()) {
+        endpoint.gamescope_wayland_display = endpoint.wayland_display;
+      }
+      if (endpoint.gamescope_wayland_display.find('/') != std::string::npos || !current_user_socket(runtime / endpoint.gamescope_wayland_display)) {
+        endpoint.error = "xwayland_identity_unverified";
+        return endpoint;
+      }
+      endpoint.verification = display_verification_e::verified;
+      return endpoint;
+    }
+
+    /**
      * @brief Validate a host PipeWire runtime without confusing it with private Wayland state.
      *
      * @param runtime Candidate host user runtime directory.
@@ -1067,6 +1394,28 @@ namespace steamos_virtual_session {
       }
       const auto selected {gamescope_source::select_gamescope_source(sources, selection_request)};
       if (selected.has_value()) {
+        const steam_session::target_session_t target {
+          .gamescope_pid = selected->producer_pid,
+          .cgroup = steam_session::cgroup_for_process(selected->producer_pid),
+        };
+        const auto resident_environment {steam_session::verified_resident_environment(target)};
+        if (!resident_environment) {
+          manager.app_launch_rejected_reason = "resident_steam_environment_unavailable";
+          manager.app_launch_rejected_message = "A verified resident Steam environment is required for the selected Game Mode session";
+          error = manager.app_launch_rejected_message;
+          manager.current = state_e::Failed;
+          return false;
+        }
+        const uint64_t display_generation {next_display_generation.fetch_add(1, std::memory_order_relaxed)};
+        const auto display_endpoint {attached_display_endpoint(*resident_environment, selected->producer_pid, selected->producer_start_time, display_generation, pipewire_runtime->string(), pipewire_remote)};
+        if (display_endpoint.verification != display_verification_e::verified) {
+          manager.display_endpoint = display_endpoint;
+          manager.app_launch_rejected_reason = display_endpoint.error;
+          manager.app_launch_rejected_message = "The resident Steam Xwayland endpoint failed identity validation";
+          error = manager.app_launch_rejected_message + " (" + display_endpoint.error + ')';
+          manager.current = state_e::Failed;
+          return false;
+        }
         manager.selection_reason = "verified_existing_gamescope";
         manager.origin = session_origin_e::attached_existing;
         manager.process_owned = false;
@@ -1087,6 +1436,7 @@ namespace steamos_virtual_session {
         manager.source_description = selected->node_description.empty() ? selected->application_name : selected->node_description;
         manager.source_executable = selected->executable;
         manager.source_process_start_time = selected->producer_start_time;
+        manager.display_endpoint = display_endpoint;
         manager.presentation = desired_presentation(manager.origin);
         manager.steam_location = std::string {steam_session::to_string(steam_session::classify_current_user_instance({
           .gamescope_pid = selected->producer_pid,
@@ -1101,6 +1451,7 @@ namespace steamos_virtual_session {
         manager.process_group = selected->producer_pid;
   #endif
         manager.current = state_e::WaitingForCapture;
+        BOOST_LOG(info) << "SESSION_DISPLAY_ENDPOINT_READY origin=attached_existing display=" << manager.display_endpoint.x11_display << " wayland=" << manager.display_endpoint.wayland_display << " generation=" << display_generation << " pid=" << selected->producer_pid;
         BOOST_LOG(info) << "GAMESCOPE_SOURCE_ATTACHED origin=attached_existing pid=" << selected->producer_pid << " start_time=" << selected->producer_start_time << " node_id=" << selected->node_id << " object_serial=" << selected->object_serial << " render_node=" << selected->render_node << " steam_location=" << manager.steam_location;
         return true;
       }
@@ -1132,6 +1483,13 @@ namespace steamos_virtual_session {
     manager.source_description = "SteamShine-owned private Gamescope";
     manager.source_executable = config::steamos_virtual_display.gamescope_path;
     manager.source_process_start_time = 0;
+    const uint64_t display_generation {next_display_generation.fetch_add(1, std::memory_order_relaxed)};
+    manager.display_endpoint = {
+      .origin = session_origin_e::owned_private,
+      .generation = display_generation,
+      .verification = display_verification_e::unavailable,
+      .error = "xwayland_display_missing",
+    };
     manager.pci_bdf = gpu->pci_bdf;
     manager.render_node = gpu->render_node;
     manager.pipewire_runtime = pipewire_runtime->string();
@@ -1174,17 +1532,36 @@ namespace steamos_virtual_session {
         return false;
       }
     }
+    const auto xauthority {create_owned_xauthority(manager.runtime_directory, error)};
+    if (!xauthority) {
+      std::filesystem::remove_all(manager.runtime_directory, ec);
+      manager.current = state_e::Failed;
+      return false;
+    }
     manager.current = state_e::Starting;
+    std::error_code executable_error;
+    const auto current_executable {std::filesystem::read_symlink("/proc/self/exe", executable_error)};
+    if (executable_error || current_executable.empty()) {
+      std::filesystem::remove_all(manager.runtime_directory, ec);
+      error = "Failed to resolve the SteamShine session bootstrap executable";
+      manager.current = state_e::Failed;
+      return false;
+    }
+    const std::string bootstrap_executable {
+      std::getenv("STEAMSHINE_SESSION_BOOTSTRAP") ? std::getenv("STEAMSHINE_SESSION_BOOTSTRAP") : current_executable.string()
+    };
     const pid_t child {::fork()};
     if (child == 0) {
       ::setpgid(0, 0);
       const auto path {config::steamos_virtual_display.gamescope_path};
       const auto runtime {manager.runtime_directory.string()};
+      const auto xauthority_value {xauthority->string()};
       const auto pipewire_runtime_value {pipewire_runtime->string()};
       ::setenv("XDG_RUNTIME_DIR", runtime.c_str(), 1);
       ::setenv("PIPEWIRE_RUNTIME_DIR", pipewire_runtime_value.c_str(), 1);
       ::setenv("PIPEWIRE_REMOTE", pipewire_remote.c_str(), 1);
       ::setenv("PULSE_RUNTIME_PATH", manager.pulse_runtime.c_str(), 1);
+      ::setenv("XAUTHORITY", xauthority_value.c_str(), 1);
       // A headless Gamescope owns its Wayland server.  Inheriting the desktop
       // display name makes Gamescope try to connect to a non-existent parent
       // socket below this private runtime directory before it starts that
@@ -1196,15 +1573,17 @@ namespace steamos_virtual_session {
       // session backend rather than its private runtime.
       ::unsetenv("XDG_SESSION_TYPE");
       std::vector<char *> argv;
-      argv.reserve(arguments.size() + 5);
+      const auto generation {std::to_string(display_generation)};
+      argv.reserve(arguments.size() + 6);
       argv.push_back(const_cast<char *>(path.c_str()));
       for (const auto &argument : arguments) {
         argv.push_back(const_cast<char *>(argument.c_str()));
       }
       argv.push_back(const_cast<char *>("--"));
-      argv.push_back(const_cast<char *>("/bin/sh"));
-      argv.push_back(const_cast<char *>("-c"));
-      argv.push_back(const_cast<char *>("exec sleep infinity"));
+      argv.push_back(const_cast<char *>(bootstrap_executable.c_str()));
+      argv.push_back(const_cast<char *>("--steamshine-session-bootstrap"));
+      argv.push_back(const_cast<char *>(runtime.c_str()));
+      argv.push_back(const_cast<char *>(generation.c_str()));
       argv.push_back(nullptr);
       ::execvp(path.c_str(), argv.data());
       _exit(127);
@@ -1256,14 +1635,21 @@ namespace steamos_virtual_session {
         break;
       }
       if (owned_wayland_socket_exists(socket)) {
-        manager.current = state_e::WaitingForCapture;
-        BOOST_LOG(info) << "SteamOS virtual display socket ready: " << request.width << 'x' << request.height << '@' << request.fps << " on AMD PCI " << manager.pci_bdf << " (" << manager.render_node << ')';
-        return true;
+        manager.display_endpoint = read_owned_display_endpoint(manager.runtime_directory, child, manager.source_process_start_time, display_generation, manager.pipewire_runtime, manager.pipewire_remote, manager.pulse_runtime);
+        if (manager.display_endpoint.verification == display_verification_e::verified) {
+          manager.current = state_e::WaitingForCapture;
+          BOOST_LOG(info) << "SESSION_DISPLAY_ENDPOINT_READY origin=owned_private display=" << manager.display_endpoint.x11_display << " wayland=" << manager.display_endpoint.wayland_display << " generation=" << display_generation << " pid=" << child;
+          BOOST_LOG(info) << "SteamOS virtual display socket ready: " << request.width << 'x' << request.height << '@' << request.fps << " on AMD PCI " << manager.pci_bdf << " (" << manager.render_node << ')';
+          return true;
+        }
       }
       std::this_thread::sleep_for(std::chrono::milliseconds {50});
     }
     if (error.empty()) {
-      error = "Timed out waiting for the Gamescope Wayland socket";
+      const auto reason {manager.display_endpoint.error.empty() ? std::string {"xwayland_display_missing"} : manager.display_endpoint.error};
+      manager.app_launch_rejected_reason = reason;
+      manager.app_launch_rejected_message = "Gamescope did not publish a verified Xwayland endpoint";
+      error = "Timed out waiting for a verified Gamescope display endpoint (" + reason + ')';
       manager.current = state_e::Failed;
     }
     stop_owned_process_group(manager.process_group, std::chrono::seconds {config::steamos_virtual_display.shutdown_timeout_seconds});
@@ -1341,6 +1727,7 @@ namespace steamos_virtual_session {
     snapshot.migration_required = manager.migration_required;
     snapshot.app_launch_rejected_reason = manager.app_launch_rejected_reason;
     snapshot.app_launch_rejected_message = manager.app_launch_rejected_message;
+    snapshot.display_endpoint = manager.display_endpoint;
     snapshot.selection_reason = manager.selection_reason;
     snapshot.presentation = manager.presentation;
     snapshot.local_presenter_active = manager.local_presenter_active;
@@ -1445,17 +1832,85 @@ namespace steamos_virtual_session {
     }
   }
 
-  bool application_environment(std::string &runtime_directory, std::string &wayland_display, std::string &pipewire_runtime, std::string &pipewire_remote, std::string &pulse_runtime) {
-    std::scoped_lock lock {manager.mutex};
-    if (manager.runtime_directory.empty() || (manager.current != state_e::WaitingForCapture && manager.current != state_e::Ready && manager.current != state_e::Streaming)) {
-      return false;
+  int run_display_endpoint_bootstrap(const std::string_view report_directory, const uint64_t generation) {
+#if defined(__linux__)
+    const auto *const inherited_runtime {std::getenv("XDG_RUNTIME_DIR")};
+    const std::filesystem::path runtime {report_directory};
+    struct stat runtime_stat {};
+    if (!inherited_runtime || runtime.empty() || runtime.string() != inherited_runtime || ::lstat(runtime.c_str(), &runtime_stat) != 0 || !S_ISDIR(runtime_stat.st_mode) || runtime_stat.st_uid != ::getuid()) {
+      return 3;
     }
-    runtime_directory = manager.runtime_directory.string();
-    wayland_display = "gamescope-0";
-    pipewire_runtime = manager.pipewire_runtime;
-    pipewire_remote = manager.pipewire_remote;
-    pulse_runtime = manager.pulse_runtime;
-    return true;
+    const int directory {::open(runtime.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW)};
+    if (directory < 0) {
+      return 3;
+    }
+    const auto close_directory {util::fail_guard([directory]() {
+      ::close(directory);
+    })};
+    const auto environment_value = [](const char *name) {
+      const auto *const value {std::getenv(name)};
+      return value ? std::string {value} : std::string {};
+    };
+    const auto identity {gamescope_source::read_process_identity(::getpid())};
+    boost::property_tree::ptree report;
+    report.put("owner", "steamshine");
+    report.put("generation", generation);
+    report.put("bootstrap_pid", ::getpid());
+    report.put("bootstrap_start_time", identity ? identity->start_time : 0);
+    report.put("xdg_runtime_directory", runtime.string());
+    report.put("wayland_display", environment_value("WAYLAND_DISPLAY"));
+    report.put("gamescope_wayland_display", environment_value("GAMESCOPE_WAYLAND_DISPLAY"));
+    report.put("display", environment_value("DISPLAY"));
+    report.put("xauthority", environment_value("XAUTHORITY"));
+    report.put("dbus_session_bus_address", environment_value("DBUS_SESSION_BUS_ADDRESS"));
+    std::ostringstream serialized;
+    boost::property_tree::write_json(serialized, report, false);
+    const std::string contents {serialized.str()};
+    const std::string temporary_name {".display-endpoint-" + std::to_string(::getpid()) + ".tmp"};
+    const int output {::openat(directory, temporary_name.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, 0600)};
+    if (output < 0) {
+      return 4;
+    }
+    size_t written {};
+    while (written < contents.size()) {
+      const auto result {::write(output, contents.data() + written, contents.size() - written)};
+      if (result <= 0) {
+        ::close(output);
+        ::unlinkat(directory, temporary_name.c_str(), 0);
+        return 4;
+      }
+      written += static_cast<size_t>(result);
+    }
+    const bool flushed {::fsync(output) == 0};
+    ::close(output);
+    if (!flushed || ::renameat(directory, temporary_name.c_str(), directory, display_endpoint_report_name.data()) != 0 || ::fsync(directory) != 0) {
+      ::unlinkat(directory, temporary_name.c_str(), 0);
+      return 4;
+    }
+    for (;;) {
+      ::pause();
+    }
+#else
+    (void) report_directory;
+    (void) generation;
+    return 3;
+#endif
+  }
+
+  std::optional<session_display_endpoint_t> application_environment() {
+    std::scoped_lock lock {manager.mutex};
+    if (manager.origin == session_origin_e::none || manager.display_endpoint.verification != display_verification_e::verified || (manager.current != state_e::WaitingForCapture && manager.current != state_e::Ready && manager.current != state_e::Streaming)) {
+      return std::nullopt;
+    }
+    const auto identity {gamescope_source::read_process_identity(manager.display_endpoint.producer_pid)};
+    if (!identity || identity->start_time != manager.display_endpoint.producer_start_time) {
+      return std::nullopt;
+    }
+    const auto environment_identity {gamescope_source::read_process_identity(manager.display_endpoint.environment_source_pid)};
+    if (!environment_identity || environment_identity->start_time != manager.display_endpoint.environment_source_start_time) {
+      return std::nullopt;
+    }
+    return manager.display_endpoint;
   }
 
   bool steam_command_allowed(const std::string_view command, std::string &error_message) {
@@ -1470,8 +1925,8 @@ namespace steamos_virtual_session {
       }
       target = {
         .gamescope_pid = manager.process_group,
-        .runtime_directory = manager.runtime_directory.string(),
-        .wayland_display = "gamescope-0",
+        .runtime_directory = manager.display_endpoint.xdg_runtime_directory,
+        .wayland_display = manager.display_endpoint.wayland_display,
         .cgroup = steam_session::cgroup_for_process(manager.process_group),
       };
     }
@@ -1538,8 +1993,7 @@ namespace steamos_virtual_session {
   bool gamescope_pipewire_endpoint(std::string &runtime_directory, std::string &remote_name, int &gamescope_pid) {
     std::scoped_lock lock {manager.mutex};
 #if defined(__linux__)
-    if (manager.pipewire_runtime.empty() || manager.pipewire_remote.empty() || manager.process_group <= 0 ||
-        (manager.current != state_e::WaitingForCapture && manager.current != state_e::Ready && manager.current != state_e::Streaming)) {
+    if (manager.pipewire_runtime.empty() || manager.pipewire_remote.empty() || manager.process_group <= 0 || (manager.current != state_e::WaitingForCapture && manager.current != state_e::Ready && manager.current != state_e::Streaming)) {
       return false;
     }
     runtime_directory = manager.pipewire_runtime;
@@ -1564,8 +2018,7 @@ namespace steamos_virtual_session {
   bool gamescope_input_endpoint(std::string &socket_path, std::string &error) {
 #if defined(__linux__)
     std::scoped_lock lock {manager.mutex};
-    if (manager.process_group <= 0 || manager.source_process_start_time == 0 ||
-        (manager.current != state_e::WaitingForCapture && manager.current != state_e::Ready && manager.current != state_e::Streaming)) {
+    if (manager.process_group <= 0 || manager.source_process_start_time == 0 || (manager.current != state_e::WaitingForCapture && manager.current != state_e::Ready && manager.current != state_e::Streaming)) {
       error = "gamescope_input_source_unavailable";
       return false;
     }
@@ -1613,8 +2066,7 @@ namespace steamos_virtual_session {
     std::string source_label;
     {
       std::scoped_lock lock {manager.mutex};
-      if (manager.pipewire_runtime.empty() || manager.pipewire_remote.empty() || manager.process_group <= 0 || manager.source_process_start_time == 0 || manager.render_node.empty() ||
-          (manager.current != state_e::WaitingForCapture && manager.current != state_e::Ready && manager.current != state_e::Streaming)) {
+      if (manager.pipewire_runtime.empty() || manager.pipewire_remote.empty() || manager.process_group <= 0 || manager.source_process_start_time == 0 || manager.render_node.empty() || (manager.current != state_e::WaitingForCapture && manager.current != state_e::Ready && manager.current != state_e::Streaming)) {
         error = "Selected Gamescope PipeWire source is unavailable";
         return false;
       }
@@ -1668,8 +2120,7 @@ namespace steamos_virtual_session {
   void mark_gamescope_pipewire_node(const uint32_t node_id, const uint64_t object_serial, const int producer_pid) {
     std::scoped_lock lock {manager.mutex};
 #if defined(__linux__)
-    if (node_id == 0 || object_serial == 0 || producer_pid <= 0 || producer_pid != manager.process_group ||
-        (manager.current != state_e::WaitingForCapture && manager.current != state_e::Ready && manager.current != state_e::Streaming)) {
+    if (node_id == 0 || object_serial == 0 || producer_pid <= 0 || producer_pid != manager.process_group || (manager.current != state_e::WaitingForCapture && manager.current != state_e::Ready && manager.current != state_e::Streaming)) {
       return;
     }
     manager.pipewire_node_id = node_id;

@@ -105,6 +105,21 @@ std::map<std::string_view, std::function<int(const char *name, int argc, char **
      return args::version();
    }},
 #if defined(__linux__)
+  {"steamshine-session-bootstrap"sv, [](const char *, int argc, char **argv) {
+     if (argc != 2) {
+       return 2;
+     }
+     try {
+       size_t consumed {};
+       const auto generation {std::stoull(argv[1], &consumed)};
+       if (consumed != std::string_view {argv[1]}.size()) {
+         return 2;
+       }
+       return steamos_virtual_session::run_display_endpoint_bootstrap(argv[0], generation);
+     } catch (const std::exception &) {
+       return 2;
+     }
+   }},
   {"vulkan-video-probe"sv, [](const char *, int, char **) {
      std::string probe_error;
      if (!vk::probe_h264(probe_error)) {

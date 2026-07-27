@@ -60,6 +60,25 @@ namespace proc {
     return "plasmawindowed org.kde.plasma.folder";
   }
 
+  void apply_session_display_environment(boost::process::v1::environment &environment, const std::optional<steamos_virtual_session::session_display_endpoint_t> &endpoint) {
+    if (!endpoint || endpoint->verification != steamos_virtual_session::display_verification_e::verified) {
+      return;
+    }
+    environment["XDG_RUNTIME_DIR"] = endpoint->xdg_runtime_directory;
+    environment["WAYLAND_DISPLAY"] = endpoint->wayland_display;
+    environment["GAMESCOPE_WAYLAND_DISPLAY"] = endpoint->gamescope_wayland_display;
+    environment["DISPLAY"] = endpoint->x11_display;
+    environment["XAUTHORITY"] = endpoint->xauthority;
+    environment["PIPEWIRE_RUNTIME_DIR"] = endpoint->pipewire_runtime_directory;
+    environment["PIPEWIRE_REMOTE"] = endpoint->pipewire_remote;
+    environment["PULSE_RUNTIME_PATH"] = endpoint->pulse_runtime_path;
+    if (!endpoint->dbus_session_bus_address.empty()) {
+      environment["DBUS_SESSION_BUS_ADDRESS"] = endpoint->dbus_session_bus_address;
+    } else {
+      environment.erase("DBUS_SESSION_BUS_ADDRESS");
+    }
+  }
+
   /**
    * @brief RAII helper that runs shutdown cleanup when destroyed.
    */
@@ -232,18 +251,7 @@ namespace proc {
     }
     _env["SUNSHINE_CLIENT_AUDIO_SURROUND_PARAMS"] = launch_session->surround_params;
 
-    std::string virtual_runtime_directory;
-    std::string virtual_wayland_display;
-    std::string virtual_pipewire_runtime;
-    std::string virtual_pipewire_remote;
-    std::string virtual_pulse_runtime;
-    if (steamos_virtual_session::application_environment(virtual_runtime_directory, virtual_wayland_display, virtual_pipewire_runtime, virtual_pipewire_remote, virtual_pulse_runtime)) {
-      _env["XDG_RUNTIME_DIR"] = virtual_runtime_directory;
-      _env["WAYLAND_DISPLAY"] = virtual_wayland_display;
-      _env["PIPEWIRE_RUNTIME_DIR"] = virtual_pipewire_runtime;
-      _env["PIPEWIRE_REMOTE"] = virtual_pipewire_remote;
-      _env["PULSE_RUNTIME_PATH"] = virtual_pulse_runtime;
-    }
+    apply_session_display_environment(_env, steamos_virtual_session::application_environment());
 
     if (!_app.output.empty() && _app.output != "null"sv) {
 #ifdef _WIN32

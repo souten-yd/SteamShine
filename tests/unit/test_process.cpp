@@ -30,6 +30,91 @@ TEST(ProcessCommandSelectionTest, RestoresSafeOwnedVirtualDesktopDefault) {
   EXPECT_EQ(proc::select_effective_command("", true, ""), "plasmawindowed org.kde.plasma.folder");
 }
 
+/**
+ * @brief Verify physical Desktop launches preserve their inherited display environment.
+ */
+TEST(ProcessDisplayEnvironmentTest, MissingEndpointPreservesPhysicalDesktopEnvironment) {
+  boost::process::v1::environment environment;
+  environment["DISPLAY"] = ":0";
+  environment["WAYLAND_DISPLAY"] = "wayland-0";
+
+  proc::apply_session_display_environment(environment, std::nullopt);
+
+  EXPECT_EQ(environment["DISPLAY"].to_string(), ":0");
+  EXPECT_EQ(environment["WAYLAND_DISPLAY"].to_string(), "wayland-0");
+  EXPECT_TRUE(environment.find("GAMESCOPE_WAYLAND_DISPLAY") == environment.end());
+}
+
+/**
+ * @brief Verify every allow-listed Gamescope endpoint variable reaches an application.
+ */
+TEST(ProcessDisplayEnvironmentTest, AppliesVerifiedDynamicGamescopeEndpoint) {
+  for (const std::string_view display : {":1", ":2", ":27"}) {
+    boost::process::v1::environment environment;
+    const steamos_virtual_session::session_display_endpoint_t endpoint {
+      .origin = steamos_virtual_session::session_origin_e::owned_private,
+      .xdg_runtime_directory = "/run/user/1000/steamshine/session-7",
+      .wayland_display = "gamescope-0",
+      .gamescope_wayland_display = "gamescope-0",
+      .x11_display = std::string {display},
+      .xauthority = "/run/user/1000/steamshine/session-7/xauthority",
+      .pipewire_runtime_directory = "/run/user/1000",
+      .pipewire_remote = "pipewire-0",
+      .pulse_runtime_path = "/run/user/1000/pulse",
+      .dbus_session_bus_address = "unix:path=/run/user/1000/bus",
+      .verification = steamos_virtual_session::display_verification_e::verified,
+    };
+
+    proc::apply_session_display_environment(environment, endpoint);
+
+    EXPECT_EQ(environment["DISPLAY"].to_string(), display);
+    EXPECT_EQ(environment["XAUTHORITY"].to_string(), endpoint.xauthority);
+    EXPECT_EQ(environment["GAMESCOPE_WAYLAND_DISPLAY"].to_string(), "gamescope-0");
+    EXPECT_EQ(environment["DBUS_SESSION_BUS_ADDRESS"].to_string(), endpoint.dbus_session_bus_address);
+  }
+}
+
+/**
+ * @brief Verify rejected evidence cannot alter a physical Desktop environment.
+ */
+TEST(ProcessDisplayEnvironmentTest, RejectedEndpointPreservesPhysicalDesktopEnvironment) {
+  boost::process::v1::environment environment;
+  environment["DISPLAY"] = ":0";
+  steamos_virtual_session::session_display_endpoint_t endpoint {
+    .x11_display = ":27",
+    .verification = steamos_virtual_session::display_verification_e::rejected,
+  };
+
+  proc::apply_session_display_environment(environment, endpoint);
+
+  EXPECT_EQ(environment["DISPLAY"].to_string(), ":0");
+  EXPECT_TRUE(environment.find("XAUTHORITY") == environment.end());
+}
+
+/**
+ * @brief Verify a virtual endpoint cannot retain an unverified host D-Bus address.
+ */
+TEST(ProcessDisplayEnvironmentTest, RemovesUnverifiedDbusAddressFromVirtualLaunch) {
+  boost::process::v1::environment environment;
+  environment["DBUS_SESSION_BUS_ADDRESS"] = "unix:path=/run/user/1000/unverified-bus";
+  const steamos_virtual_session::session_display_endpoint_t endpoint {
+    .origin = steamos_virtual_session::session_origin_e::owned_private,
+    .xdg_runtime_directory = "/run/user/1000/steamshine/session-7",
+    .wayland_display = "gamescope-0",
+    .gamescope_wayland_display = "gamescope-0",
+    .x11_display = ":7",
+    .xauthority = "/run/user/1000/steamshine/session-7/xauthority",
+    .pipewire_runtime_directory = "/run/user/1000",
+    .pipewire_remote = "pipewire-0",
+    .pulse_runtime_path = "/run/user/1000/pulse",
+    .verification = steamos_virtual_session::display_verification_e::verified,
+  };
+
+  proc::apply_session_display_environment(environment, endpoint);
+
+  EXPECT_TRUE(environment.find("DBUS_SESSION_BUS_ADDRESS") == environment.end());
+}
+
 class ProcessPNGTest: public BaseTest {
 protected:
   void SetUp() override {

@@ -258,6 +258,12 @@ TEST(WebServicesTest, StatusSnapshotIncludesPipeWireDiagnostics) {
   EXPECT_EQ(snapshot.at("pipewire_node_id"), 0);
   EXPECT_EQ(snapshot.at("pipewire_object_serial"), 0);
   EXPECT_EQ(snapshot.at("pipewire_producer_pid"), -1);
+  EXPECT_TRUE(snapshot.contains("requested_display_endpoint"));
+  EXPECT_EQ(snapshot.at("active_display_endpoint_origin"), "none");
+  EXPECT_FALSE(snapshot.at("active_display_endpoint_verified"));
+  EXPECT_TRUE(snapshot.contains("active_display_endpoint_generation"));
+  EXPECT_FALSE(snapshot.contains("active_display_endpoint_xauthority"));
+  EXPECT_FALSE(snapshot.contains("active_display_endpoint_dbus_session_bus_address"));
 }
 
 /**

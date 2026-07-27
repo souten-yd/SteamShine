@@ -24,6 +24,7 @@
 #include "config.h"
 #include "platform/common.h"
 #include "rtsp.h"
+#include "steamos_virtual_session.h"
 #include "utility.h"
 
 /**
@@ -46,6 +47,17 @@ namespace proc {
    * @return Application command to execute, or an empty string for a capture-only Desktop.
    */
   std::string select_effective_command(std::string_view app_command, bool owned_virtual_display, std::string_view virtual_desktop_command);
+
+  /**
+   * @brief Apply one verified Gamescope endpoint to a child environment.
+   *
+   * A missing endpoint performs no writes, preserving every inherited physical
+   * Desktop display variable. Session cookies are never read or copied here.
+   *
+   * @param environment Child environment to update.
+   * @param endpoint Verified session endpoint, or no value for physical Desktop.
+   */
+  void apply_session_display_environment(boost::process::v1::environment &environment, const std::optional<steamos_virtual_session::session_display_endpoint_t> &endpoint);
 
   /**
    * @brief Boost.Process pipe stream used for child-process I/O.

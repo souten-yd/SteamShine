@@ -74,8 +74,40 @@ namespace {
     if (mode == "delayed-ready") {
       output << "sleep 1\n";
     }
+    if (mode == "display-7") {
+      output << "display_number=7\n";
+    } else {
+      output << "display_number=$((($$ % 10000) + 100))\n";
+    }
+    output << "export DISPLAY=:$display_number WAYLAND_DISPLAY=gamescope-0 GAMESCOPE_WAYLAND_DISPLAY=gamescope-0\n";
+    output << "export XAUTHORITY=$XDG_RUNTIME_DIR/gamescope.xauth\n";
+    output << ": >\"$XAUTHORITY\"; chmod 600 \"$XAUTHORITY\"\n";
+    if (mode == "missing-display") {
+      output << "unset DISPLAY\n";
+    } else if (mode == "missing-auth") {
+      output << "unset XAUTHORITY\n";
+    } else if (mode == "symlink-auth") {
+      output << "rm -f \"$XAUTHORITY\"; ln -s /etc/passwd \"$XAUTHORITY\"\n";
+    } else if (mode == "generation-mismatch") {
+      output << "export STEAMSHINE_TEST_REPORT_GENERATION=999999\n";
+    } else if (mode == "runtime-escape") {
+      output << "export STEAMSHINE_TEST_REPORT_RUNTIME=/tmp\n";
+    }
+    output << "mkdir -p /tmp/.X11-unix\n";
+    output << "stale_x11_path=\n";
+    if (mode == "stale-x11-socket") {
+      output << "python3 -c 'import os, socket; p=\"/tmp/.X11-unix/X\"+os.environ[\"DISPLAY\"][1:]; s=socket.socket(socket.AF_UNIX); s.bind(p); s.close()'\n";
+      output << "stale_x11_path=/tmp/.X11-unix/X${DISPLAY#:}\n";
+    } else {
+      output << "python3 -c 'import os, socket, signal, sys; p=\"/tmp/.X11-unix/X\"+os.environ[\"DISPLAY\"][1:]; s=socket.socket(socket.AF_UNIX); s.bind(p); s.listen(); stop=lambda *_: (os.path.exists(p) and os.unlink(p), sys.exit(0)); signal.signal(signal.SIGTERM, stop); signal.signal(signal.SIGINT, stop); [signal.pause() for _ in iter(int, 1)]' &\n";
+    }
+    output << "x11_child=$!\n";
     output << "python3 -c 'import os, socket, signal, sys; p=os.path.join(os.environ[\"XDG_RUNTIME_DIR\"], \"gamescope-0\"); s=socket.socket(socket.AF_UNIX); s.bind(p); s.listen(); signal.signal(signal.SIGTERM, lambda *_: sys.exit(0)); signal.signal(signal.SIGINT, lambda *_: sys.exit(0)); [signal.pause() for _ in iter(int, 1)]' &\n";
     output << "socket_child=$!\n";
+    output << "while [ \"$#\" -gt 0 ] && [ \"$1\" != '--' ]; do shift; done\n";
+    output << "[ \"$#\" -gt 0 ] && shift\n";
+    output << "\"$@\" &\n";
+    output << "bootstrap_child=$!\n";
     if (mode == "leave-child") {
       output << "sh -c 'trap \"\" TERM INT; while :; do sleep 1; done' &\n";
       output << "ignored_child=$!\n";
@@ -93,7 +125,7 @@ namespace {
       std::filesystem::permissions(executable, std::filesystem::perms::owner_exec, std::filesystem::perm_options::add);
       return executable;
     }
-    output << "trap 'kill \"$socket_child\" 2>/dev/null; wait \"$socket_child\" 2>/dev/null; exit 0' TERM INT\n";
+    output << "trap 'kill \"$socket_child\" \"$x11_child\" \"$bootstrap_child\" 2>/dev/null; wait \"$socket_child\" \"$x11_child\" \"$bootstrap_child\" 2>/dev/null; [ -z \"$stale_x11_path\" ] || rm -f \"$stale_x11_path\"; exit 0' TERM INT\n";
     output << "wait \"$socket_child\"\n";
     output.close();
     std::filesystem::permissions(executable, std::filesystem::perms::owner_exec, std::filesystem::perm_options::add);
@@ -151,6 +183,19 @@ namespace {
       config::steamos_virtual_display.runtime_directory = (root / "runtime" / "steamshine").string();
       config::steamos_virtual_display.startup_timeout_seconds = 2;
       config::steamos_virtual_display.shutdown_timeout_seconds = 1;
+      const auto bootstrap {root / "session-bootstrap"};
+      {
+        std::ofstream output {bootstrap};
+        output << "#!/bin/sh\n";
+        output << "[ \"$1\" = '--steamshine-session-bootstrap' ] || exit 2\n";
+        output << "runtime=$2; generation=${STEAMSHINE_TEST_REPORT_GENERATION-$3}; reported_runtime=${STEAMSHINE_TEST_REPORT_RUNTIME-$XDG_RUNTIME_DIR}; bootstrap_start_time=$(awk '{print $22}' /proc/$$/stat)\n";
+        output << "temporary=$runtime/.display-endpoint-$$.tmp\n";
+        output << "printf '{\"owner\":\"steamshine\",\"generation\":%s,\"bootstrap_pid\":%s,\"bootstrap_start_time\":%s,\"xdg_runtime_directory\":\"%s\",\"wayland_display\":\"%s\",\"gamescope_wayland_display\":\"%s\",\"display\":\"%s\",\"xauthority\":\"%s\",\"dbus_session_bus_address\":\"\"}\\n' \"$generation\" \"$$\" \"$bootstrap_start_time\" \"$reported_runtime\" \"$WAYLAND_DISPLAY\" \"$GAMESCOPE_WAYLAND_DISPLAY\" \"$DISPLAY\" \"$XAUTHORITY\" >\"$temporary\"\n";
+        output << "chmod 600 \"$temporary\"; mv \"$temporary\" \"$runtime/display-endpoint.json\"\n";
+        output << "trap 'exit 0' TERM INT; while :; do sleep 1; done\n";
+      }
+      std::filesystem::permissions(bootstrap, std::filesystem::perms::owner_exec, std::filesystem::perm_options::add);
+      ASSERT_EQ(::setenv("STEAMSHINE_SESSION_BOOTSTRAP", bootstrap.c_str(), 1), 0);
     }
 
     /**
@@ -173,6 +218,7 @@ namespace {
       } else {
         (void) ::unsetenv("XDG_SESSION_TYPE");
       }
+      (void) ::unsetenv("STEAMSHINE_SESSION_BOOTSTRAP");
       std::filesystem::remove_all(root);
     }
   };
@@ -187,6 +233,7 @@ TEST_F(SteamOSVirtualSessionTest, FeatureFlagDisabledPreservesNormalLaunch) {
   EXPECT_TRUE(error.empty());
   EXPECT_EQ(steamos_virtual_session::state(), steamos_virtual_session::state_e::Disabled);
   EXPECT_FALSE(steamos_virtual_session::active());
+  EXPECT_FALSE(steamos_virtual_session::application_environment().has_value());
 }
 
 /**
@@ -320,16 +367,14 @@ TEST_F(SteamOSVirtualSessionTest, SeparatesPrivateWaylandAndHostPipeWireRuntimes
   const std::string contents {(std::istreambuf_iterator<char> {environment}), std::istreambuf_iterator<char> {}};
   EXPECT_NE(contents.find("runtime=" + host_runtime.string()), std::string::npos);
   EXPECT_NE(contents.find("remote=pipewire-test"), std::string::npos);
-  std::string runtime_directory;
-  std::string wayland_display;
+  const auto endpoint {steamos_virtual_session::application_environment()};
+  ASSERT_TRUE(endpoint);
+  EXPECT_EQ(endpoint->pipewire_runtime_directory, host_runtime.string());
+  EXPECT_EQ(endpoint->pipewire_remote, "pipewire-test");
+  EXPECT_EQ(endpoint->pulse_runtime_path, (host_runtime / "pulse").string());
+  int gamescope_pid {};
   std::string application_pipewire_runtime;
   std::string application_pipewire_remote;
-  std::string application_pulse_runtime;
-  ASSERT_TRUE(steamos_virtual_session::application_environment(runtime_directory, wayland_display, application_pipewire_runtime, application_pipewire_remote, application_pulse_runtime));
-  EXPECT_EQ(application_pipewire_runtime, host_runtime.string());
-  EXPECT_EQ(application_pipewire_remote, "pipewire-test");
-  EXPECT_EQ(application_pulse_runtime, (host_runtime / "pulse").string());
-  int gamescope_pid {};
   ASSERT_TRUE(steamos_virtual_session::gamescope_pipewire_endpoint(application_pipewire_runtime, application_pipewire_remote, gamescope_pid));
   EXPECT_EQ(application_pipewire_runtime, host_runtime.string());
   EXPECT_EQ(application_pipewire_remote, "pipewire-test");
@@ -416,12 +461,36 @@ TEST_F(SteamOSVirtualSessionTest, ReusesCompatibleOwnedDisplayOnReconnect) {
   steamos_virtual_session::mark_streaming_disconnected();
   const auto retained {steamos_virtual_session::status_snapshot()};
   ASSERT_GT(retained.gamescope_pid, 0);
+  ASSERT_EQ(retained.display_endpoint.verification, steamos_virtual_session::display_verification_e::verified);
+  const auto retained_generation {retained.display_endpoint.generation};
 
   ASSERT_TRUE(steamos_virtual_session::prepare(launch, error)) << error;
   const auto reused {steamos_virtual_session::status_snapshot()};
   EXPECT_EQ(reused.gamescope_pid, retained.gamescope_pid);
   EXPECT_EQ(reused.selection_reason, "retained_owned_private");
   EXPECT_EQ(reused.state, steamos_virtual_session::state_e::Ready);
+  EXPECT_EQ(reused.display_endpoint.generation, retained_generation);
+}
+
+/**
+ * @brief Verify a replacement session invalidates the prior endpoint generation.
+ */
+TEST_F(SteamOSVirtualSessionTest, NewOwnedSessionAdvancesDisplayEndpointGeneration) {
+  rtsp_stream::launch_session_t launch {};
+  launch.id = 201;
+  std::string error;
+  ASSERT_TRUE(steamos_virtual_session::prepare(launch, error)) << error;
+  const auto first {steamos_virtual_session::application_environment()};
+  ASSERT_TRUE(first);
+  EXPECT_NE(first->x11_display, ":0");
+  steamos_virtual_session::stop();
+
+  launch.id = 202;
+  ASSERT_TRUE(steamos_virtual_session::prepare(launch, error)) << error;
+  const auto second {steamos_virtual_session::application_environment()};
+  ASSERT_TRUE(second);
+  EXPECT_GT(second->generation, first->generation);
+  EXPECT_NE(second->producer_pid, first->producer_pid);
 }
 
 /**
@@ -533,25 +602,21 @@ TEST_F(SteamOSVirtualSessionTest, FakeGamescopeReadinessAndCleanup) {
   EXPECT_EQ(steamos_virtual_session::state(), steamos_virtual_session::state_e::WaitingForCapture);
   EXPECT_TRUE(steamos_virtual_session::active());
   EXPECT_TRUE(std::filesystem::exists(config::steamos_virtual_display.runtime_directory));
-  std::string runtime_directory;
-  std::string wayland_display;
-  std::string pipewire_runtime;
-  std::string pipewire_remote;
-  std::string pulse_runtime;
-  EXPECT_TRUE(steamos_virtual_session::application_environment(runtime_directory, wayland_display, pipewire_runtime, pipewire_remote, pulse_runtime));
+  const auto endpoint {steamos_virtual_session::application_environment()};
+  ASSERT_TRUE(endpoint);
   const auto expected_runtime_directory {std::filesystem::path {config::steamos_virtual_display.runtime_directory} / ("session-" + std::to_string(::getpid()) + "-42")};
-  EXPECT_EQ(runtime_directory, expected_runtime_directory.string());
-  EXPECT_EQ(wayland_display, "gamescope-0");
+  EXPECT_EQ(endpoint->xdg_runtime_directory, expected_runtime_directory.string());
+  EXPECT_EQ(endpoint->wayland_display, "gamescope-0");
   const auto snapshot {steamos_virtual_session::status_snapshot()};
   EXPECT_EQ(snapshot.state, steamos_virtual_session::state_e::WaitingForCapture);
-  EXPECT_EQ(snapshot.socket_path, (std::filesystem::path {runtime_directory} / "gamescope-0").string());
+  EXPECT_EQ(snapshot.socket_path, (std::filesystem::path {endpoint->xdg_runtime_directory} / "gamescope-0").string());
   EXPECT_GT(snapshot.gamescope_pid, 0);
-  std::ifstream pid_file {std::filesystem::path {runtime_directory} / "gamescope.pid"};
+  std::ifstream pid_file {std::filesystem::path {endpoint->xdg_runtime_directory} / "gamescope.pid"};
   pid_t gamescope_pid {};
   pid_file >> gamescope_pid;
   EXPECT_GT(gamescope_pid, 0);
   EXPECT_EQ(::getpgid(gamescope_pid), gamescope_pid);
-  std::ifstream arguments_file {std::filesystem::path {runtime_directory} / "gamescope-arguments"};
+  std::ifstream arguments_file {std::filesystem::path {endpoint->xdg_runtime_directory} / "gamescope-arguments"};
   const std::string arguments {(std::istreambuf_iterator<char> {arguments_file}), std::istreambuf_iterator<char> {}};
   EXPECT_NE(arguments.find("--backend\nheadless\n"), std::string::npos);
   EXPECT_NE(arguments.find("--nested-width\n1920\n"), std::string::npos);
@@ -571,6 +636,28 @@ TEST_F(SteamOSVirtualSessionTest, FakeGamescopeReadinessAndCleanup) {
   EXPECT_EQ(steamos_virtual_session::state(), steamos_virtual_session::state_e::Idle);
   EXPECT_FALSE(steamos_virtual_session::active());
   EXPECT_TRUE(std::filesystem::exists(config::steamos_virtual_display.runtime_directory));
+}
+
+/**
+ * @brief Verify a child-reported dynamic DISPLAY remains connectable by an application probe.
+ */
+TEST_F(SteamOSVirtualSessionTest, FakeGamescopeDisplaySevenAcceptsX11Probe) {
+  config::steamos_virtual_display.gamescope_path = make_fake_gamescope(root, "display-7").string();
+  rtsp_stream::launch_session_t launch {};
+  std::string error;
+  ASSERT_TRUE(steamos_virtual_session::prepare(launch, error)) << error;
+  const auto endpoint {steamos_virtual_session::application_environment()};
+  ASSERT_TRUE(endpoint);
+  EXPECT_EQ(endpoint->x11_display, ":7");
+
+  const int probe {::socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0)};
+  ASSERT_GE(probe, 0);
+  sockaddr_un address {};
+  address.sun_family = AF_UNIX;
+  const std::string socket_path {"/tmp/.X11-unix/X7"};
+  std::strncpy(address.sun_path, socket_path.c_str(), sizeof(address.sun_path) - 1);
+  EXPECT_EQ(::connect(probe, reinterpret_cast<const sockaddr *>(&address), offsetof(sockaddr_un, sun_path) + socket_path.size() + 1), 0);
+  ::close(probe);
 }
 
 TEST_F(SteamOSVirtualSessionTest, CaptureLossRetainsOwnershipForSafeCleanup) {
@@ -642,6 +729,84 @@ TEST_F(SteamOSVirtualSessionTest, WaitsForDelayedWaylandSocket) {
 }
 
 /**
+ * @brief Verify owned startup fails closed when Gamescope omits DISPLAY.
+ */
+TEST_F(SteamOSVirtualSessionTest, RejectsMissingXwaylandDisplay) {
+  config::steamos_virtual_display.gamescope_path = make_fake_gamescope(root, "missing-display").string();
+  config::steamos_virtual_display.startup_timeout_seconds = 1;
+  rtsp_stream::launch_session_t launch {};
+  std::string error;
+
+  EXPECT_FALSE(steamos_virtual_session::prepare(launch, error));
+  EXPECT_NE(error.find("xwayland_display_missing"), std::string::npos);
+}
+
+/**
+ * @brief Verify owned startup fails closed when Gamescope omits XAUTHORITY.
+ */
+TEST_F(SteamOSVirtualSessionTest, RejectsMissingXwaylandAuthority) {
+  config::steamos_virtual_display.gamescope_path = make_fake_gamescope(root, "missing-auth").string();
+  config::steamos_virtual_display.startup_timeout_seconds = 1;
+  rtsp_stream::launch_session_t launch {};
+  std::string error;
+
+  EXPECT_FALSE(steamos_virtual_session::prepare(launch, error));
+  EXPECT_NE(error.find("xwayland_auth_missing"), std::string::npos);
+}
+
+/**
+ * @brief Verify an Xauthority symlink is rejected as unverified identity.
+ */
+TEST_F(SteamOSVirtualSessionTest, RejectsSymlinkXwaylandAuthority) {
+  config::steamos_virtual_display.gamescope_path = make_fake_gamescope(root, "symlink-auth").string();
+  config::steamos_virtual_display.startup_timeout_seconds = 1;
+  rtsp_stream::launch_session_t launch {};
+  std::string error;
+
+  EXPECT_FALSE(steamos_virtual_session::prepare(launch, error));
+  EXPECT_NE(error.find("xwayland_identity_unverified"), std::string::npos);
+}
+
+/**
+ * @brief Verify a stale X11 filesystem socket cannot become an endpoint.
+ */
+TEST_F(SteamOSVirtualSessionTest, RejectsStaleXwaylandSocket) {
+  config::steamos_virtual_display.gamescope_path = make_fake_gamescope(root, "stale-x11-socket").string();
+  config::steamos_virtual_display.startup_timeout_seconds = 1;
+  rtsp_stream::launch_session_t launch {};
+  std::string error;
+
+  EXPECT_FALSE(steamos_virtual_session::prepare(launch, error));
+  EXPECT_NE(error.find("xwayland_identity_unverified"), std::string::npos);
+}
+
+/**
+ * @brief Verify stale endpoint generations cannot satisfy a new owned launch.
+ */
+TEST_F(SteamOSVirtualSessionTest, RejectsMismatchedDisplayEndpointGeneration) {
+  config::steamos_virtual_display.gamescope_path = make_fake_gamescope(root, "generation-mismatch").string();
+  config::steamos_virtual_display.startup_timeout_seconds = 1;
+  rtsp_stream::launch_session_t launch {};
+  std::string error;
+
+  EXPECT_FALSE(steamos_virtual_session::prepare(launch, error));
+  EXPECT_NE(error.find("xwayland_identity_unverified"), std::string::npos);
+}
+
+/**
+ * @brief Verify a bootstrap report cannot redirect its runtime outside the owned directory.
+ */
+TEST_F(SteamOSVirtualSessionTest, RejectsDisplayEndpointRuntimeEscape) {
+  config::steamos_virtual_display.gamescope_path = make_fake_gamescope(root, "runtime-escape").string();
+  config::steamos_virtual_display.startup_timeout_seconds = 1;
+  rtsp_stream::launch_session_t launch {};
+  std::string error;
+
+  EXPECT_FALSE(steamos_virtual_session::prepare(launch, error));
+  EXPECT_NE(error.find("xwayland_identity_unverified"), std::string::npos);
+}
+
+/**
  * @brief Verify the owned compositor does not inherit the desktop session type.
  */
 TEST_F(SteamOSVirtualSessionTest, DoesNotInheritDesktopSessionTypeIntoGamescope) {
@@ -673,13 +838,9 @@ TEST_F(SteamOSVirtualSessionTest, ForcedCleanupKillsOwnedChildAfterGamescopeExit
   launch.id = 9;
   std::string error;
   ASSERT_TRUE(steamos_virtual_session::prepare(launch, error)) << error;
-  std::string runtime_directory;
-  std::string wayland_display;
-  std::string pipewire_runtime;
-  std::string pipewire_remote;
-  std::string pulse_runtime;
-  ASSERT_TRUE(steamos_virtual_session::application_environment(runtime_directory, wayland_display, pipewire_runtime, pipewire_remote, pulse_runtime));
-  std::ifstream input {std::filesystem::path {runtime_directory} / "ignored-child.pid"};
+  const auto endpoint {steamos_virtual_session::application_environment()};
+  ASSERT_TRUE(endpoint);
+  std::ifstream input {std::filesystem::path {endpoint->xdg_runtime_directory} / "ignored-child.pid"};
   pid_t child {};
   input >> child;
   ASSERT_GT(child, 0);

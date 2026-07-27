@@ -125,6 +125,33 @@ namespace steam_session {
       return fields >> state >> parent_pid ? parent_pid : -1;
     }
 
+    /**
+     * @brief Read the process start time from a Linux stat record.
+     *
+     * @param contents Complete `/proc/<pid>/stat` contents.
+     * @return Field 22, or zero for malformed input.
+     */
+    uint64_t start_time_from_stat(const std::string &contents) {
+      const auto command_end {contents.rfind(')')};
+      if (command_end == std::string::npos || command_end + 2 >= contents.size()) {
+        return 0;
+      }
+      std::istringstream fields {contents.substr(command_end + 2)};
+      std::string field;
+      for (int index {}; index < 20; ++index) {
+        if (!(fields >> field)) {
+          return 0;
+        }
+      }
+      try {
+        size_t consumed {};
+        const auto value {std::stoull(field, &consumed)};
+        return consumed == field.size() ? value : 0;
+      } catch (const std::exception &) {
+        return 0;
+      }
+    }
+
 #if defined(__linux__)
     /**
      * @brief Read one current-user process record from `/proc`.
@@ -144,7 +171,7 @@ namespace steam_session {
       } catch (const std::exception &) {
         return std::nullopt;
       }
-      process_record_t record {.pid = pid};
+      process_record_t record {.pid = pid, .uid = static_cast<int>(process_stat.st_uid)};
       std::error_code error;
       const auto executable {std::filesystem::canonical(process_directory / "exe", error)};
       if (error || executable.empty()) {
@@ -155,16 +182,20 @@ namespace steam_session {
       std::ifstream stat_file {process_directory / "stat"};
       const std::string stat_contents {std::istreambuf_iterator<char> {stat_file}, {}};
       record.parent_pid = parent_pid_from_stat(stat_contents);
+      record.start_time = start_time_from_stat(stat_contents);
       std::ifstream environment_file {process_directory / "environ", std::ios::binary};
       const bool environment_readable {static_cast<bool>(environment_file)};
       const std::string environment_contents {std::istreambuf_iterator<char> {environment_file}, {}};
       std::ifstream cgroup_file {process_directory / "cgroup"};
       const bool cgroup_readable {static_cast<bool>(cgroup_file)};
       record.cgroup.assign(std::istreambuf_iterator<char> {cgroup_file}, {});
-      record.metadata_readable = record.parent_pid > 0 && environment_readable && cgroup_readable;
+      record.metadata_readable = record.parent_pid > 0 && record.start_time != 0 && environment_readable && cgroup_readable;
       record.xdg_runtime_directory = environment_value(environment_contents, "XDG_RUNTIME_DIR");
       record.wayland_display = environment_value(environment_contents, "WAYLAND_DISPLAY");
       record.x11_display = environment_value(environment_contents, "DISPLAY");
+      record.xauthority = environment_value(environment_contents, "XAUTHORITY");
+      record.gamescope_wayland_display = environment_value(environment_contents, "GAMESCOPE_WAYLAND_DISPLAY");
+      record.dbus_session_bus_address = environment_value(environment_contents, "DBUS_SESSION_BUS_ADDRESS");
       return record;
     }
 #endif
@@ -227,6 +258,64 @@ namespace steam_session {
     (void) target;
     return instance_location_e::unknown;
 #endif
+  }
+
+  std::optional<resident_environment_t> verified_resident_environment(const target_session_t &target) {
+#if defined(__linux__)
+    std::error_code error;
+    std::vector<process_record_t> records;
+    for (const auto &entry : std::filesystem::directory_iterator {"/proc", error}) {
+      if (error || !entry.is_directory(error)) {
+        continue;
+      }
+      const auto name {entry.path().filename().string()};
+      if (name.empty() || !std::ranges::all_of(name, [](const unsigned char character) {
+            return std::isdigit(character);
+          })) {
+        continue;
+      }
+      if (const auto record {read_process_record(entry.path())}) {
+        records.emplace_back(*record);
+      }
+    }
+    return select_resident_environment(records, target, static_cast<int>(::getuid()));
+#else
+    (void) target;
+    return std::nullopt;
+#endif
+  }
+
+  std::optional<resident_environment_t> select_resident_environment(const std::vector<process_record_t> &records, const target_session_t &target, const int current_uid) {
+    if (classify_instance_location(records, target) != instance_location_e::inside_target_gamescope) {
+      return std::nullopt;
+    }
+    std::unordered_map<int, const process_record_t *> by_pid;
+    for (const auto &record : records) {
+      by_pid.emplace(record.pid, &record);
+    }
+    const process_record_t *resident {};
+    for (const auto &record : records) {
+      if (record.executable_name != "steam" || record.uid != current_uid || record.start_time == 0 || !record.metadata_readable || !belongs_to_target(record, target, by_pid)) {
+        continue;
+      }
+      if (resident) {
+        return std::nullopt;
+      }
+      resident = &record;
+    }
+    if (!resident) {
+      return std::nullopt;
+    }
+    return resident_environment_t {
+      .steam_pid = resident->pid,
+      .steam_start_time = resident->start_time,
+      .xdg_runtime_directory = resident->xdg_runtime_directory,
+      .wayland_display = resident->wayland_display,
+      .gamescope_wayland_display = resident->gamescope_wayland_display,
+      .x11_display = resident->x11_display,
+      .xauthority = resident->xauthority,
+      .dbus_session_bus_address = resident->dbus_session_bus_address,
+    };
   }
 
   bool command_references_steam(const std::string_view command) {

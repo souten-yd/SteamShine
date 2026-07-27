@@ -19,6 +19,38 @@ namespace rtsp_stream {
 
 namespace steamos_virtual_session {
   /**
+   * @brief Verification state for a session display endpoint.
+   */
+  enum class display_verification_e {
+    unavailable,  ///< No session-specific display endpoint is available.
+    verified,  ///< The producer identity, sockets, and authorization file were verified.
+    rejected,  ///< Endpoint evidence was present but failed closed validation.
+  };
+
+  /**
+   * @brief Immutable application display endpoint for one verified session generation.
+   */
+  struct session_display_endpoint_t {
+    session_origin_e origin {session_origin_e::none};  ///< Session that produced the endpoint.
+    std::string xdg_runtime_directory;  ///< Runtime directory inherited by session applications.
+    std::string wayland_display;  ///< Wayland socket name exposed to compatible applications.
+    std::string gamescope_wayland_display;  ///< Gamescope's explicitly exposed Wayland socket name.
+    std::string x11_display;  ///< Dynamically allocated Gamescope Xwayland display name.
+    std::string xauthority;  ///< Xauthority file used by the selected Xwayland server.
+    std::string pipewire_runtime_directory;  ///< Verified host PipeWire runtime directory.
+    std::string pipewire_remote;  ///< Verified host PipeWire remote socket name.
+    std::string pulse_runtime_path;  ///< Host PulseAudio compatibility runtime path.
+    std::string dbus_session_bus_address;  ///< Verified resident session bus address, when available.
+    int producer_pid {-1};  ///< Gamescope producer PID bound to the snapshot.
+    uint64_t producer_start_time {0};  ///< Producer start time used to reject PID reuse.
+    int environment_source_pid {-1};  ///< Bootstrap or resident Steam PID supplying the environment.
+    uint64_t environment_source_start_time {0};  ///< Environment source start time used to reject PID reuse.
+    uint64_t generation {0};  ///< Monotonic session generation invalidating older snapshots.
+    display_verification_e verification {display_verification_e::unavailable};  ///< Endpoint verification result.
+    std::string error;  ///< Stable rejection reason without credentials.
+  };
+
+  /**
    * @brief States owned by the SteamOS virtual-session manager.
    */
   enum class state_e {
@@ -49,6 +81,7 @@ namespace steamos_virtual_session {
     bool migration_required {false};  ///< Whether an explicitly confirmed Desktop Steam migration is required.
     std::string app_launch_rejected_reason;  ///< Stable machine-readable reason for the latest rejected application launch.
     std::string app_launch_rejected_message;  ///< Safe operator-facing detail for the latest rejected application launch.
+    session_display_endpoint_t display_endpoint;  ///< Active verified application display endpoint.
     std::string selection_reason;  ///< Stable reason for selecting Desktop capture or a Gamescope source.
     presentation_e presentation {presentation_e::remote_only};  ///< Desired remote/local presentation paths.
     bool local_presenter_active {false};  ///< Whether a local presenter has attached successfully.
@@ -170,19 +203,27 @@ namespace steamos_virtual_session {
   void mark_captured_frame();
 
   /**
-   * @brief Return the owned Wayland environment for the application launcher.
+   * @brief Return one verified display endpoint snapshot for application launch.
    *
-   * The values are available only after Gamescope has passed readiness. Callers
-   * must not retain them after the associated launch session ends.
+   * The snapshot is available only while its producer PID, start time, and
+   * session generation remain current. Physical Desktop sessions return no
+   * endpoint so the launcher's inherited host environment remains unchanged.
    *
-   * @param runtime_directory Receives the session-owned XDG runtime directory.
-   * @param wayland_display Receives the session-owned Wayland display name.
-   * @param pipewire_runtime Receives the host PipeWire runtime directory.
-   * @param pipewire_remote Receives the host PipeWire remote name.
-   * @param pulse_runtime Receives the host PulseAudio compatibility runtime directory.
-   * @return True when an application may safely connect to the virtual display.
+   * @return Verified immutable endpoint, or std::nullopt when none is active.
    */
-  bool application_environment(std::string &runtime_directory, std::string &wayland_display, std::string &pipewire_runtime, std::string &pipewire_remote, std::string &pulse_runtime);
+  std::optional<session_display_endpoint_t> application_environment();
+
+  /**
+   * @brief Persist the environment inherited by a Gamescope bootstrap child.
+   *
+   * This internal command writes one owner-only atomic endpoint report and then
+   * waits for session termination. It performs no capture, rendering, or GPU work.
+   *
+   * @param report_directory Owned session runtime directory.
+   * @param generation Session generation supplied by the owning daemon.
+   * @return Zero after normal termination, or a nonzero validation/write error.
+   */
+  int run_display_endpoint_bootstrap(std::string_view report_directory, uint64_t generation);
 
   /**
    * @brief Check whether a configured command may start or address Steam.

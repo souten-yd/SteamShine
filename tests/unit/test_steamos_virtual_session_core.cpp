@@ -424,6 +424,53 @@ namespace {
   }
 
   /**
+   * @brief Verify resident Steam endpoint selection checks UID, start time, and uniqueness.
+   */
+  TEST(SteamOSVirtualSessionCore, SelectsOnlyVerifiedResidentSteamEnvironment) {
+    const steam_session::target_session_t target {
+      .gamescope_pid = 100,
+      .cgroup = "user.slice/gamescope-session.scope",
+    };
+    const steam_session::process_record_t gamescope {
+      .pid = 100,
+      .uid = 1000,
+      .parent_pid = 1,
+      .start_time = 10,
+      .executable_name = "gamescope",
+      .cgroup = target.cgroup,
+    };
+    const steam_session::process_record_t steam {
+      .pid = 101,
+      .uid = 1000,
+      .parent_pid = 100,
+      .start_time = 20,
+      .executable_name = "steam",
+      .xdg_runtime_directory = "/run/user/1000",
+      .wayland_display = "gamescope-0",
+      .x11_display = ":27",
+      .xauthority = "/run/user/1000/xauthority",
+      .gamescope_wayland_display = "gamescope-0",
+      .dbus_session_bus_address = "unix:path=/run/user/1000/bus",
+      .cgroup = target.cgroup,
+    };
+    const auto selected {steam_session::select_resident_environment({gamescope, steam}, target, 1000)};
+    ASSERT_TRUE(selected);
+    EXPECT_EQ(selected->steam_pid, 101);
+    EXPECT_EQ(selected->steam_start_time, 20U);
+    EXPECT_EQ(selected->x11_display, ":27");
+
+    auto wrong_uid {steam};
+    wrong_uid.uid = 1001;
+    EXPECT_FALSE(steam_session::select_resident_environment({gamescope, wrong_uid}, target, 1000));
+    auto reused_pid {steam};
+    reused_pid.start_time = 0;
+    EXPECT_FALSE(steam_session::select_resident_environment({gamescope, reused_pid}, target, 1000));
+    auto duplicate {steam};
+    duplicate.pid = 102;
+    EXPECT_FALSE(steam_session::select_resident_environment({gamescope, steam, duplicate}, target, 1000));
+  }
+
+  /**
    * @brief Verify Steam command detection catches executable paths and URIs only.
    */
   TEST(SteamOSVirtualSessionCore, DetectsSteamCommandsWithoutMatchingSteamHelperNames) {
