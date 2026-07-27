@@ -83,7 +83,11 @@ def validate_steamshine_assets(asset_root):
     parser.feed(content)
     for reference in parser.references:
         if is_local_reference(reference) and reference.startswith("/steamshine/"):
-            target = asset_root / PurePosixPath(urlsplit(reference).path).name
+            # Resolve the full path below /steamshine/ (not just the basename) so
+            # references into subdirectories such as images/ or vendor/xterm/ are
+            # validated correctly instead of being flattened onto asset_root.
+            relative = PurePosixPath(unquote(urlsplit(reference).path)).relative_to("/steamshine")
+            target = asset_root / relative
             if not target.is_file():
                 errors += fail(f"unresolved SteamShine reference: {reference}")
     try:
