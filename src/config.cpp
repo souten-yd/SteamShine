@@ -1877,6 +1877,8 @@ namespace config {
     bool_f(vars, "steamshine_web_ui_default", sunshine.steamshine_web_ui_default);
     bool_f(vars, "upstream_web_ui_enabled", sunshine.upstream_web_ui_enabled);
     bool_f(vars, "upstream_web_ui_visible", sunshine.upstream_web_ui_visible);
+    string_f(vars, "steamshine_gpu_active_profile", sunshine.steamshine_gpu_active_profile);
+    string_f(vars, "steamshine_gpu_profiles", sunshine.steamshine_gpu_profiles);
     if (!sunshine.steamshine_web_ui_enabled && !sunshine.upstream_web_ui_enabled) {
       BOOST_LOG(warning) << "Both Web UIs were disabled; retaining the upstream Sunshine Web UI for recovery"sv;
       sunshine.upstream_web_ui_enabled = true;

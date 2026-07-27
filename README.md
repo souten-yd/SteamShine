@@ -1,519 +1,83 @@
 <div align="center">
   <img
-    src="sunshine.svg"
-    alt="Sunshine icon"
-    width="256"
+    src="steamshine.png"
+    alt="SteamShine icon"
+    width="180"
 />
-  <h1 align="center">Sunshine</h1>
-  <h4 align="center">Self-hosted game stream host for Moonlight.</h4>
-</div>
-
-<div align="center">
-  <a href="https://github.com/LizardByte/Sunshine"><img src="https://img.shields.io/github/stars/lizardbyte/sunshine.svg?logo=github&style=for-the-badge" alt="GitHub stars"></a>
-  <a href="https://github.com/LizardByte/Sunshine/releases/latest"><img src="https://img.shields.io/github/downloads/lizardbyte/sunshine/total.svg?style=for-the-badge&logo=github" alt="GitHub Releases"></a>
-  <a href="https://hub.docker.com/r/lizardbyte/sunshine"><img src="https://img.shields.io/docker/pulls/lizardbyte/sunshine.svg?style=for-the-badge&logo=docker" alt="Docker"></a>
-  <a href="https://github.com/LizardByte/Sunshine/pkgs/container/sunshine"><img src="https://img.shields.io/badge/dynamic/json.svg?url=https%3A%2F%2Fipitio.github.io%2Fbackage%2FLizardByte%2FSunshine%2Fsunshine.json&query=%24.downloads&label=ghcr%20pulls&style=for-the-badge&logo=github" alt="GHCR"></a>
-  <a href="https://flathub.org/apps/dev.lizardbyte.app.Sunshine"><img src="https://img.shields.io/flathub/downloads/dev.lizardbyte.app.Sunshine.svg?style=for-the-badge&logo=flathub" alt="Flathub installs"></a>
-  <a href="https://flathub.org/apps/dev.lizardbyte.app.Sunshine"><img src="https://img.shields.io/flathub/v/dev.lizardbyte.app.Sunshine.svg?style=for-the-badge&logo=flathub" alt="Flathub Version"></a>
-  <a href="https://github.com/microsoft/winget-pkgs/tree/master/manifests/l/LizardByte/Sunshine"><img src="https://img.shields.io/winget/v/LizardByte.Sunshine.svg?style=for-the-badge&logo=data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAAHuSURBVFhH7ZfNTtRQGIYZiMDwN/IrCAqIhMSNKxcmymVwG+5dcDVsWHgDrtxwCYQVl+BChzDEwSnPY+eQ0sxoOz1mQuBNnpyvTdvz9jun5/SrjfxnJUkyQbMEz2ELduF1l0YUA3QyTrMAa2AnPtyOXsELeAYNyKtV2EC3k3lYgTOwg09ghy/BTp7CKBRV844BOpmmMV2+ySb4BmInG7AKY7AHH+EYqqhZo9PPBG/BVDlOizAD/XQFmnoPXzxRQX8M/CCYS48L6RIc4ygGHK9WGg9HZSZMUNRPVwNJGg5Hg2Qgqh4N3FsDsb6EmgYm07iwwvUxstdxJTwgmILf4CfZ6bb5OHANX8GN5x20IVxnG8ge94pt2xpwU3GnCwayF4Q2G2vgFLzHndFzQdk4q77nNfCdwL28qNyMtmEf3A1/QV5FjDiPWo5jrwf8TWZChTlgJvL4F9QL50/A43qVidTvLcuoM2wDQ1+IkgefgUpLcYwMVBqCKNJA2b0gKNocOIITOIef8C/F/CdMbh/GklynsSawKLHS8d9/B1x2LUqsfFyy3TMsWj5A1cLkotDbYO4JjWWZlZEGv8EbOIR1CAVN2eG8W5oNKgxaeC6DmTJjZs7ixUxpznLPLT+v4sXpoMLcLI3mzFSonDXIEI/M3QCIO4YuimBJ/gAAAABJRU5ErkJggg==" alt="Winget Version"></a>
-  <a href="https://github.com/LizardByte/Sunshine/actions/workflows/ci.yml?query=branch%3Amaster"><img src="https://img.shields.io/github/actions/workflow/status/lizardbyte/sunshine/ci.yml.svg?branch=master&label=CI%20build&logo=github&style=for-the-badge" alt="GitHub Workflow Status (CI)"></a>
-  <a href="https://github.com/LizardByte/Sunshine/actions/workflows/localize.yml?query=branch%3Amaster"><img src="https://img.shields.io/github/actions/workflow/status/lizardbyte/sunshine/localize.yml.svg?branch=master&label=localize%20build&logo=github&style=for-the-badge" alt="GitHub Workflow Status (localize)"></a>
-  <a href="https://codecov.io/gh/LizardByte/Sunshine"><img src="https://img.shields.io/endpoint.svg?url=https%3A%2F%2Fapp.lizardbyte.dev%2Fdashboard%2Fshields%2Fcodecov%2FSunshine.json&style=for-the-badge&logo=codecov" alt="Codecov"></a>
-  <a href="https://sonarcloud.io/project/overview?id=LizardByte_Sunshine"><img src="https://img.shields.io/sonar/quality_gate/LizardByte_Sunshine.svg?server=https%3A%2F%2Fsonarcloud.io&style=for-the-badge&logo=sonarqubecloud&label=sonarcloud" alt="SonarCloud"></a>
+  <h1 align="center">SteamShine</h1>
+  <h4 align="center">A self-hosted Moonlight game-stream host, purpose-built for SteamOS and Steam Deck.</h4>
 </div>
 
 ## ℹ️ About
 
-Sunshine is a self-hosted game stream host for Moonlight.
-Offering low-latency, cloud gaming server capabilities with support for AMD, Intel, and Nvidia GPUs for hardware
-encoding. Software encoding is also available. You can connect to Sunshine from any Moonlight client on a variety of
-devices. A web UI is provided to allow configuration, and client pairing, from your favorite web browser. Pair from
-the local server or any mobile device.
+SteamShine is a SteamOS/Steam Deck-focused fork of [Sunshine](https://github.com/LizardByte/Sunshine): a
+self-hosted, low-latency game-stream host compatible with any [Moonlight](https://moonlight-stream.org/) client.
+It adds a SteamOS-native session pipeline (headless virtual-display Gamescope sessions, capture/display selection
+tuned for the Deck's AMD APU, and safe coexistence with an already-running Steam Game Mode session), and it ships
+its own web control panel — **SteamShine** — in addition to the original Sunshine Web UI.
 
-LizardByte has the full documentation hosted on [Read the Docs](https://docs.lizardbyte.dev/projects/sunshine)
+SteamShine is developed independently at [souten-yd/SteamShine](https://github.com/souten-yd/SteamShine) and does
+not currently track upstream Sunshine releases; see [Relationship to Sunshine](#-relationship-to-sunshine) below.
 
-* [Stable Docs](https://docs.lizardbyte.dev/projects/sunshine/latest/)
-* [Beta Docs](https://docs.lizardbyte.dev/projects/sunshine/master/)
+## 🖥️ The SteamShine web UI
 
-## 🎮 Feature Compatibility
+Alongside the original Sunshine Web UI (still available at `/`), SteamShine ships a second, purpose-built
+control panel at `/steamshine/`:
 
-<table>
-    <caption id="gamepad_emulation">Gamepad Emulation</caption>
-    <tr>
-        <th>Feature</th>
-        <th>FreeBSD</th>
-        <th>Linux</th>
-        <th>macOS</th>
-        <th>Windows</th>
-    </tr>
-    <tr>
-        <td colspan="5" align="center">
-        What type of gamepads can be emulated on the host.<br>
-        Clients may support other gamepads.
-        </td>
-    </tr>
-    <tr>
-        <td>DualShock / DS4 (PlayStation 4)</td>
-        <td>➖</td>
-        <td>➖</td>
-        <td>❌</td>
-        <td>✅</td>
-    </tr>
-    <tr>
-        <td>DualSense / DS5 (PlayStation 5)</td>
-        <td>❌</td>
-        <td>✅</td>
-        <td>❌</td>
-        <td>❌</td>
-    </tr>
-    <tr>
-        <td>Nintendo Switch Pro</td>
-        <td>✅</td>
-        <td>✅</td>
-        <td>❌</td>
-        <td>❌</td>
-    </tr>
-    <tr>
-        <td>Xbox 360</td>
-        <td>➖</td>
-        <td>➖</td>
-        <td>❌</td>
-        <td>✅</td>
-    </tr>
-    <tr>
-        <td>Xbox One/Series</td>
-        <td>✅</td>
-        <td>✅</td>
-        <td>❌</td>
-        <td>❌</td>
-    </tr>
-</table>
+- **Dashboard** — service, streaming, and SteamOS virtual-display status at a glance.
+- **Monitor** — live CPU, RAM, GPU, and VRAM usage with rolling sparklines, per-core CPU bars, and
+  temperature/fan/power readouts for AMD GPUs.
+- **Applications** — manage the app list Moonlight clients can launch, and stop the currently running one.
+- **GPU** — AMD GPU/CPU performance profiles: built-in Silent / Balanced / Performance / OC presets, plus
+  fully custom profiles (power limit, CPU governor and clock, GPU clock/voltage offset where the driver
+  exposes it) that can be added, renamed, and deleted.
+- **Settings** — the most commonly changed configuration options, plus the SteamOS virtual-display policy.
+- **Pin** — Moonlight client pairing.
+- **Clients** — paired-client list and revocation.
+- **Terminal** — a real shell on the host, running as the same unprivileged user as the SteamShine service.
+- **Logs** — a bounded diagnostic log view.
 
-<table>
-    <caption id="encoding_api">Encoding API</caption>
-    <tr>
-        <th>Encoding API</th>
-        <th>GPU Vendor</th>
-        <th>FreeBSD</th>
-        <th>Linux</th>
-        <th>macOS</th>
-        <th>Windows</th>
-    </tr>
-    <tr>
-        <td>AMF</td>
-        <td>AMD</td>
-        <td>➖</td>
-        <td>➖</td>
-        <td>➖</td>
-        <td>✅</td>
-    </tr>
-    <tr>
-        <td>Media Foundation</td>
-        <td>Qualcomm</td>
-        <td>➖</td>
-        <td>➖</td>
-        <td>➖</td>
-        <td>✅</td>
-    </tr>
-    <tr>
-        <td>NVENC</td>
-        <td>NVIDIA</td>
-        <td>➖</td>
-        <td>✅</td>
-        <td>➖</td>
-        <td>✅</td>
-    </tr>
-    <tr>
-        <td>QuickSync</td>
-        <td>Intel</td>
-        <td>➖</td>
-        <td>➖</td>
-        <td>➖</td>
-        <td>✅</td>
-    </tr>
-    <tr>
-        <td rowspan="3">VAAPI</td>
-        <td>AMD</td>
-        <td>✅</td>
-        <td>✅</td>
-        <td>➖</td>
-        <td>➖</td>
-    </tr>
-    <tr>
-        <td>Intel</td>
-        <td>✅</td>
-        <td>✅</td>
-        <td>➖</td>
-        <td>➖</td>
-    </tr>
-    <tr>
-        <td>NVIDIA</td>
-        <td>➖</td>
-        <td>✅</td>
-        <td>➖</td>
-        <td>➖</td>
-    </tr>
-    <tr>
-        <td rowspan="2">Video Toolbox</td>
-        <td>Apple</td>
-        <td>➖</td>
-        <td>➖</td>
-        <td>✅</td>
-        <td>➖</td>
-    </tr>
-    <tr>
-        <td>Intel</td>
-        <td>➖</td>
-        <td>➖</td>
-        <td>✅</td>
-        <td>➖</td>
-    </tr>
-    <tr>
-        <td rowspan="3">Vulkan Video</td>
-        <td>AMD</td>
-        <td>🟡</td>
-        <td>✅</td>
-        <td>➖</td>
-        <td>➖</td>
-    </tr>
-    <tr>
-        <td>Intel</td>
-        <td>🟡</td>
-        <td>🟡</td>
-        <td>➖</td>
-        <td>➖</td>
-    </tr>
-    <tr>
-        <td>NVIDIA</td>
-        <td>➖</td>
-        <td>🟡</td>
-        <td>➖</td>
-        <td>➖</td>
-    </tr>
-    <tr>
-        <td>Software</td>
-        <td>Any</td>
-        <td>✅</td>
-        <td>✅</td>
-        <td>✅</td>
-        <td>✅</td>
-    </tr>
-</table>
+This panel uses its own session/CSRF scheme and can be toggled independently via the `steamshine_web_ui_enabled`
+and `steamshine_web_ui_default` configuration options.
 
-<table>
-    <caption id="screen_capture">Screen Capture</caption>
-    <tr>
-        <th>Capture Method</th>
-        <th>FreeBSD</th>
-        <th>Linux</th>
-        <th>macOS</th>
-        <th>Windows</th>
-    </tr>
-    <tr>
-        <td>DXGI Desktop Duplication</td>
-        <td>➖</td>
-        <td>➖</td>
-        <td>➖</td>
-        <td>✅</td>
-    </tr>
-    <tr>
-        <td>KMS/DRM</td>
-        <td>✅</td>
-        <td>✅</td>
-        <td>➖</td>
-        <td>➖</td>
-    </tr>
-    <tr>
-        <td>NvFBC (X11 only)</td>
-        <td>➖</td>
-        <td>✅</td>
-        <td>➖</td>
-        <td>➖</td>
-    </tr>
-    <tr>
-        <td>ScreenCaptureKit</td>
-        <td>➖</td>
-        <td>➖</td>
-        <td>✅</td>
-        <td>➖</td>
-    </tr>
-    <tr>
-        <td>Wayland (wlroots)</td>
-        <td>✅</td>
-        <td>✅</td>
-        <td>➖</td>
-        <td>➖</td>
-    </tr>
-    <tr>
-        <td>Windows.Graphics.Capture</td>
-        <td>➖</td>
-        <td>➖</td>
-        <td>➖</td>
-        <td>🟡</td>
-    </tr>
-    <tr>
-        <td>&nbsp;&nbsp;↳ Portable</td>
-        <td>➖</td>
-        <td>➖</td>
-        <td>➖</td>
-        <td>✅</td>
-    </tr>
-    <tr>
-        <td>&nbsp;&nbsp;↳ Service</td>
-        <td>➖</td>
-        <td>➖</td>
-        <td>➖</td>
-        <td>❌</td>
-    </tr>
-    <tr>
-        <td>X11</td>
-        <td>✅</td>
-        <td>✅</td>
-        <td>➖</td>
-        <td>➖</td>
-    </tr>
-    <tr>
-        <td>XDG Desktop Portal</td>
-        <td>✅</td>
-        <td>✅</td>
-        <td>➖</td>
-        <td>➖</td>
-    </tr>
-    <tr>
-        <td>KWin Screencast</td>
-        <td>✅</td>
-        <td>✅</td>
-        <td>➖</td>
-        <td>➖</td>
-    </tr>
-</table>
+**Security note:** the GPU profile feature briefly elevates a single Linux capability (`CAP_DAC_OVERRIDE`) around
+each sysfs write it makes, immediately dropping it again afterward — see `src/steamshine_gpuctl.cpp`. The
+Terminal grants a real, authenticated shell on the host, equivalent in capability to SSH; it sits behind the same
+session-cookie + CSRF protections as every other mutating SteamShine endpoint.
 
-<table>
-    <caption id="capture_encoding_compat">Capture → Encoding Compatibility (Linux/FreeBSD)</caption>
-    <tr>
-        <th>Capture Method</th>
-        <th>VAAPI</th>
-        <th>Vulkan Video</th>
-        <th>NVENC (CUDA)</th>
-        <th>Software</th>
-    </tr>
-    <tr>
-        <td>KMS/DRM</td>
-        <td>✅</td>
-        <td>✅</td>
-        <td>✅</td>
-        <td>✅</td>
-    </tr>
-    <tr>
-        <td>NvFBC</td>
-        <td>❌</td>
-        <td>❌</td>
-        <td>✅</td>
-        <td>❌</td>
-    </tr>
-    <tr>
-        <td>Wayland (wlroots)</td>
-        <td>✅</td>
-        <td>❌</td>
-        <td>✅</td>
-        <td>✅</td>
-    </tr>
-    <tr>
-        <td>X11</td>
-        <td>✅</td>
-        <td>❌</td>
-        <td>✅</td>
-        <td>✅</td>
-    </tr>
-    <tr>
-        <td>XDG Desktop Portal</td>
-        <td>✅</td>
-        <td>✅</td>
-        <td>✅</td>
-        <td>✅</td>
-    </tr>
-    <tr>
-        <td>KWin Screencast</td>
-        <td>✅</td>
-        <td>✅</td>
-        <td>✅</td>
-        <td>✅</td>
-    </tr>
-</table>
+## 🚀 Getting started
 
-**Legend:** ✅ Supported | 🟡 Partial Support | ❌ Not Yet Supported | ➖ Not Applicable
+The supported way to build, install, and run SteamShine on SteamOS is the bundled `steamshine.sh` script:
 
-## 🖥️ System Requirements
+```bash
+./steamshine.sh install   # first-time build + systemd user service setup
+./steamshine.sh start
+./steamshine.sh status
+./steamshine.sh logs
+```
 
-> [!WARNING]
-> These tables are a work in progress. Do not purchase hardware based on this information.
+Run `./steamshine.sh --help` for the full command list (`build`, `configure`, `stop`, `restart`, `update`,
+`repair`, `uninstall`, `hardware-test`, and more). See [docs/STEAMOS_SETUP_SCRIPT.md](docs/STEAMOS_SETUP_SCRIPT.md)
+and [docs/INSTALLATION.md](docs/INSTALLATION.md) for details, and
+[docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) if something doesn't come up cleanly.
 
-<table>
-    <caption id="minimum_requirements">Minimum Requirements</caption>
-    <tr>
-        <th>Component</th>
-        <th>Requirement</th>
-    </tr>
-    <tr>
-        <td rowspan="3">GPU</td>
-        <td>AMD: VCE 1.0 or higher, see: <a href="https://github.com/obsproject/obs-amd-encoder/wiki/Hardware-Support">obs-amd hardware support</a></td>
-    </tr>
-    <tr>
-        <td>
-            Intel:<br>
-            &nbsp;&nbsp;FreeBSD/Linux: VAAPI-compatible, see: <a href="https://www.intel.com/content/www/us/en/developer/articles/technical/linuxmedia-vaapi.html">VAAPI hardware support</a><br>
-            &nbsp;&nbsp;Windows: Skylake or newer with QuickSync encoding support
-        </td>
-    </tr>
-    <tr>
-        <td>Nvidia: NVENC enabled cards, see: <a href="https://developer.nvidia.com/video-encode-and-decode-gpu-support-matrix-new">nvenc support matrix</a></td>
-    </tr>
-    <tr>
-        <td rowspan="2">CPU</td>
-        <td>AMD: Ryzen 3 or higher</td>
-    </tr>
-    <tr>
-        <td>Intel: Core i3 or higher</td>
-    </tr>
-    <tr>
-        <td>RAM</td>
-        <td>4GB or more</td>
-    </tr>
-    <tr>
-        <td rowspan="6">OS</td>
-        <td>FreeBSD: 14.4+</td>
-    </tr>
-    <tr>
-        <td>Linux/Debian: 13+ (trixie)</td>
-    </tr>
-    <tr>
-        <td>Linux/Fedora: 43+</td>
-    </tr>
-    <tr>
-        <td>Linux/Ubuntu: 22.04+ (jammy)</td>
-    </tr>
-    <tr>
-        <td>macOS: 14.2+</td>
-    </tr>
-    <tr>
-        <td>Windows: 11+ (Windows Server does not support virtual gamepads)</td>
-    </tr>
-    <tr>
-        <td rowspan="2">Network</td>
-        <td>Host: 5GHz, 802.11ac</td>
-    </tr>
-    <tr>
-        <td>Client: 5GHz, 802.11ac</td>
-    </tr>
-</table>
+## 🔀 Relationship to Sunshine
 
-<table>
-    <caption id="4k_suggestions">4k Suggestions</caption>
-    <tr>
-        <th>Component</th>
-        <th>Requirement</th>
-    </tr>
-    <tr>
-        <td rowspan="3">GPU</td>
-        <td>AMD: Video Coding Engine 3.1 or higher</td>
-    </tr>
-    <tr>
-        <td>
-            Intel:<br>
-            &nbsp;&nbsp;FreeBSD/Linux: HD Graphics 510 or higher<br>
-            &nbsp;&nbsp;Windows: Skylake or newer with QuickSync encoding support
-        </td>
-    </tr>
-    <tr>
-        <td>
-            Nvidia:<br>
-            &nbsp;&nbsp;FreeBSD/Linux: GeForce RTX 2000 series or higher<br>
-            &nbsp;&nbsp;Windows: Geforce GTX 1080 or higher
-        </td>
-    </tr>
-    <tr>
-        <td rowspan="2">CPU</td>
-        <td>AMD: Ryzen 5 or higher</td>
-    </tr>
-    <tr>
-        <td>Intel: Core i5 or higher</td>
-    </tr>
-    <tr>
-        <td rowspan="2">Network</td>
-        <td>Host: CAT5e ethernet or better</td>
-    </tr>
-    <tr>
-        <td>Client: CAT5e ethernet or better</td>
-    </tr>
-</table>
+SteamShine started as a fork of Sunshine and reuses large parts of its streaming, pairing, and configuration
+stack, but this repository does not currently track an `upstream` remote — it is developed as an independent
+project. If you want to pull in a specific upstream Sunshine change yourself, be aware that shared files this
+fork has heavily modified (`src/confighttp.cpp`, `src/config.cpp`/`.h`, `src/platform/linux/misc.cpp`, the
+Linux packaging scripts) are the most likely to conflict; SteamOS-specific files
+(`src/steamos_virtual_session*`, `src/steamshine_*`, the `src_assets/common/assets/steamshine/` web UI) don't
+exist upstream and won't conflict at all.
 
-<table>
-    <caption id="hdr_suggestions">HDR Suggestions</caption>
-    <tr>
-        <th>Component</th>
-        <th>Requirement</th>
-    </tr>
-    <tr>
-        <td rowspan="3">GPU</td>
-        <td>AMD: Video Coding Engine 3.4 or higher</td>
-    </tr>
-    <tr>
-        <td>Intel: HD Graphics 730 or higher</td>
-    </tr>
-    <tr>
-        <td>Nvidia: Pascal-based GPU (GTX 10-series) or higher</td>
-    </tr>
-    <tr>
-        <td rowspan="2">CPU</td>
-        <td>AMD: Ryzen 5 or higher</td>
-    </tr>
-    <tr>
-        <td>Intel: Core i5 or higher</td>
-    </tr>
-    <tr>
-        <td rowspan="2">Network</td>
-        <td>Host: CAT5e ethernet or better</td>
-    </tr>
-    <tr>
-        <td>Client: CAT5e ethernet or better</td>
-    </tr>
-</table>
+## 🎮 Feature compatibility
 
-## ❓ Support
+SteamShine targets Linux/SteamOS first. For the general gamepad-emulation, HDR, and hardware-requirement
+compatibility tables that also apply here, see the equivalent tables in
+[upstream Sunshine's README](https://github.com/LizardByte/Sunshine#readme) — this fork hasn't diverged from
+that baseline for the parts it still shares.
 
-Our support methods are listed in our [LizardByte Docs](https://docs.lizardbyte.dev/latest/about/support.html).
+## 📜 License
 
-## 💲 Sponsors and Supporters
-
-<p align="center">
-  <img src='https://cdn.jsdelivr.net/gh/LizardByte/contributors@dist/sponsors.svg' alt="Sponsors"/>
-</p>
-
-## 👥 Contributors
-
-Thank you to all the contributors who have helped make Sunshine better!
-
-### GitHub
-
-<p align="center">
-  <img src='https://cdn.jsdelivr.net/gh/LizardByte/contributors@dist/github.Sunshine.svg' alt="GitHub contributors"/>
-</p>
-
-### CrowdIn
-
-<p align="center">
-  <img src='https://cdn.jsdelivr.net/gh/LizardByte/contributors@dist/crowdin.606145.svg' alt="CrowdIn contributors"/>
-</p>
-
-<div class="section_buttons">
-
-| Previous |                                       Next |
-|:---------|-------------------------------------------:|
-|          | [Getting Started](docs/getting_started.md) |
-
-</div>
-
-<details style="display: none;">
-  <summary></summary>
-  [TOC]
-</details>
+SteamShine is distributed under the GPL-3.0 license, the same as upstream Sunshine. See [LICENSE](LICENSE).

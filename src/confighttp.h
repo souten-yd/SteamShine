@@ -24,6 +24,7 @@
 
 namespace confighttp {
   constexpr auto PORT_HTTPS = 1;  ///< GameStream port offset for port https.
+  constexpr auto PORT_STEAMSHINE_TERMINAL = 2;  ///< GameStream port offset for the SteamShine Terminal WebSocket.
 
   // Type aliases for HTTPS server components
   using https_server_t = SimpleWeb::Server<SimpleWeb::HTTPS>;
