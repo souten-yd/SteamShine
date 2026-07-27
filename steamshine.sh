@@ -462,7 +462,7 @@ status() { systemctl --user status "${SERVICE_UNIT}" --no-pager; }
 logs() { journalctl --user -u "${SERVICE_UNIT}" --no-pager -n 200; }
 autostart_status() {
   local unit wants runtime load_state unit_file_state active_state sub_state main_pid exec_start executable_realpath build_commit
-  local login_state linger_state journal_result launch_mode=systemd_user_service pid
+  local login_state linger_state journal_result service_environment launch_mode=unknown pid
   local -a reasons=() manual_pids=()
   unit="$(service_file)"
   wants="$(service_wants_link)"
@@ -476,6 +476,10 @@ autostart_status() {
   sub_state="$(systemctl_value SubState)"
   main_pid="$(service_main_pid)"
   exec_start="$(systemctl_value ExecStart)"
+  service_environment="$(systemctl_value Environment)"
+  if [[ "${service_environment}" =~ (^|[[:space:]])STEAMSHINE_LAUNCH_MODE=([^[:space:]]+) ]]; then
+    launch_mode="${BASH_REMATCH[2]}"
+  fi
   executable_realpath="$(service_process_executable "${main_pid}" || true)"
   build_commit="$(json_value commit "${PREFIX}/share/steamshine/current/BUILD_INFO.json" 2>/dev/null || true)"
   login_state="$(loginctl show-user "$(id -u)" --property=State --value 2>/dev/null || true)"
