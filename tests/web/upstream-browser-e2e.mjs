@@ -51,6 +51,19 @@ async function waitForWelcome(page) {
   throw lastError ?? new Error('Timed out waiting for the upstream welcome page.');
 }
 
+/** Wait until the SteamShine Monitor has rendered live metric values. */
+async function waitForMonitor(page) {
+  await page.getByRole('heading', { name: 'Monitor', exact: true }).waitFor({ timeout: 5000 });
+  await page.waitForFunction(
+    () => {
+      const value = document.querySelector('.metric-tile .metric-value');
+      return value !== null && value.textContent?.trim() !== '—';
+    },
+    undefined,
+    { timeout: 5000 },
+  );
+}
+
 /** Stop the spawned server and remove only the temporary browser test HOME. */
 async function cleanup() {
   if (browser) {
@@ -151,24 +164,25 @@ try {
 
   const steamshineContext = await browser.newContext({ ignoreHTTPSErrors: true });
   const steamshinePage = await steamshineContext.newPage();
-  const steamshineResponse = await steamshinePage.goto(`${baseUrl}/steamshine/dashboard`, { waitUntil: 'networkidle' });
+  const steamshineResponse = await steamshinePage.goto(`${baseUrl}/steamshine/monitor`, { waitUntil: 'domcontentloaded' });
   if (steamshineResponse?.status() !== 200) {
-    throw new Error(`SteamShine dashboard returned ${steamshineResponse?.status()}.`);
+    throw new Error(`SteamShine Monitor returned ${steamshineResponse?.status()}.`);
   }
   await steamshinePage.locator('#login input[name="username"]').fill('web-e2e');
   await steamshinePage.locator('#login input[name="password"]').fill('web-e2e-password');
   await steamshinePage.locator('#login button').click();
-  await steamshinePage.getByText('Welcome, web-e2e').waitFor({ timeout: 5000 });
+  await waitForMonitor(steamshinePage);
   for (const viewport of [
     { name: 'desktop', width: 1440, height: 900 },
     { name: 'tablet', width: 768, height: 1024 },
     { name: 'steam_deck', width: 800, height: 1280 },
   ]) {
     await steamshinePage.setViewportSize({ width: viewport.width, height: viewport.height });
-    const response = await steamshinePage.goto(`${baseUrl}/steamshine/dashboard`, { waitUntil: 'networkidle' });
+    const response = await steamshinePage.goto(`${baseUrl}/steamshine/monitor`, { waitUntil: 'domcontentloaded' });
+    await waitForMonitor(steamshinePage);
     const horizontalOverflow = await steamshinePage.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
     if (response?.status() !== 200 || horizontalOverflow) {
-      throw new Error(`SteamShine dashboard is not responsive at ${viewport.name}.`);
+      throw new Error(`SteamShine Monitor is not responsive at ${viewport.name}.`);
     }
     responsiveViewports.push({ ...viewport, status: response.status(), horizontal_overflow: horizontalOverflow });
   }
@@ -306,7 +320,7 @@ try {
   await steamshinePage.locator('#login input[name="username"]').fill('web-e2e');
   await steamshinePage.locator('#login input[name="password"]').fill('web-e2e-password-2');
   await steamshinePage.locator('#login button').click();
-  await steamshinePage.getByText('Welcome, web-e2e').waitFor({ timeout: 5000 });
+  await waitForMonitor(steamshinePage);
   await steamshinePage.locator('#logout').click();
   await steamshinePage.getByRole('heading', { name: 'Sign in' }).waitFor({ timeout: 5000 });
   securityResults.logout_session_status = await steamshinePage.evaluate(async () => (await fetch('/api/steamshine/v1/session')).status);
