@@ -81,6 +81,42 @@ a {
   align-items: stretch;
 }
 
+/* Mobile-only header: the sidebar's brand mark is hidden below 860px (see
+   media query), so this is the only place the logo appears on a phone. */
+.mobile-topbar {
+  display: none;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.6rem 1rem;
+  position: sticky;
+  top: 0;
+  z-index: 45;
+  background: rgb(10 11 13 / 92%);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--border);
+}
+
+.mobile-topbar img {
+  width: 28px;
+  height: 28px;
+  border-radius: 0.55rem;
+  flex-shrink: 0;
+}
+
+.mobile-topbar span {
+  font-weight: 700;
+  font-size: 0.95rem;
+  background: linear-gradient(135deg, var(--chrome-1), var(--chrome-2) 55%, var(--chrome-3));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.mobile-topbar .icon-btn {
+  margin-left: auto;
+  color: var(--text-dim);
+}
+
 .shell.unauth {
   display: grid;
   place-items: center;
@@ -841,8 +877,16 @@ pre {
 
 /* ---- Responsive ---- */
 @media (max-width: 860px) {
+  .shell {
+    flex-direction: column;
+  }
+
   .main {
-    padding: 1rem 1rem 6rem;
+    padding: 0.85rem 0.85rem 5.5rem;
+  }
+
+  .mobile-topbar {
+    display: flex;
   }
 
   .sidenav {
@@ -853,15 +897,15 @@ pre {
     top: auto;
     width: auto;
     flex-direction: row;
-    align-items: center;
-    overflow-x: auto;
-    padding: 0.5rem 0.6rem;
+    align-items: stretch;
+    justify-content: space-between;
+    padding: 0.4rem 0.3rem;
     border-right: none;
     border-top: 1px solid var(--border);
     background: rgb(10 11 13 / 92%);
     backdrop-filter: blur(10px);
     z-index: 40;
-    gap: 0.1rem;
+    gap: 0;
   }
 
   .sidenav .brand,
@@ -871,16 +915,28 @@ pre {
   }
 
   .nav-link {
+    flex: 1 1 0;
+    min-width: 0;
     flex-direction: column;
     gap: 0.15rem;
-    padding: 0.4rem 0.6rem;
-    font-size: 0.62rem;
+    padding: 0.4rem 0.15rem;
+    font-size: 0.6rem;
     white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    align-items: center;
+  }
+
+  .nav-link span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
   }
 
   .nav-link svg {
-    width: 20px;
-    height: 20px;
+    width: 19px;
+    height: 19px;
+    flex-shrink: 0;
   }
 
   .page-header {

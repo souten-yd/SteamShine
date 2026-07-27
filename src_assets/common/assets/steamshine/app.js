@@ -83,7 +83,6 @@ function icon(name, extraClass = '') {
 }
 
 const NAV = [
-  { id: 'dashboard', label: 'Dashboard', icon: 'home' },
   { id: 'monitor', label: 'Monitor', icon: 'activity' },
   { id: 'applications', label: 'Apps', icon: 'grid' },
   { id: 'gpu', label: 'GPU', icon: 'cpu' },
@@ -91,8 +90,8 @@ const NAV = [
   { id: 'pairing', label: 'Pin', icon: 'key' },
   { id: 'clients', label: 'Clients', icon: 'users' },
   { id: 'terminal', label: 'Terminal', icon: 'terminal' },
-  { id: 'logs', label: 'Logs', icon: 'file' },
 ];
+const DEFAULT_PAGE = 'monitor';
 
 /** @brief Build an inline SVG sparkline from a rolling value buffer. */
 function sparkline(values, max = 100) {
@@ -135,8 +134,13 @@ function shell(content, { authenticated = false, activeId = '' } = {}) {
     app.innerHTML = `<div class="shell unauth">${content}</div>`;
     return;
   }
-  const navLinks = NAV.map((item) => `<a class="nav-link${item.id === activeId ? ' active' : ''}" href="/steamshine/${item.id === 'dashboard' ? '' : item.id}" data-nav="${item.id}">${icon(item.icon)}<span>${item.label}</span></a>`).join('');
+  const navLinks = NAV.map((item) => `<a class="nav-link${item.id === activeId ? ' active' : ''}" href="/steamshine/${item.id}" data-nav="${item.id}">${icon(item.icon)}<span>${item.label}</span></a>`).join('');
   app.innerHTML = `<div class="shell">
+    <header class="mobile-topbar">
+      <img src="/steamshine/images/logo-mark-64.png" alt="SteamShine">
+      <span>SteamShine</span>
+      <button id="mobile-logout" class="icon-btn" aria-label="Log out">${icon('logout')}</button>
+    </header>
     <nav class="sidenav">
       <div class="brand"><img src="/steamshine/images/logo-mark-64.png" alt="SteamShine"><div class="brand-text"><h1>SteamShine</h1><p>Sunshine for SteamOS</p></div></div>
       ${navLinks}
@@ -147,6 +151,7 @@ function shell(content, { authenticated = false, activeId = '' } = {}) {
   </div>`;
   document.querySelectorAll('[data-nav]').forEach((a) => a.addEventListener('click', (e) => { e.preventDefault(); navigate(a.getAttribute('href')); }));
   document.querySelector('#logout')?.addEventListener('click', logout);
+  document.querySelector('#mobile-logout')?.addEventListener('click', logout);
 }
 
 /** @brief Redirect to a SteamShine route. */
@@ -195,7 +200,7 @@ function renderLogin() {
     try {
       const data = await json(await api('/auth/login', { method: 'POST', body: JSON.stringify(Object.fromEntries(new FormData(event.currentTarget))) }));
       csrfToken = data.csrf_token;
-      navigate('/steamshine/dashboard');
+      navigate(`/steamshine/${DEFAULT_PAGE}`);
     } catch (error) { event.currentTarget.querySelector('.notice').textContent = error.message; }
   };
 }
@@ -204,45 +209,18 @@ function renderLogin() {
 async function renderAuthenticated(session) {
   csrfToken = session.csrf_token;
   stopPolling();
-  const page = location.pathname.split('/').filter(Boolean)[1] || 'dashboard';
+  const page = location.pathname.split('/').filter(Boolean)[1] || DEFAULT_PAGE;
   const renderers = {
     pairing: renderPairing,
     config: renderVirtualDisplayConfig,
     clients: renderClients,
-    logs: renderLogs,
     monitor: renderMonitor,
     applications: renderApplications,
     settings: renderSettings,
     gpu: renderGpu,
     terminal: renderTerminal,
   };
-  if (renderers[page]) return renderers[page](session);
-  return renderDashboard(session);
-}
-
-/** @brief Render the status overview (former single dashboard page). */
-async function renderDashboard(session) {
-  const status = await json(await api('/status'));
-  const steamMigration = status.app_launch_rejected_reason
-    ? `<div class="callout danger"><strong>Application launch rejected (${escapeHtml(status.app_launch_rejected_reason)}).</strong> ${escapeHtml(status.app_launch_rejected_message || 'See the service log for details.')}${status.migration_required ? ' Explicit Desktop Steam migration is required; SteamShine will never stop it without confirmation.' : ''}</div>`
-    : '';
-  const rows = [
-    ['Service launch', status.service_launch_mode], ['Binary commit', status.service_binary_commit], ['Config path', status.service_config_path],
-    ['Active streams', status.active_streams], ['Application', status.application_running ? 'Running' : 'Idle'], ['Gamescope', status.gamescope_active ? 'Active' : 'Idle'],
-    ['Input target', status.input_route_target], ['Input route error', status.input_route_error || 'none'],
-    ['Input queue current / max', `${status.input_queue_current || 0} / ${status.input_queue_max || 0}`],
-    ['Motion coalesced / dropped', `${status.input_motion_coalesced || 0} / ${status.input_motion_dropped || 0}`],
-    ['Virtual display mode', status.virtual_display_enabled ? status.virtual_display_mode : 'Disabled'],
-    ['Capture selection', status.capture_selection_reason], ['Session origin', status.virtual_display_origin || 'none'],
-    ['Steam location', status.steam_location], ['Virtual display state', status.virtual_display_state || 'Disabled'],
-    ['Private socket', status.virtual_display_socket || 'Unavailable'], ['Gamescope PID', status.gamescope_pid > 0 ? status.gamescope_pid : 'Unavailable'],
-    ['Render node', status.render_node || status.game_gpu || 'Auto'], ['Capture frames', status.captured_frames || 0],
-    ['Encoded packets', status.encoded_packets || 0], ['Encoder', status.encoder || 'Auto'],
-  ];
-  shell(`<div class="page-header"><div><h2>Welcome, ${escapeHtml(session.username)}</h2><p>Current SteamShine host status.</p></div></div>
-    ${steamMigration}
-    <div class="section"><h3>Status</h3><div class="rows">${rows.map(([k, v]) => `<div class="row"><span class="k">${escapeHtml(k)}</span><span class="v num">${escapeHtml(v ?? 'unknown')}</span></div>`).join('')}</div></div>`,
-  { authenticated: true, activeId: 'dashboard' });
+  return (renderers[page] || renderMonitor)(session);
 }
 
 /** @brief Render the PC monitor: CPU/RAM/GPU/VRAM metric tiles, core bars, GPU detail. */
@@ -530,12 +508,6 @@ async function renderClients() {
     if (!await confirmDialog({ title: 'Revoke client', message: `Revoke pairing for "${button.closest('tr').querySelector('td').textContent}"?` })) return;
     try { await json(await api(`/clients/${encodeURIComponent(button.dataset.client)}`, { method: 'DELETE' })); renderClients(); } catch (error) { showError(error); }
   }));
-}
-
-/** @brief Render the bounded diagnostic log view. */
-async function renderLogs() {
-  const data = await json(await api('/logs/recent'));
-  shell(`<div class="page-header"><div><h2>Recent diagnostics</h2></div></div><div class="section"><pre>${escapeHtml(data.content || '')}</pre></div>`, { authenticated: true, activeId: 'logs' });
 }
 
 /** @brief Render the full PTY web terminal (xterm.js over WebSocket). */
