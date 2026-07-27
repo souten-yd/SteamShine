@@ -1555,6 +1555,15 @@ namespace steamos_virtual_session {
     const std::string bootstrap_executable {
       std::getenv("STEAMSHINE_SESSION_BOOTSTRAP") ? std::getenv("STEAMSHINE_SESSION_BOOTSTRAP") : current_executable.string()
     };
+    const auto owner_identity {gamescope_source::read_process_identity(::getpid())};
+    if (!owner_identity || owner_identity->uid != static_cast<int>(::getuid()) || owner_identity->start_time == 0) {
+      std::filesystem::remove_all(manager.runtime_directory, ec);
+      error = "Failed to resolve the owning SteamShine process identity";
+      manager.current = state_e::Failed;
+      return false;
+    }
+    const auto owner_pid_value {std::to_string(::getpid())};
+    const auto owner_start_time_value {std::to_string(owner_identity->start_time)};
     const pid_t child {::fork()};
     if (child == 0) {
       ::setpgid(0, 0);
@@ -1579,7 +1588,7 @@ namespace steamos_virtual_session {
       ::unsetenv("XDG_SESSION_TYPE");
       std::vector<char *> argv;
       const auto generation {std::to_string(display_generation)};
-      argv.reserve(arguments.size() + 6);
+      argv.reserve(arguments.size() + 8);
       argv.push_back(const_cast<char *>(path.c_str()));
       for (const auto &argument : arguments) {
         argv.push_back(const_cast<char *>(argument.c_str()));
@@ -1589,6 +1598,8 @@ namespace steamos_virtual_session {
       argv.push_back(const_cast<char *>("--steamshine-session-bootstrap"));
       argv.push_back(const_cast<char *>(runtime.c_str()));
       argv.push_back(const_cast<char *>(generation.c_str()));
+      argv.push_back(const_cast<char *>(owner_pid_value.c_str()));
+      argv.push_back(const_cast<char *>(owner_start_time_value.c_str()));
       argv.push_back(nullptr);
       ::execvp(path.c_str(), argv.data());
       _exit(127);
@@ -1837,12 +1848,21 @@ namespace steamos_virtual_session {
     }
   }
 
-  int run_display_endpoint_bootstrap(const std::string_view report_directory, const uint64_t generation) {
+  int run_display_endpoint_bootstrap(
+    const std::string_view report_directory,
+    const uint64_t generation,
+    const int owner_pid,
+    const uint64_t owner_start_time
+  ) {
 #if defined(__linux__)
     const auto *const inherited_runtime {std::getenv("XDG_RUNTIME_DIR")};
     const std::filesystem::path runtime {report_directory};
     struct stat runtime_stat {};
     if (!inherited_runtime || runtime.empty() || runtime.string() != inherited_runtime || ::lstat(runtime.c_str(), &runtime_stat) != 0 || !S_ISDIR(runtime_stat.st_mode) || runtime_stat.st_uid != ::getuid()) {
+      return 3;
+    }
+    const auto owner_identity {gamescope_source::read_process_identity(owner_pid)};
+    if (!owner_identity || owner_identity->uid != static_cast<int>(::getuid()) || owner_identity->start_time != owner_start_time) {
       return 3;
     }
     const int directory {::open(runtime.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW)};
@@ -1893,11 +1913,17 @@ namespace steamos_virtual_session {
       return 4;
     }
     for (;;) {
-      ::pause();
+      std::this_thread::sleep_for(std::chrono::milliseconds {250});
+      const auto current_owner {gamescope_source::read_process_identity(owner_pid)};
+      if (!current_owner || current_owner->uid != static_cast<int>(::getuid()) || current_owner->start_time != owner_start_time) {
+        return 0;
+      }
     }
 #else
     (void) report_directory;
     (void) generation;
+    (void) owner_pid;
+    (void) owner_start_time;
     return 3;
 #endif
   }

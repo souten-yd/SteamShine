@@ -217,13 +217,17 @@ namespace steamos_virtual_session {
    * @brief Persist the environment inherited by a Gamescope bootstrap child.
    *
    * This internal command writes one owner-only atomic endpoint report and then
-   * waits for session termination. It performs no capture, rendering, or GPU work.
+   * watches the exact owning daemon identity. If that daemon exits or is
+   * replaced, the bootstrap exits so Gamescope's reaper closes the entire owned
+   * session. It performs no capture, rendering, or GPU work.
    *
    * @param report_directory Owned session runtime directory.
    * @param generation Session generation supplied by the owning daemon.
+   * @param owner_pid Process identifier of the owning SteamShine daemon.
+   * @param owner_start_time Linux process start time of the owning daemon.
    * @return Zero after normal termination, or a nonzero validation/write error.
    */
-  int run_display_endpoint_bootstrap(std::string_view report_directory, uint64_t generation);
+  int run_display_endpoint_bootstrap(std::string_view report_directory, uint64_t generation, int owner_pid, uint64_t owner_start_time);
 
   /**
    * @brief Check whether a configured command may start or address Steam.

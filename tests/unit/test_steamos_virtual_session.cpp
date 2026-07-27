@@ -13,11 +13,13 @@
   #include <iterator>
   #include <signal.h>
   #include <src/config.h>
+  #include <src/platform/linux/gamescope_source.h>
   #include <src/rtsp.h>
   #include <src/steamos_virtual_session.h>
   #include <string_view>
   #include <sys/socket.h>
   #include <sys/un.h>
+  #include <sys/wait.h>
   #include <thread>
   #include <unistd.h>
 
@@ -543,6 +545,72 @@ TEST_F(SteamOSVirtualSessionTest, StopsOwnedVirtualDisplayWhenRetentionIsDisable
 
   EXPECT_FALSE(steamos_virtual_session::active());
   EXPECT_EQ(steamos_virtual_session::status_snapshot().origin, steamos_virtual_session::session_origin_e::none);
+}
+
+/**
+ * @brief Verify a bootstrap exits when its exact owning daemon identity disappears.
+ */
+TEST_F(SteamOSVirtualSessionTest, BootstrapExitsAfterOwningDaemonDies) {
+  const auto bootstrap_runtime {root / "runtime" / "bootstrap-owner-monitor"};
+  std::filesystem::create_directories(bootstrap_runtime);
+  ASSERT_EQ(::setenv("XDG_RUNTIME_DIR", bootstrap_runtime.c_str(), 1), 0);
+
+  const pid_t owner {::fork()};
+  ASSERT_GE(owner, 0);
+  if (owner == 0) {
+    for (;;) {
+      ::pause();
+    }
+  }
+  const auto owner_identity {gamescope_source::read_process_identity(owner)};
+  if (!owner_identity) {
+    ::kill(owner, SIGKILL);
+    ::waitpid(owner, nullptr, 0);
+    FAIL() << "Failed to read the test owner identity";
+  }
+
+  const pid_t bootstrap {::fork()};
+  if (bootstrap < 0) {
+    ::kill(owner, SIGKILL);
+    ::waitpid(owner, nullptr, 0);
+    FAIL() << "Failed to fork the test bootstrap";
+  }
+  if (bootstrap == 0) {
+    _exit(steamos_virtual_session::run_display_endpoint_bootstrap(bootstrap_runtime.string(), 17, owner, owner_identity->start_time));
+  }
+
+  const auto report {bootstrap_runtime / "display-endpoint.json"};
+  const auto report_deadline {std::chrono::steady_clock::now() + std::chrono::seconds {2}};
+  while (!std::filesystem::exists(report) && std::chrono::steady_clock::now() < report_deadline) {
+    std::this_thread::sleep_for(std::chrono::milliseconds {20});
+  }
+  if (!std::filesystem::exists(report)) {
+    ::kill(bootstrap, SIGKILL);
+    ::kill(owner, SIGKILL);
+    ::waitpid(bootstrap, nullptr, 0);
+    ::waitpid(owner, nullptr, 0);
+    FAIL() << "Bootstrap did not publish its endpoint report";
+  }
+
+  ::kill(owner, SIGTERM);
+  ::waitpid(owner, nullptr, 0);
+  int bootstrap_status {};
+  bool bootstrap_exited {false};
+  const auto exit_deadline {std::chrono::steady_clock::now() + std::chrono::seconds {2}};
+  while (std::chrono::steady_clock::now() < exit_deadline) {
+    if (::waitpid(bootstrap, &bootstrap_status, WNOHANG) == bootstrap) {
+      bootstrap_exited = true;
+      break;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds {20});
+  }
+  if (!bootstrap_exited) {
+    ::kill(bootstrap, SIGKILL);
+    ::waitpid(bootstrap, &bootstrap_status, 0);
+  }
+  ASSERT_TRUE(bootstrap_exited);
+  EXPECT_TRUE(WIFEXITED(bootstrap_status));
+  EXPECT_EQ(WEXITSTATUS(bootstrap_status), 0);
 }
 
 /**

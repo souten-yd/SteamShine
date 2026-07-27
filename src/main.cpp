@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <string>
 
 #if defined(__linux__)
@@ -106,16 +107,23 @@ std::map<std::string_view, std::function<int(const char *name, int argc, char **
    }},
 #if defined(__linux__)
   {"steamshine-session-bootstrap"sv, [](const char *, int argc, char **argv) {
-     if (argc != 2) {
+     if (argc != 4) {
        return 2;
      }
      try {
-       size_t consumed {};
-       const auto generation {std::stoull(argv[1], &consumed)};
-       if (consumed != std::string_view {argv[1]}.size()) {
+       size_t generation_consumed {};
+       size_t owner_pid_consumed {};
+       size_t owner_start_time_consumed {};
+       const auto generation {std::stoull(argv[1], &generation_consumed)};
+       const auto owner_pid_value {std::stoll(argv[2], &owner_pid_consumed)};
+       const auto owner_start_time {std::stoull(argv[3], &owner_start_time_consumed)};
+       if (generation_consumed != std::string_view {argv[1]}.size() ||
+           owner_pid_consumed != std::string_view {argv[2]}.size() ||
+           owner_start_time_consumed != std::string_view {argv[3]}.size() ||
+           owner_pid_value <= 0 || owner_pid_value > std::numeric_limits<int>::max() || owner_start_time == 0) {
          return 2;
        }
-       return steamos_virtual_session::run_display_endpoint_bootstrap(argv[0], generation);
+       return steamos_virtual_session::run_display_endpoint_bootstrap(argv[0], generation, static_cast<int>(owner_pid_value), owner_start_time);
      } catch (const std::exception &) {
        return 2;
      }

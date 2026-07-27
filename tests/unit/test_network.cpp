@@ -6,6 +6,13 @@
 
 #include <src/network.h>
 
+#ifndef _WIN32
+  #include <arpa/inet.h>
+  #include <netinet/in.h>
+  #include <sys/socket.h>
+  #include <unistd.h>
+#endif
+
 struct MdnsInstanceNameTest: BaseTest, testing::WithParamInterface<std::tuple<std::string, std::string>> {};
 
 TEST_P(MdnsInstanceNameTest, Run) {
@@ -140,3 +147,26 @@ TEST_F(BindAddressTest, WildcardAddressFunction) {
   ASSERT_EQ(net::af_to_any_address_string(net::af_e::IPV4), "0.0.0.0");
   ASSERT_EQ(net::af_to_any_address_string(net::af_e::BOTH), "::");
 }
+
+#ifndef _WIN32
+/**
+ * @brief Verify an occupied control port returns an empty host instead of dereferencing null.
+ */
+TEST_F(BindAddressTest, OccupiedEnetPortFailsWithoutCrash) {
+  const int occupied_socket {::socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0)};
+  ASSERT_GE(occupied_socket, 0);
+  sockaddr_in occupied_address {};
+  occupied_address.sin_family = AF_INET;
+  occupied_address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  ASSERT_EQ(::bind(occupied_socket, reinterpret_cast<const sockaddr *>(&occupied_address), sizeof(occupied_address)), 0);
+  socklen_t occupied_address_size {sizeof(occupied_address)};
+  ASSERT_EQ(::getsockname(occupied_socket, reinterpret_cast<sockaddr *>(&occupied_address), &occupied_address_size), 0);
+
+  config::sunshine.bind_address = "127.0.0.1";
+  ENetAddress enet_address {};
+  const auto host {net::host_create(net::af_e::IPV4, enet_address, ntohs(occupied_address.sin_port))};
+
+  EXPECT_FALSE(host);
+  EXPECT_EQ(::close(occupied_socket), 0);
+}
+#endif
