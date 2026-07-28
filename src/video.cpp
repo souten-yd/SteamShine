@@ -23,6 +23,7 @@ extern "C" {
 #include "cbs.h"
 #include "config.h"
 #include "display_device.h"
+#include "frame_pacing.h"
 #include "globals.h"
 #include "input.h"
 #include "logging.h"
@@ -48,6 +49,17 @@ namespace video {
     std::atomic_uint64_t capture_frames_replaced {0};  ///< Latest-frame-wins capture replacements.
     std::atomic_uint64_t encoder_queue_current {0};  ///< Frames currently executing in an encoder.
     std::atomic_uint64_t encoder_queue_max {0};  ///< Encoder occupancy high-water mark.
+    std::atomic_uint64_t capture_deadline_misses {0};  ///< Pacer deadlines discarded after late wakeups.
+    std::atomic_uint64_t encoded_unique_frames {0};  ///< Encoder submissions containing a new source frame.
+    std::atomic_uint64_t encoded_duplicate_frames {0};  ///< Encoder submissions reusing converted content.
+    std::atomic_uint64_t duplicate_run_current {0};  ///< Current consecutive duplicate submission count.
+    std::atomic_uint64_t duplicate_run_max {0};  ///< Longest consecutive duplicate submission count.
+    std::atomic_uint64_t pipewire_buffers_received {0};  ///< Buffers dequeued in PipeWire callbacks.
+    std::atomic_uint64_t pipewire_unique_frames {0};  ///< Unique PipeWire frames accepted by capture.
+    std::atomic_uint64_t pipewire_redundant_pts {0};  ///< PipeWire buffers repeating producer PTS.
+    std::atomic_uint64_t pipewire_no_damage_frames {0};  ///< PipeWire buffers explicitly reporting no damage.
+    std::atomic_int64_t last_source_frame_microseconds {0};  ///< Timestamp of the preceding accepted source frame.
+    std::atomic_int64_t last_encode_frame_microseconds {0};  ///< Timestamp of the preceding encoder submission.
     std::atomic_uint64_t network_queue_bytes {0};  ///< Encoded bytes waiting for packetization.
     std::atomic_uint64_t network_queue_frames {0};  ///< Encoded frames waiting for packetization.
     std::atomic_uint64_t network_queue_frames_max {0};  ///< Network queue high-water mark.
@@ -64,6 +76,8 @@ namespace video {
     latency_diagnostics::fixed_ring_t<> frame_age_at_capture;  ///< Fixed-memory capture-age samples.
     latency_diagnostics::fixed_ring_t<> frame_age_at_encode;  ///< Fixed-memory encode-age samples.
     latency_diagnostics::fixed_ring_t<> frame_age_at_network;  ///< Fixed-memory network-age samples.
+    latency_diagnostics::fixed_ring_t<> source_interarrival;  ///< Unique source-frame interarrival samples.
+    latency_diagnostics::fixed_ring_t<> encode_interarrival;  ///< Encoder-submission interarrival samples.
 
     /**
      * @brief Atomically update an unsigned high-water mark.
@@ -125,6 +139,17 @@ namespace video {
     capture_frames_replaced.store(0, std::memory_order_relaxed);
     encoder_queue_current.store(0, std::memory_order_relaxed);
     encoder_queue_max.store(0, std::memory_order_relaxed);
+    capture_deadline_misses.store(0, std::memory_order_relaxed);
+    encoded_unique_frames.store(0, std::memory_order_relaxed);
+    encoded_duplicate_frames.store(0, std::memory_order_relaxed);
+    duplicate_run_current.store(0, std::memory_order_relaxed);
+    duplicate_run_max.store(0, std::memory_order_relaxed);
+    pipewire_buffers_received.store(0, std::memory_order_relaxed);
+    pipewire_unique_frames.store(0, std::memory_order_relaxed);
+    pipewire_redundant_pts.store(0, std::memory_order_relaxed);
+    pipewire_no_damage_frames.store(0, std::memory_order_relaxed);
+    last_source_frame_microseconds.store(0, std::memory_order_relaxed);
+    last_encode_frame_microseconds.store(0, std::memory_order_relaxed);
     network_queue_bytes.store(0, std::memory_order_relaxed);
     network_queue_frames.store(0, std::memory_order_relaxed);
     network_queue_frames_max.store(0, std::memory_order_relaxed);
@@ -141,11 +166,13 @@ namespace video {
     frame_age_at_capture.reset();
     frame_age_at_encode.reset();
     frame_age_at_network.reset();
+    source_interarrival.reset();
+    encode_interarrival.reset();
   }
 
-  void record_capture_enqueued(const std::optional<std::chrono::steady_clock::time_point> &timestamp, const bool replaced_pending) {
-    capture_queue_current.store(1, std::memory_order_relaxed);
-    update_maximum(capture_queue_max, 1);
+  void record_capture_enqueued(const std::optional<std::chrono::steady_clock::time_point> &timestamp, const bool replaced_pending, const std::size_t queue_depth) {
+    capture_queue_current.store(queue_depth, std::memory_order_relaxed);
+    update_maximum(capture_queue_max, queue_depth);
     if (replaced_pending) {
       capture_frames_replaced.fetch_add(1, std::memory_order_relaxed);
     }
@@ -154,20 +181,55 @@ namespace video {
     }
   }
 
-  void record_capture_dequeued() {
-    capture_queue_current.store(0, std::memory_order_relaxed);
+  void record_capture_dequeued(const std::size_t queue_depth) {
+    capture_queue_current.store(queue_depth, std::memory_order_relaxed);
   }
 
   void record_encode_started(const std::optional<std::chrono::steady_clock::time_point> &timestamp) {
+    const auto now {std::chrono::steady_clock::now()};
+    const auto now_microseconds {std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch()).count()};
+    const auto previous_microseconds {last_encode_frame_microseconds.exchange(now_microseconds, std::memory_order_relaxed)};
+    if (previous_microseconds > 0) {
+      encode_interarrival.record(std::chrono::microseconds {now_microseconds - previous_microseconds});
+    }
     const auto current {encoder_queue_current.fetch_add(1, std::memory_order_relaxed) + 1};
     update_maximum(encoder_queue_max, current);
     if (timestamp) {
-      frame_age_at_encode.record(std::chrono::steady_clock::now() - *timestamp);
+      encoded_unique_frames.fetch_add(1, std::memory_order_relaxed);
+      duplicate_run_current.store(0, std::memory_order_relaxed);
+      frame_age_at_encode.record(now - *timestamp);
+    } else {
+      encoded_duplicate_frames.fetch_add(1, std::memory_order_relaxed);
+      const auto run {duplicate_run_current.fetch_add(1, std::memory_order_relaxed) + 1};
+      update_maximum(duplicate_run_max, run);
     }
   }
 
   void record_encode_finished() {
     saturating_subtract(encoder_queue_current, 1);
+  }
+
+  void record_capture_deadline_misses(const std::uint64_t count) {
+    capture_deadline_misses.fetch_add(count, std::memory_order_relaxed);
+  }
+
+  void record_pipewire_buffer(const bool redundant_pts, const bool no_damage) {
+    pipewire_buffers_received.fetch_add(1, std::memory_order_relaxed);
+    if (redundant_pts) {
+      pipewire_redundant_pts.fetch_add(1, std::memory_order_relaxed);
+    }
+    if (no_damage) {
+      pipewire_no_damage_frames.fetch_add(1, std::memory_order_relaxed);
+    }
+  }
+
+  void record_pipewire_unique_frame() {
+    pipewire_unique_frames.fetch_add(1, std::memory_order_relaxed);
+    const auto now_microseconds {std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch()).count()};
+    const auto previous_microseconds {last_source_frame_microseconds.exchange(now_microseconds, std::memory_order_relaxed)};
+    if (previous_microseconds > 0) {
+      source_interarrival.record(std::chrono::microseconds {now_microseconds - previous_microseconds});
+    }
   }
 
   void record_network_enqueued(const std::size_t bytes, const std::size_t queue_frames) {
@@ -241,6 +303,16 @@ namespace video {
       .capture_frames_replaced = capture_frames_replaced.load(std::memory_order_relaxed),
       .encoder_queue_current = encoder_queue_current.load(std::memory_order_relaxed),
       .encoder_queue_max = encoder_queue_max.load(std::memory_order_relaxed),
+      .capture_deadline_misses = capture_deadline_misses.load(std::memory_order_relaxed),
+      .encoded_unique_frames = encoded_unique_frames.load(std::memory_order_relaxed),
+      .encoded_duplicate_frames = encoded_duplicate_frames.load(std::memory_order_relaxed),
+      .duplicate_run_max = duplicate_run_max.load(std::memory_order_relaxed),
+      .pipewire_buffers_received = pipewire_buffers_received.load(std::memory_order_relaxed),
+      .pipewire_unique_frames = pipewire_unique_frames.load(std::memory_order_relaxed),
+      .pipewire_redundant_pts = pipewire_redundant_pts.load(std::memory_order_relaxed),
+      .pipewire_no_damage_frames = pipewire_no_damage_frames.load(std::memory_order_relaxed),
+      .source_interarrival_ms = source_interarrival.snapshot(),
+      .encode_interarrival_ms = encode_interarrival.snapshot(),
       .network_queue_bytes = network_queue_bytes.load(std::memory_order_relaxed),
       .network_queue_frames = network_queue_frames.load(std::memory_order_relaxed),
       .network_queue_frames_max = network_queue_frames_max.load(std::memory_order_relaxed),
@@ -1837,8 +1909,10 @@ namespace video {
           }
 
           if (frame_captured) {
-            const bool replaced_pending {capture_ctx->images->raise_replacing(img)};
-            record_capture_enqueued(img->frame_timestamp, replaced_pending);
+            if (!capture_ctx->images->raise(img)) {
+              return false;
+            }
+            record_capture_enqueued(img->frame_timestamp, false, capture_ctx->images->size());
           }
 
           ++capture_ctx;
@@ -1892,7 +1966,7 @@ namespace video {
                   continue;
                 }
 
-                while (capture_ctx->images->try_pop()) {
+                while (capture_ctx->images->pop(0ms)) {
                 }
 
                 ++capture_ctx;
@@ -2566,10 +2640,13 @@ namespace video {
       }
     });
 
-    // set max frame time based on client-requested target framerate.
-    double minimum_fps_target = (config::video.minimum_fps_target > 0.0) ? config::video.minimum_fps_target : (config.framerate / 2);
-    std::chrono::duration<double, std::milli> max_frametime {1000.0 / minimum_fps_target};
-    BOOST_LOG(info) << "Minimum FPS target set to ~"sv << minimum_fps_target << "fps ("sv << max_frametime.count() << "ms)"sv;
+    const auto requested_rate {framerate_to_rational(config)};
+    frame_pacing::deadline_pacer_t frame_pacer {{
+      static_cast<std::uint32_t>(requested_rate.num),
+      static_cast<std::uint32_t>(requested_rate.den),
+    }};
+    frame_pacer.reset(std::chrono::steady_clock::now());
+    BOOST_LOG(info) << "Output frame pacer set to "sv << requested_rate.num << '/' << requested_rate.den << " FPS"sv;
 
     auto shutdown_event = mail->event<bool>(mail::shutdown);
     auto packets = mail::man->queue<packet_t>(
@@ -2615,11 +2692,16 @@ namespace video {
 
       std::optional<std::chrono::steady_clock::time_point> frame_timestamp;
 
-      // Encode at a minimum FPS to avoid image quality issues with static content
+      // Active output uses the client rational clock. A source frame may arrive
+      // before its deadline and be converted early, but it is emitted only when
+      // that absolute deadline arrives.
       if (!requested_idr_frame || images->peek()) {
-        if (auto img = images->pop(max_frametime)) {
+        const auto deadline {frame_pacer.next_deadline()};
+        const auto now {std::chrono::steady_clock::now()};
+        const auto wait_duration {deadline > now ? deadline - now : std::chrono::steady_clock::duration::zero()};
+        if (auto img = images->pop(wait_duration)) {
           frame_timestamp = img->frame_timestamp;
-          record_capture_dequeued();
+          record_capture_dequeued(images->size());
           if (session->convert(*img)) {
             BOOST_LOG(error) << "Could not convert image"sv;
             return;
@@ -2627,6 +2709,12 @@ namespace video {
         } else if (!images->running()) {
           break;
         }
+
+        if (const auto after_conversion {std::chrono::steady_clock::now()}; after_conversion < deadline) {
+          std::this_thread::sleep_until(deadline);
+        }
+        const auto pacing {frame_pacer.poll(std::chrono::steady_clock::now())};
+        record_capture_deadline_misses(pacing.missed_deadlines);
       }
 
       // Break out of the encoding loop if any of the following are true:
@@ -3034,7 +3122,10 @@ namespace video {
   ) {
     auto shutdown_event = mail->event<bool>(mail::shutdown);
 
-    auto images = std::make_shared<img_event_t::element_type>();
+    auto images = std::make_shared<img_event_t::element_type>(
+      CAPTURE_QUEUE_FRAME_LIMIT,
+      safe::queue_overflow_e::block_producer
+    );
     auto lg = util::fail_guard([&]() {
       images->stop();
       shutdown_event->raise(true);

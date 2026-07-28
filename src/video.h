@@ -22,6 +22,7 @@ extern "C" {
 struct AVPacket;
 
 namespace video {
+  constexpr std::uint32_t CAPTURE_QUEUE_FRAME_LIMIT = 4;  ///< Unique source frames retained in order before backpressure.
   constexpr std::uint32_t NETWORK_QUEUE_FRAME_LIMIT = 2;  ///< Encoded frames retained before producer backpressure.
 
   /**
@@ -103,9 +104,9 @@ namespace video {
    */
   using sws_t = util::safe_ptr<SwsContext, sws_freeContext>;
   /**
-   * @brief Shared event that transports captured images between capture and encode threads.
+   * @brief Bounded ordered queue transporting captured images to the encoder.
    */
-  using img_event_t = std::shared_ptr<safe::event_t<std::shared_ptr<platf::img_t>>>;
+  using img_event_t = std::shared_ptr<safe::queue_t<std::shared_ptr<platf::img_t>>>;
 
   /**
    * @brief Bounded capture, encode, and network pipeline diagnostics.
@@ -116,6 +117,16 @@ namespace video {
     std::uint64_t capture_frames_replaced {0};  ///< Older pending images replaced by a newer frame.
     std::uint64_t encoder_queue_current {0};  ///< Frames currently executing in the encoder.
     std::uint64_t encoder_queue_max {0};  ///< Greatest concurrent encoder occupancy.
+    std::uint64_t capture_deadline_misses {0};  ///< Output deadlines skipped instead of creating catch-up bursts.
+    std::uint64_t encoded_unique_frames {0};  ///< Encoder submissions carrying a newly captured frame.
+    std::uint64_t encoded_duplicate_frames {0};  ///< Encoder submissions reusing the preceding converted frame.
+    std::uint64_t duplicate_run_max {0};  ///< Longest consecutive run of duplicate encoder submissions.
+    std::uint64_t pipewire_buffers_received {0};  ///< PipeWire buffers dequeued by capture callbacks.
+    std::uint64_t pipewire_unique_frames {0};  ///< Valid unique PipeWire frames accepted for capture.
+    std::uint64_t pipewire_redundant_pts {0};  ///< PipeWire buffers repeating the preceding PTS.
+    std::uint64_t pipewire_no_damage_frames {0};  ///< PipeWire buffers explicitly reporting no damage.
+    latency_diagnostics::statistics_t source_interarrival_ms;  ///< Interarrival time between accepted unique source frames.
+    latency_diagnostics::statistics_t encode_interarrival_ms;  ///< Interarrival time between encoder submissions.
     std::uint64_t network_queue_bytes {0};  ///< Encoded bytes waiting for the video sender.
     std::uint64_t network_queue_frames {0};  ///< Encoded frames waiting for the video sender.
     std::uint64_t network_queue_frames_max {0};  ///< Greatest encoded-frame queue depth.
@@ -142,13 +153,16 @@ namespace video {
    *
    * @param timestamp Source frame timestamp when available.
    * @param replaced_pending Whether the previous pending frame was replaced.
+   * @param queue_depth Captured frames waiting after publication.
    */
-  void record_capture_enqueued(const std::optional<std::chrono::steady_clock::time_point> &timestamp, bool replaced_pending);
+  void record_capture_enqueued(const std::optional<std::chrono::steady_clock::time_point> &timestamp, bool replaced_pending, std::size_t queue_depth = 1);
 
   /**
    * @brief Record removal of a captured frame for conversion and encoding.
+   *
+   * @param queue_depth Captured frames still waiting after removal.
    */
-  void record_capture_dequeued();
+  void record_capture_dequeued(std::size_t queue_depth = 0);
 
   /**
    * @brief Mark the beginning of one frame encode operation.
@@ -161,6 +175,26 @@ namespace video {
    * @brief Mark completion of one frame encode operation.
    */
   void record_encode_finished();
+
+  /**
+   * @brief Record output deadlines discarded after a late pacer wakeup.
+   *
+   * @param count Number of elapsed deadlines intentionally skipped.
+   */
+  void record_capture_deadline_misses(std::uint64_t count);
+
+  /**
+   * @brief Record metadata classification for one PipeWire callback buffer.
+   *
+   * @param redundant_pts Whether the buffer repeats the preceding producer PTS.
+   * @param no_damage Whether VideoDamage explicitly reports no changed region.
+   */
+  void record_pipewire_buffer(bool redundant_pts, bool no_damage);
+
+  /**
+   * @brief Record one valid unique PipeWire frame accepted by capture.
+   */
+  void record_pipewire_unique_frame();
 
   /**
    * @brief Record an encoded frame after it enters the ordered network queue.

@@ -237,6 +237,16 @@ TEST(WebServicesTest, StatusSnapshotIncludesPipeWireDiagnostics) {
   EXPECT_TRUE(snapshot.contains("capture_queue_max"));
   EXPECT_TRUE(snapshot.contains("encoder_queue_current"));
   EXPECT_TRUE(snapshot.contains("encoder_queue_max"));
+  EXPECT_TRUE(snapshot.contains("capture_deadline_misses"));
+  EXPECT_TRUE(snapshot.contains("encoded_unique_frames"));
+  EXPECT_TRUE(snapshot.contains("encoded_duplicate_frames"));
+  EXPECT_TRUE(snapshot.contains("duplicate_run_max"));
+  EXPECT_TRUE(snapshot.contains("pipewire_buffers_received"));
+  EXPECT_TRUE(snapshot.contains("pipewire_unique_frames"));
+  EXPECT_TRUE(snapshot.contains("pipewire_redundant_pts"));
+  EXPECT_TRUE(snapshot.contains("pipewire_no_damage_frames"));
+  EXPECT_TRUE(snapshot.at("source_interarrival_ms").contains("p99"));
+  EXPECT_TRUE(snapshot.at("encode_interarrival_ms").contains("p99"));
   EXPECT_TRUE(snapshot.contains("network_queue_bytes"));
   EXPECT_TRUE(snapshot.contains("network_queue_frames"));
   EXPECT_TRUE(snapshot.contains("socket_outq_bytes"));

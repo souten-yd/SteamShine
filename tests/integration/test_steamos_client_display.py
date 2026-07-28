@@ -6,6 +6,7 @@ from __future__ import annotations
 import importlib.util
 import json
 from pathlib import Path
+import subprocess
 import tempfile
 import unittest
 from unittest import mock
@@ -85,6 +86,7 @@ class ClientDisplayTests(unittest.TestCase):
         state = DISPLAY.state_path(self.environment)
         self.assertEqual(json.loads(state.read_text(encoding="utf-8")), {"output": "DP-1", "mode_id": "1", "scale": 1.5})
         self.assertEqual(run.call_args_list[-1].args[0], ["kscreen-doctor", "output.DP-1.mode.6"])
+        self.assertEqual(run.call_args_list[-1].kwargs["timeout"], DISPLAY.KSCREEN_APPLY_TIMEOUT_SECONDS)
 
         DISPLAY.revert_mode(self.environment)
 
@@ -93,6 +95,56 @@ class ClientDisplayTests(unittest.TestCase):
             run.call_args_list[-1].args[0],
             ["kscreen-doctor", "output.DP-1.mode.1", "output.DP-1.scale.1.5"],
         )
+        self.assertEqual(run.call_args_list[-1].kwargs["timeout"], DISPLAY.KSCREEN_REVERT_TIMEOUT_SECONDS)
+
+    @mock.patch.object(DISPLAY.subprocess, "run")
+    def test_uses_five_second_read_timeout(self, run: mock.Mock) -> None:
+        """Bound KScreen configuration reads independently from apply and revert."""
+        run.return_value = mock.Mock(stdout=json.dumps(self.configuration))
+
+        DISPLAY.read_configuration()
+
+        self.assertEqual(run.call_args.kwargs["timeout"], DISPLAY.KSCREEN_READ_TIMEOUT_SECONDS)
+
+    @mock.patch.object(DISPLAY.subprocess, "run")
+    def test_converts_subprocess_timeout_to_stable_error(self, run: mock.Mock) -> None:
+        """Hide variable subprocess timeout text behind a stable operation code."""
+        run.side_effect = subprocess.TimeoutExpired(["kscreen-doctor", "-j"], 5)
+
+        with self.assertRaisesRegex(DISPLAY.DisplayCommandTimeout, "^kscreen_read_timeout$"):
+            DISPLAY.read_configuration()
+
+    @mock.patch.object(DISPLAY.subprocess, "run")
+    def test_apply_timeout_retains_state_and_reports_virtual_fallback(self, run: mock.Mock) -> None:
+        """Keep restore state and return the virtual-fallback exit code after apply timeout."""
+        run.side_effect = [
+            mock.Mock(stdout=json.dumps(self.configuration)),
+            subprocess.TimeoutExpired(["kscreen-doctor", "output.DP-1.mode.6"], 10),
+        ]
+
+        with mock.patch.object(DISPLAY.os, "environ", self.environment), mock.patch.object(DISPLAY.sys, "stderr") as stderr:
+            result = DISPLAY.main([str(SCRIPT), "apply"])
+
+        self.assertEqual(result, DISPLAY.VIRTUAL_FALLBACK_EXIT_CODE)
+        self.assertTrue(DISPLAY.state_path(self.environment).exists())
+        self.assertIn("kscreen_apply_timeout", "".join(call.args[0] for call in stderr.write.call_args_list))
+
+    @mock.patch.object(DISPLAY.subprocess, "run")
+    def test_revert_timeout_retains_state_without_fallback(self, run: mock.Mock) -> None:
+        """Retain recovery state and fail promptly when KScreen restore times out."""
+        state = DISPLAY.state_path(self.environment)
+        state.parent.mkdir(mode=0o700, parents=True)
+        state.write_text(json.dumps({"output": "DP-1", "mode_id": "1", "scale": 1.5}), encoding="utf-8")
+        run.side_effect = subprocess.TimeoutExpired(["kscreen-doctor"], 10)
+
+        with mock.patch.object(DISPLAY.os, "environ", self.environment), mock.patch.object(DISPLAY.sys, "stderr") as stderr:
+            result = DISPLAY.main([str(SCRIPT), "revert"])
+
+        self.assertEqual(result, 1)
+        self.assertTrue(state.exists())
+        output = "".join(call.args[0] for call in stderr.write.call_args_list)
+        self.assertIn("kscreen_revert_timeout", output)
+        self.assertIn("virtual_fallback_possible=false", output)
 
 
 if __name__ == "__main__":

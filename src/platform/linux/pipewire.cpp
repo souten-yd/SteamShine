@@ -103,6 +103,7 @@ namespace pipewire {
     std::condition_variable frame_cv;  ///< Signals arrival or release of a PipeWire frame.
     size_t local_stride = 0;  ///< Local stride.
     bool frame_ready = false;  ///< Whether a PipeWire frame is ready to consume.
+    std::optional<std::int64_t> last_received_pts;  ///< Previous valid PTS observed by the callback.
     // Two distinct memory pools
     std::vector<uint8_t> buffer_a;  ///< First staging buffer used for CPU-copy PipeWire frames.
     std::vector<uint8_t> buffer_b;  ///< Second staging buffer used for CPU-copy PipeWire frames.
@@ -389,7 +390,7 @@ namespace pipewire {
       struct spa_meta_region *damage = static_cast<struct spa_meta_region *>(
         spa_buffer_find_meta_data(buf, SPA_META_VideoDamage, sizeof(*damage))
       );
-      img_descriptor->pw_damage = (damage && damage->region.size.width > 0 && damage->region.size.height > 0) ? std::optional<bool>(true) : std::nullopt;
+      img_descriptor->pw_damage = damage ? std::optional<bool>(damage->region.size.width > 0 && damage->region.size.height > 0) : std::nullopt;
     }
 
     /**
@@ -574,12 +575,36 @@ namespace pipewire {
       }
     }
 
+    /**
+     * @brief Count one callback buffer and classify its producer metadata.
+     *
+     * @param d PipeWire stream state retaining the preceding valid PTS.
+     * @param buffer Buffer whose header and damage metadata are inspected.
+     */
+    static void record_buffer_metadata(stream_data_t *d, struct spa_buffer *buffer) {
+      const auto *header {static_cast<struct spa_meta_header *>(
+        spa_buffer_find_meta_data(buffer, SPA_META_Header, sizeof(struct spa_meta_header))
+      )};
+      const bool valid_pts {header && header->pts != SPA_TIME_INVALID};
+      const bool redundant_pts {valid_pts && d->last_received_pts && header->pts == *d->last_received_pts};
+      if (valid_pts) {
+        d->last_received_pts = header->pts;
+      }
+
+      const auto *damage {static_cast<struct spa_meta_region *>(
+        spa_buffer_find_meta_data(buffer, SPA_META_VideoDamage, sizeof(struct spa_meta_region))
+      )};
+      const bool no_damage {damage && (damage->region.size.width == 0 || damage->region.size.height == 0)};
+      video::record_pipewire_buffer(redundant_pts, no_damage);
+    }
+
     static void on_process(void *user_data) {
       const auto d = static_cast<struct stream_data_t *>(user_data);
       struct pw_buffer *b = nullptr;
 
       // 1. Drain the queue: Always grab the most recent buffer
       while (struct pw_buffer *aux = pw_stream_dequeue_buffer(d->stream)) {
+        record_buffer_metadata(d, aux->buffer);
         if (b) {
           pw_stream_queue_buffer(d->stream, b);  // Return the older, unused buffer
         }
@@ -1149,6 +1174,7 @@ namespace pipewire {
       last_seq = img->seq;
       last_pts = img->pts;
       img->sequence = ++sequence;
+      video::record_pipewire_unique_frame();
 
       if (retries > 0) {
         BOOST_LOG(debug) << "[pipewire] Processed frame after " << retries << " redundant events."sv;

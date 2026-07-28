@@ -11,6 +11,28 @@ import sys
 from typing import Any
 
 
+KSCREEN_READ_TIMEOUT_SECONDS = 5
+KSCREEN_APPLY_TIMEOUT_SECONDS = 10
+KSCREEN_REVERT_TIMEOUT_SECONDS = 10
+VIRTUAL_FALLBACK_EXIT_CODE = 75
+
+
+class DisplayCommandTimeout(RuntimeError):
+    """Report a stable KScreen timeout without exposing subprocess details."""
+
+    def __init__(self, operation: str) -> None:
+        """Create a timeout for the named read, apply, or revert operation."""
+        super().__init__(f"kscreen_{operation}_timeout")
+
+
+def run_kscreen(arguments: list[str], operation: str, timeout: int, **options: Any) -> subprocess.CompletedProcess[str]:
+    """Run one bounded KScreen command and normalize timeout failures."""
+    try:
+        return subprocess.run(arguments, timeout=timeout, **options)
+    except subprocess.TimeoutExpired as error:
+        raise DisplayCommandTimeout(operation) from error
+
+
 def state_path(environment: dict[str, str]) -> Path:
     """Return the per-user runtime path used to restore the physical display."""
     runtime = environment.get("XDG_RUNTIME_DIR", "")
@@ -66,8 +88,10 @@ def select_mode(output: dict[str, Any], width: int, height: int, fps: float) -> 
 
 def read_configuration() -> dict[str, Any]:
     """Read the current KScreen configuration from kscreen-doctor."""
-    completed = subprocess.run(
+    completed = run_kscreen(
         ["kscreen-doctor", "-j"],
+        "read",
+        KSCREEN_READ_TIMEOUT_SECONDS,
         check=True,
         capture_output=True,
         text=True,
@@ -95,8 +119,10 @@ def apply_mode(environment: dict[str, str]) -> None:
     temporary.write_text(json.dumps(saved_state) + "\n", encoding="utf-8")
     temporary.chmod(0o600)
     temporary.replace(path)
-    subprocess.run(
+    run_kscreen(
         ["kscreen-doctor", f"output.{output['name']}.mode.{mode['id']}"],
+        "apply",
+        KSCREEN_APPLY_TIMEOUT_SECONDS,
         check=True,
     )
 
@@ -112,12 +138,14 @@ def revert_mode(environment: dict[str, str]) -> None:
     output = str(saved_state["output"])
     mode_id = str(saved_state["mode_id"])
     scale = float(saved_state["scale"])
-    subprocess.run(
+    run_kscreen(
         [
             "kscreen-doctor",
             f"output.{output}.mode.{mode_id}",
             f"output.{output}.scale.{scale:g}",
         ],
+        "revert",
+        KSCREEN_REVERT_TIMEOUT_SECONDS,
         check=True,
     )
     path.unlink()
@@ -133,9 +161,14 @@ def main(arguments: list[str]) -> int:
             apply_mode(dict(os.environ))
         else:
             revert_mode(dict(os.environ))
-    except (OSError, ValueError, KeyError, json.JSONDecodeError, subprocess.SubprocessError) as error:
-        print(f"SteamShine client display configuration failed: {error}", file=sys.stderr)
-        return 1
+    except (DisplayCommandTimeout, OSError, ValueError, KeyError, json.JSONDecodeError, subprocess.SubprocessError) as error:
+        fallback_possible = arguments[1] == "apply"
+        print(
+            "SteamShine client display configuration failed: "
+            f"{error}; virtual_fallback_possible={str(fallback_possible).lower()}",
+            file=sys.stderr,
+        )
+        return VIRTUAL_FALLBACK_EXIT_CODE if fallback_possible else 1
     return 0
 
 
