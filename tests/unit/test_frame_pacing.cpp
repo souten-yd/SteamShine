@@ -285,6 +285,7 @@ TEST(SyntheticPipeWireProducer, ClassifiesPtsDamageAndCorruption) {
   EXPECT_TRUE(pipewire_capture::classify_frame(10U, 10U, true, false).unique);
   EXPECT_TRUE(pipewire_capture::classify_frame(10U, 10U, std::nullopt, false).unique);
   EXPECT_FALSE(pipewire_capture::classify_frame(10U, 10U, false, false).unique);
+  EXPECT_FALSE(pipewire_capture::classify_frame(10U, 11U, false, false).unique);
   EXPECT_FALSE(pipewire_capture::classify_frame(10U, 11U, true, true).unique);
 }
 

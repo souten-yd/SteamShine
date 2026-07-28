@@ -17,7 +17,7 @@ namespace pipewire_capture {
       .redundant_pts = redundant_pts,
       .no_damage = no_damage,
       .corrupted = corrupted,
-      .unique = !corrupted && !(redundant_pts && no_damage),
+      .unique = !corrupted && !no_damage,
     };
   }
 
