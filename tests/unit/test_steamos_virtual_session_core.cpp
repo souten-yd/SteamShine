@@ -464,22 +464,25 @@ namespace {
    * @brief Verify PipeWire maximum-frame-rate negotiation intersects KWin's positive range.
    */
   TEST(SteamOSVirtualSessionCore, AdvertisesPositivePipeWireMaximumFrameRateRange) {
-    const auto range {pipewire_capture::max_framerate_range(60)};
+    const auto range {pipewire_capture::max_framerate_range(60000, 1001)};
 
-    EXPECT_EQ(range.preferred, 60U);
-    EXPECT_EQ(range.minimum, 1U);
-    EXPECT_EQ(range.maximum, 60U);
+    EXPECT_EQ(range.preferred.numerator, 60000U);
+    EXPECT_EQ(range.preferred.denominator, 1001U);
+    EXPECT_EQ(range.minimum.numerator, 1U);
+    EXPECT_EQ(range.minimum.denominator, 1U);
+    EXPECT_EQ(range.maximum.numerator, 60000U);
+    EXPECT_EQ(range.maximum.denominator, 1001U);
   }
 
   /**
    * @brief Verify an unspecified frame rate remains an unconstrained zero range.
    */
   TEST(SteamOSVirtualSessionCore, KeepsUnspecifiedPipeWireMaximumFrameRateRangeEmpty) {
-    const auto range {pipewire_capture::max_framerate_range(0)};
+    const auto range {pipewire_capture::max_framerate_range(0, 1)};
 
-    EXPECT_EQ(range.preferred, 0U);
-    EXPECT_EQ(range.minimum, 0U);
-    EXPECT_EQ(range.maximum, 0U);
+    EXPECT_EQ(range.preferred.numerator, 0U);
+    EXPECT_EQ(range.minimum.numerator, 0U);
+    EXPECT_EQ(range.maximum.numerator, 0U);
   }
 
   /**

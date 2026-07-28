@@ -21,14 +21,14 @@ namespace pipewire_capture {
     };
   }
 
-  max_framerate_range_t max_framerate_range(const uint32_t requested_fps) {
-    if (requested_fps == 0) {
+  max_framerate_range_t max_framerate_range(const uint32_t numerator, const uint32_t denominator) {
+    if (numerator == 0 || denominator == 0) {
       return {};
     }
     return {
-      .preferred = requested_fps,
-      .minimum = 1,
-      .maximum = requested_fps,
+      .preferred = {numerator, denominator},
+      .minimum = {1, 1},
+      .maximum = {numerator, denominator},
     };
   }
 

@@ -101,12 +101,20 @@ namespace pipewire_capture {
   };
 
   /**
+   * @brief Positive rational PipeWire frame rate.
+   */
+  struct rational_rate_t {
+    uint32_t numerator {0};  ///< Frames produced during one denominator interval.
+    uint32_t denominator {1};  ///< Seconds represented by the rate denominator.
+  };
+
+  /**
    * @brief Maximum-frame-rate range advertised to a PipeWire producer.
    */
   struct max_framerate_range_t {
-    uint32_t preferred {0};  ///< Preferred maximum frame rate in frames per second.
-    uint32_t minimum {0};  ///< Lowest accepted maximum frame rate in frames per second.
-    uint32_t maximum {0};  ///< Highest accepted maximum frame rate in frames per second.
+    rational_rate_t preferred;  ///< Preferred maximum rational frame rate.
+    rational_rate_t minimum;  ///< Lowest accepted maximum rational frame rate.
+    rational_rate_t maximum;  ///< Highest accepted maximum rational frame rate.
   };
 
   /**
@@ -169,10 +177,11 @@ namespace pipewire_capture {
    * positive values so producers such as KWin can intersect their supported
    * refresh range with the consumer request.
    *
-   * @param requested_fps Maximum frame rate requested by the streaming client.
+   * @param numerator Requested frame-rate numerator.
+   * @param denominator Requested frame-rate denominator.
    * @return Preferred, minimum, and maximum values for PipeWire negotiation.
    */
-  max_framerate_range_t max_framerate_range(uint32_t requested_fps);
+  max_framerate_range_t max_framerate_range(uint32_t numerator, uint32_t denominator);
 
   /**
    * @brief Classify whether PipeWire format negotiation can start capture.

@@ -393,13 +393,14 @@ namespace pipewire {
      * @param mem_type Mem type.
      * @param width Frame or display width in pixels.
      * @param height Frame or display height in pixels.
-     * @param refresh_rate Refresh rate.
+     * @param refresh_numerator Refresh-rate numerator.
+     * @param refresh_denominator Refresh-rate denominator.
      * @param dmabuf_infos Dmabuf infos.
      * @param n_dmabuf_infos N dmabuf infos.
      * @param display_is_nvidia Display is nvidia.
      * @return 0 when the PipeWire stream is configured; nonzero on negotiation failure.
      */
-    int ensure_stream(const platf::mem_type_e mem_type, const uint32_t width, const uint32_t height, const uint32_t refresh_rate, const struct dmabuf_format_info_t *dmabuf_infos, const int n_dmabuf_infos, const bool display_is_nvidia) {
+    int ensure_stream(const platf::mem_type_e mem_type, const uint32_t width, const uint32_t height, const uint32_t refresh_numerator, const uint32_t refresh_denominator, const struct dmabuf_format_info_t *dmabuf_infos, const int n_dmabuf_infos, const bool display_is_nvidia) {
       pw_thread_loop_lock(loop);
       int result = 0;
       if (!stream_data.stream) {
@@ -435,7 +436,7 @@ namespace pipewire {
                                                  (mem_type == platf::mem_type_e::cuda && display_is_nvidia));
         if (use_dmabuf) {
           for (int i = 0; i < n_dmabuf_infos; i++) {
-            auto format_param = build_format_parameter(&pod_builder, width, height, refresh_rate, dmabuf_infos[i].format, dmabuf_infos[i].modifiers, dmabuf_infos[i].n_modifiers);
+            auto format_param = build_format_parameter(&pod_builder, width, height, refresh_numerator, refresh_denominator, dmabuf_infos[i].format, dmabuf_infos[i].modifiers, dmabuf_infos[i].n_modifiers);
             params[n_params] = format_param;
             n_params++;
           }
@@ -443,7 +444,7 @@ namespace pipewire {
 
         // Add fallback for memptr
         for (const auto &fmt : format_map) {
-          auto format_param = build_format_parameter(&pod_builder, width, height, refresh_rate, fmt.pw_format, nullptr, 0);
+          auto format_param = build_format_parameter(&pod_builder, width, height, refresh_numerator, refresh_denominator, fmt.pw_format, nullptr, 0);
           params[n_params] = format_param;
           n_params++;
         }
@@ -584,16 +585,16 @@ namespace pipewire {
     uint64_t object_serial;
     bool negotiate_maxframerate_ = true;
 
-    struct spa_pod *build_format_parameter(struct spa_pod_builder *b, uint32_t width, uint32_t height, uint32_t refresh_rate, int32_t format, uint64_t *modifiers, int n_modifiers) {
+    struct spa_pod *build_format_parameter(struct spa_pod_builder *b, uint32_t width, uint32_t height, uint32_t refresh_numerator, uint32_t refresh_denominator, int32_t format, uint64_t *modifiers, int n_modifiers) {
       struct spa_pod_frame object_frame;
       struct spa_pod_frame modifier_frame;
       std::array<struct spa_rectangle, 3> sizes;
-      const auto max_framerate_range {pipewire_capture::max_framerate_range(refresh_rate)};
+      const auto max_framerate_range {pipewire_capture::max_framerate_range(refresh_numerator, refresh_denominator)};
       const struct spa_fraction variable_framerate {SPA_FRACTION(0, 1)};
       const std::array<struct spa_fraction, 3> max_framerates {
-        SPA_FRACTION(max_framerate_range.preferred, 1),
-        SPA_FRACTION(max_framerate_range.minimum, 1),
-        SPA_FRACTION(max_framerate_range.maximum, 1),
+        SPA_FRACTION(max_framerate_range.preferred.numerator, max_framerate_range.preferred.denominator),
+        SPA_FRACTION(max_framerate_range.minimum.numerator, max_framerate_range.minimum.denominator),
+        SPA_FRACTION(max_framerate_range.maximum.numerator, max_framerate_range.maximum.denominator),
       };
 
       sizes[0] = SPA_RECTANGLE(width, height);  // Preferred
@@ -983,9 +984,10 @@ namespace pipewire {
      */
     int init(platf::mem_type_e hwdevice_type, const std::string &display_name, const ::video::config_t &config) {
       // calculate frame interval we should capture at
-      framerate = config.framerate;
       delay = ::video::capture_frame_interval(config);
       const AVRational fps = ::video::framerate_to_rational(config);
+      framerate_numerator = fps.num;
+      framerate_denominator = fps.den;
       if (fps.den != 1) {
         BOOST_LOG(info) << "[pipewire] Requested frame rate [" << fps.num << "/" << fps.den << ", approx. " << av_q2d(fps) << " fps]";
       } else {
@@ -1010,8 +1012,6 @@ namespace pipewire {
       // Verify or update display parameters for streaming to ensure absolute touch inputs work as expected
       verify_and_update_display_parameters();
 
-      framerate = config.framerate;
-
       if (!shared_state) {
         shared_state = std::make_shared<shared_state_t>();
       } else {
@@ -1028,7 +1028,7 @@ namespace pipewire {
       }
 
       // Start PipeWire now so format negotiation can proceed before capture start
-      if (pipewire.ensure_stream(mem_type, width, height, framerate, dmabuf_infos.data(), n_dmabuf_infos, display_is_nvidia) < 0) {
+      if (pipewire.ensure_stream(mem_type, width, height, fps.num, fps.den, dmabuf_infos.data(), n_dmabuf_infos, display_is_nvidia) < 0) {
         BOOST_LOG(error) << "[pipewire] Failed to ensure pipewire stream. pipewire_t::init() failed.";
         return -1;
       }
@@ -1144,7 +1144,7 @@ namespace pipewire {
     platf::capture_e capture(const push_captured_image_cb_t &push_captured_image_cb, const pull_free_image_cb_t &pull_free_image_cb, bool *cursor) override {
       auto next_frame = std::chrono::steady_clock::now();
 
-      if (pipewire.ensure_stream(mem_type, width, height, framerate, dmabuf_infos.data(), n_dmabuf_infos, display_is_nvidia) < 0) {
+      if (pipewire.ensure_stream(mem_type, width, height, framerate_numerator, framerate_denominator, dmabuf_infos.data(), n_dmabuf_infos, display_is_nvidia) < 0) {
         BOOST_LOG(error) << "[pipewire] Failed to ensure pipewire stream. capture() failed with error.";
         return platf::capture_e::error;
       }
@@ -1439,7 +1439,8 @@ namespace pipewire {
     std::optional<std::uint64_t> last_pts {};
     std::optional<std::uint64_t> last_seq {};
     std::uint64_t sequence {};
-    uint32_t framerate;
+    uint32_t framerate_numerator {0};  ///< Requested rational frame-rate numerator.
+    uint32_t framerate_denominator {1};  ///< Requested rational frame-rate denominator.
 
   protected:
     // Allow subclasses to access for pipewire requirements setup and stream dead checks
