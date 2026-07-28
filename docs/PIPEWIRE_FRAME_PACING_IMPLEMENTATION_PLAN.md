@@ -142,13 +142,33 @@ seconds, and revert 10 seconds. Convert `TimeoutExpired` to stable errors. Apply
 failure reports whether virtual fallback remains possible. Revert failure does
 not block daemon teardown and retains the state file until restore succeeds.
 
+The systemd service intentionally starts from `default.target` so it remains
+available before a physical KDE session and in Game Mode. Consequently, its
+process environment can predate the current physical Wayland session. Before a
+physical KScreen operation, the helper refreshes only the graphical selectors
+from the systemd user manager, which Plasma updates for the active session. A
+refreshed `WAYLAND_DISPLAY` is accepted only when it is a relative socket name,
+the socket exists below the service's existing `XDG_RUNTIME_DIR`, it is a Unix
+socket, and it is owned by the service UID. `DISPLAY` is accepted only in the
+canonical local X display form. The helper never imports arbitrary variables,
+never hard-codes `wayland-0` or `:0`, and never changes the owned-private or
+attached-Game-Mode environment. The environment query has the same bounded
+five-second read timeout and fails through the existing stable fallback path.
+
+This refresh is deliberately performed at application launch rather than by
+restarting the daemon or binding the service to `graphical-session.target`.
+That preserves early autostart, pairing, Game Mode, and headless operation while
+making physical Desktop preparation use the session that actually exists at the
+time of the Moonlight request.
+
 ## Delivery sequence
 
 1. Record baseline producer PTS/sequence/damage and current encoded cadence.
 2. Add pure diagnostics/statistics and rational pacer types with unit tests.
 3. Integrate PipeWire metadata classification and the bounded ordered handoff.
 4. Separate capture arrival from output deadlines and add static/IDR policy.
-5. Add KScreen timeout behavior and integration tests.
+5. Add KScreen timeout behavior, launch-time graphical-environment refresh, and
+   integration tests.
 6. Run synthetic PipeWire integration cases and full CI.
 7. Run hardware acceptance. Only then evaluate the owned-session refresh flag if
    producer evidence still shows a Gamescope-side limit.

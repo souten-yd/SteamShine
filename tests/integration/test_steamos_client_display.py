@@ -6,6 +6,7 @@ from __future__ import annotations
 import importlib.util
 import json
 from pathlib import Path
+import socket
 import subprocess
 import tempfile
 import unittest
@@ -77,6 +78,95 @@ class ClientDisplayTests(unittest.TestCase):
         self.assertFalse(DISPLAY.state_path(virtual_environment).exists())
 
     @mock.patch.object(DISPLAY.subprocess, "run")
+    def test_refreshes_stale_service_graphical_environment(self, run: mock.Mock) -> None:
+        """Use the current same-user Wayland socket instead of a stale service selector."""
+        wayland_socket = socket.socket(socket.AF_UNIX)
+        self.addCleanup(wayland_socket.close)
+        wayland_socket.bind(str(Path(self.temporary.name) / "wayland-current"))
+        run.return_value = mock.Mock(
+            stdout="WAYLAND_DISPLAY=wayland-current\nDISPLAY=:3\nUNRELATED_SECRET=ignored\n"
+        )
+
+        refreshed = DISPLAY.refresh_graphical_environment(
+            dict(self.environment, WAYLAND_DISPLAY="wayland-stale", DISPLAY=":0")
+        )
+
+        self.assertEqual(refreshed["WAYLAND_DISPLAY"], "wayland-current")
+        self.assertEqual(refreshed["DISPLAY"], ":3")
+        self.assertEqual(refreshed["QT_QPA_PLATFORM"], "wayland")
+        self.assertNotIn("UNRELATED_SECRET", refreshed)
+        self.assertEqual(run.call_args.args[0], ["systemctl", "--user", "show-environment"])
+        self.assertEqual(run.call_args.kwargs["timeout"], DISPLAY.GRAPHICAL_ENVIRONMENT_TIMEOUT_SECONDS)
+
+    @mock.patch.object(DISPLAY.subprocess, "run")
+    def test_rejects_unvalidated_manager_graphical_environment(self, run: mock.Mock) -> None:
+        """Reject absolute Wayland paths and non-local X display selectors."""
+        run.return_value = mock.Mock(stdout="WAYLAND_DISPLAY=/tmp/foreign\nDISPLAY=host:0\n")
+
+        with self.assertRaisesRegex(ValueError, "^No active graphical session display is available$"):
+            DISPLAY.refresh_graphical_environment(self.environment)
+
+    @mock.patch.object(DISPLAY.subprocess, "run")
+    def test_preserves_valid_inherited_selector_when_manager_value_is_invalid(self, run: mock.Mock) -> None:
+        """Keep a verified service socket when the manager has no usable replacement."""
+        wayland_socket = socket.socket(socket.AF_UNIX)
+        self.addCleanup(wayland_socket.close)
+        wayland_socket.bind(str(Path(self.temporary.name) / "wayland-existing"))
+        run.return_value = mock.Mock(stdout="WAYLAND_DISPLAY=/tmp/foreign\nDISPLAY=host:0\n")
+
+        refreshed = DISPLAY.refresh_graphical_environment(
+            dict(self.environment, WAYLAND_DISPLAY="wayland-existing")
+        )
+
+        self.assertEqual(refreshed["WAYLAND_DISPLAY"], "wayland-existing")
+        self.assertNotIn("DISPLAY", refreshed)
+
+    @mock.patch.object(DISPLAY.subprocess, "run")
+    def test_rejects_wayland_socket_symlink(self, run: mock.Mock) -> None:
+        """Do not follow a manager-provided symlink even when its target is a socket."""
+        wayland_socket = socket.socket(socket.AF_UNIX)
+        self.addCleanup(wayland_socket.close)
+        target = Path(self.temporary.name) / "wayland-target"
+        wayland_socket.bind(str(target))
+        (Path(self.temporary.name) / "wayland-link").symlink_to(target)
+        run.return_value = mock.Mock(stdout="WAYLAND_DISPLAY=wayland-link\n")
+
+        with self.assertRaisesRegex(ValueError, "^No active graphical session display is available$"):
+            DISPLAY.refresh_graphical_environment(self.environment)
+
+    @mock.patch.object(DISPLAY.subprocess, "run")
+    def test_environment_query_timeout_is_stable(self, run: mock.Mock) -> None:
+        """Bound the user-manager query and expose a stable timeout reason."""
+        run.side_effect = subprocess.TimeoutExpired(["systemctl", "--user", "show-environment"], 5)
+
+        with self.assertRaisesRegex(DISPLAY.DisplayCommandTimeout, "^kscreen_environment_timeout$"):
+            DISPLAY.refresh_graphical_environment(self.environment)
+
+    def test_environment_timeout_reports_virtual_fallback(self) -> None:
+        """Map a bounded launch-time environment failure to the apply fallback result."""
+        with (
+            mock.patch.object(
+                DISPLAY,
+                "refresh_graphical_environment",
+                side_effect=DISPLAY.DisplayCommandTimeout("environment"),
+            ),
+            mock.patch.object(DISPLAY.os, "environ", self.environment),
+            mock.patch.object(DISPLAY.sys, "stderr") as stderr,
+        ):
+            result = DISPLAY.main([str(SCRIPT), "apply"])
+
+        self.assertEqual(result, DISPLAY.VIRTUAL_FALLBACK_EXIT_CODE)
+        self.assertIn("kscreen_environment_timeout", "".join(call.args[0] for call in stderr.write.call_args_list))
+
+    @mock.patch.object(DISPLAY.subprocess, "run")
+    def test_skips_environment_query_for_owned_virtual_session(self, run: mock.Mock) -> None:
+        """Preserve the private compositor environment without consulting the host Desktop."""
+        virtual_environment = dict(self.environment, STEAMSHINE_VIRTUAL_DISPLAY_ORIGIN="owned_private")
+
+        self.assertEqual(DISPLAY.refresh_graphical_environment(virtual_environment), virtual_environment)
+        run.assert_not_called()
+
+    @mock.patch.object(DISPLAY.subprocess, "run")
     def test_applies_and_restores_original_mode_and_scale(self, run: mock.Mock) -> None:
         """Persist the original UWQHD state before applying and then restore it."""
         run.return_value = mock.Mock(stdout=json.dumps(self.configuration))
@@ -87,6 +177,7 @@ class ClientDisplayTests(unittest.TestCase):
         self.assertEqual(json.loads(state.read_text(encoding="utf-8")), {"output": "DP-1", "mode_id": "1", "scale": 1.5})
         self.assertEqual(run.call_args_list[-1].args[0], ["kscreen-doctor", "output.DP-1.mode.6"])
         self.assertEqual(run.call_args_list[-1].kwargs["timeout"], DISPLAY.KSCREEN_APPLY_TIMEOUT_SECONDS)
+        self.assertEqual(run.call_args_list[-1].kwargs["env"], self.environment)
 
         DISPLAY.revert_mode(self.environment)
 
@@ -96,15 +187,17 @@ class ClientDisplayTests(unittest.TestCase):
             ["kscreen-doctor", "output.DP-1.mode.1", "output.DP-1.scale.1.5"],
         )
         self.assertEqual(run.call_args_list[-1].kwargs["timeout"], DISPLAY.KSCREEN_REVERT_TIMEOUT_SECONDS)
+        self.assertEqual(run.call_args_list[-1].kwargs["env"], self.environment)
 
     @mock.patch.object(DISPLAY.subprocess, "run")
     def test_uses_five_second_read_timeout(self, run: mock.Mock) -> None:
         """Bound KScreen configuration reads independently from apply and revert."""
         run.return_value = mock.Mock(stdout=json.dumps(self.configuration))
 
-        DISPLAY.read_configuration()
+        DISPLAY.read_configuration(self.environment)
 
         self.assertEqual(run.call_args.kwargs["timeout"], DISPLAY.KSCREEN_READ_TIMEOUT_SECONDS)
+        self.assertEqual(run.call_args.kwargs["env"], self.environment)
 
     @mock.patch.object(DISPLAY.subprocess, "run")
     def test_converts_subprocess_timeout_to_stable_error(self, run: mock.Mock) -> None:
@@ -112,7 +205,7 @@ class ClientDisplayTests(unittest.TestCase):
         run.side_effect = subprocess.TimeoutExpired(["kscreen-doctor", "-j"], 5)
 
         with self.assertRaisesRegex(DISPLAY.DisplayCommandTimeout, "^kscreen_read_timeout$"):
-            DISPLAY.read_configuration()
+            DISPLAY.read_configuration(self.environment)
 
     @mock.patch.object(DISPLAY.subprocess, "run")
     def test_apply_timeout_retains_state_and_reports_virtual_fallback(self, run: mock.Mock) -> None:
@@ -122,7 +215,11 @@ class ClientDisplayTests(unittest.TestCase):
             subprocess.TimeoutExpired(["kscreen-doctor", "output.DP-1.mode.6"], 10),
         ]
 
-        with mock.patch.object(DISPLAY.os, "environ", self.environment), mock.patch.object(DISPLAY.sys, "stderr") as stderr:
+        with (
+            mock.patch.object(DISPLAY, "refresh_graphical_environment", return_value=self.environment),
+            mock.patch.object(DISPLAY.os, "environ", self.environment),
+            mock.patch.object(DISPLAY.sys, "stderr") as stderr,
+        ):
             result = DISPLAY.main([str(SCRIPT), "apply"])
 
         self.assertEqual(result, DISPLAY.VIRTUAL_FALLBACK_EXIT_CODE)
@@ -137,7 +234,11 @@ class ClientDisplayTests(unittest.TestCase):
         state.write_text(json.dumps({"output": "DP-1", "mode_id": "1", "scale": 1.5}), encoding="utf-8")
         run.side_effect = subprocess.TimeoutExpired(["kscreen-doctor"], 10)
 
-        with mock.patch.object(DISPLAY.os, "environ", self.environment), mock.patch.object(DISPLAY.sys, "stderr") as stderr:
+        with (
+            mock.patch.object(DISPLAY, "refresh_graphical_environment", return_value=self.environment),
+            mock.patch.object(DISPLAY.os, "environ", self.environment),
+            mock.patch.object(DISPLAY.sys, "stderr") as stderr,
+        ):
             result = DISPLAY.main([str(SCRIPT), "revert"])
 
         self.assertEqual(result, 1)
