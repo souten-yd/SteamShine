@@ -30,6 +30,13 @@ TEST(ProcessCommandSelectionTest, RestoresSafeOwnedVirtualDesktopDefault) {
   EXPECT_EQ(proc::select_effective_command("", true, ""), "plasmawindowed org.kde.plasma.folder");
 }
 
+TEST(ProcessCommandSelectionTest, SelectsOwnedDesktopOnlyForCaptureOnlyApplication) {
+  EXPECT_TRUE(proc::should_launch_owned_virtual_desktop("", 0, true));
+  EXPECT_FALSE(proc::should_launch_owned_virtual_desktop("", 1, true));
+  EXPECT_FALSE(proc::should_launch_owned_virtual_desktop("game --launch", 0, true));
+  EXPECT_FALSE(proc::should_launch_owned_virtual_desktop("", 0, false));
+}
+
 class ProcessPNGTest: public BaseTest {
 protected:
   void SetUp() override {

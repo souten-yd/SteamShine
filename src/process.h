@@ -13,6 +13,7 @@
 #endif
 
 // standard includes
+#include <cstddef>
 #include <optional>
 #include <string_view>
 #include <unordered_map>
@@ -33,6 +34,16 @@
 #define DEFAULT_APP_IMAGE_PATH SUNSHINE_ASSETS_DIR "/box.png"
 
 namespace proc {
+  /**
+   * @brief Decide whether an application needs the owned private Desktop surface.
+   *
+   * @param app_command Configured primary application command.
+   * @param detached_command_count Number of configured detached launch commands.
+   * @param owned_virtual_display Whether the selected display is SteamShine-owned.
+   * @return True only for a capture-only application inside an owned display.
+   */
+  bool should_launch_owned_virtual_desktop(std::string_view app_command, std::size_t detached_command_count, bool owned_virtual_display);
+
   /**
    * @brief Select the command that represents a configured application launch.
    *

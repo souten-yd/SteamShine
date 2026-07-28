@@ -161,6 +161,21 @@ That preserves early autostart, pairing, Game Mode, and headless operation while
 making physical Desktop preparation use the session that actually exists at the
 time of the Moonlight request.
 
+### 7. Owned-session application surface selection
+
+The private Desktop fallback is a minimal non-singleton Plasma folder surface;
+it is not a complete Plasma session. It is launched only for a capture-only
+application that has neither a primary command nor detached commands. A
+commandless application with detached launch commands, such as Steam Big
+Picture, relies on those commands and may show the existing bounded black startup
+frame until its first real surface appears. Launching the folder fallback in
+parallel would allow it to cover the requested application's surface and is
+therefore excluded.
+
+This decision is based on launch semantics, not a localized application name,
+icon, or hard-coded Steam command. Physical Desktop and attached existing Game
+Mode remain capture-only and never receive the private folder fallback.
+
 ## Delivery sequence
 
 1. Record baseline producer PTS/sequence/damage and current encoded cadence.
@@ -169,10 +184,11 @@ time of the Moonlight request.
 4. Separate capture arrival from output deadlines and add static/IDR policy.
 5. Add KScreen timeout behavior, launch-time graphical-environment refresh, and
    integration tests.
-6. Run synthetic PipeWire integration cases and full CI.
-7. Run hardware acceptance. Only then evaluate the owned-session refresh flag if
+6. Prevent the private Desktop fallback from obscuring detached applications.
+7. Run synthetic PipeWire integration cases and full CI.
+8. Run hardware acceptance. Only then evaluate the owned-session refresh flag if
    producer evidence still shows a Gamescope-side limit.
-8. Push independently tested commits to the fork branch backing draft PR #10,
+9. Push independently tested commits to the fork branch backing draft PR #10,
    then update its title/body and matching artifact after the full acceptance
    matrix is complete.
 

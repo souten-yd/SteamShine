@@ -46,6 +46,14 @@ namespace proc {
 
   proc_t proc;  ///< Global process registry used to track and terminate child processes.
 
+  bool should_launch_owned_virtual_desktop(
+    const std::string_view app_command,
+    const std::size_t detached_command_count,
+    const bool owned_virtual_display
+  ) {
+    return owned_virtual_display && app_command.empty() && detached_command_count == 0;
+  }
+
   std::string select_effective_command(
     const std::string_view app_command,
     const bool owned_virtual_display,
@@ -182,10 +190,11 @@ namespace proc {
     _app_prep_it = _app_prep_begin;
 
     const auto virtual_status {steamos_virtual_session::status_snapshot()};
-    const bool launch_owned_virtual_desktop {
-      _app.cmd.empty() &&
+    const bool launch_owned_virtual_desktop {should_launch_owned_virtual_desktop(
+      _app.cmd,
+      _app.detached.size(),
       virtual_status.origin == steamos_virtual_session::session_origin_e::owned_private
-    };
+    )};
     const std::string effective_command {
       select_effective_command(_app.cmd, launch_owned_virtual_desktop, config::steamos_virtual_display.virtual_desktop_command)
     };
