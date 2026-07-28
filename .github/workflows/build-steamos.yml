@@ -276,7 +276,7 @@ jobs:
           cmake --build cmake-build-steamos-lifecycle --target test_steamos_virtual_session_lifecycle --parallel 2
           cmake-build-steamos-lifecycle/test_steamos_virtual_session_lifecycle --gtest_color=yes
           cmake --build cmake-build-steamos --target test_sunshine --parallel 2
-          cmake-build-steamos/tests/test_sunshine --gtest_filter='WebServicesTest.*:ImageFallbackTests.*:InputPacketQueue.*:GamescopeInputMappingTest.*:ProcessCommandSelectionTest.*:VideoPipelineDiagnostics.*:VideoPipelineBackpressure.*' --gtest_color=yes
+          cmake-build-steamos/tests/test_sunshine --gtest_filter='WebServicesTest.*:ImageFallbackTests.*:InputPacketQueue.*:GamescopeInputMappingTest.*:ProcessCommandSelectionTest.*:ProcessEnvironmentTest.*:VideoPipelineDiagnostics.*:VideoPipelineBackpressure.*' --gtest_color=yes
           python3 -m unittest -v tests.integration.test_steamos_client_display
           tests/integration/test_steamshine_script.sh
           tests/integration/test_steamos_force_hardware_script.sh
