@@ -1104,6 +1104,11 @@ namespace pipewire {
           return platf::capture_e::ok;
         }
 
+        // Rejected buffers are never consumed by conversion. Return their
+        // lease now instead of waiting for a later image-pool reuse.
+        img_pipewire->reset();
+        img_pipewire->data = nullptr;
+
         // No valid frame yet, or it was a duplicate
         retries++;
       }
