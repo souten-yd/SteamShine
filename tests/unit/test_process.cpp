@@ -72,6 +72,8 @@ TEST(ProcessDisplayEnvironmentTest, AppliesVerifiedDynamicGamescopeEndpoint) {
       .pipewire_remote = "pipewire-0",
       .pulse_runtime_path = "/run/user/1000/pulse",
       .dbus_session_bus_address = "unix:path=/run/user/1000/bus",
+      .xdg_session_type = "wayland",
+      .xdg_current_desktop = "gamescope",
       .verification = steamos_virtual_session::display_verification_e::verified,
     };
 
@@ -81,7 +83,40 @@ TEST(ProcessDisplayEnvironmentTest, AppliesVerifiedDynamicGamescopeEndpoint) {
     EXPECT_EQ(environment["XAUTHORITY"].to_string(), endpoint.xauthority);
     EXPECT_EQ(environment["GAMESCOPE_WAYLAND_DISPLAY"].to_string(), "gamescope-0");
     EXPECT_EQ(environment["DBUS_SESSION_BUS_ADDRESS"].to_string(), endpoint.dbus_session_bus_address);
+    EXPECT_EQ(environment["XDG_SESSION_TYPE"].to_string(), "wayland");
+    EXPECT_EQ(environment["XDG_CURRENT_DESKTOP"].to_string(), "gamescope");
   }
+}
+
+/**
+ * @brief Verify stock SteamOS auth-less Xwayland launches do not inherit stale desktop credentials.
+ */
+TEST(ProcessDisplayEnvironmentTest, RemovesXauthorityForVerifiedAuthlessGamescopeEndpoint) {
+  boost::process::v1::environment environment;
+  environment["XAUTHORITY"] = "/run/user/1000/desktop-xauthority";
+  environment["WAYLAND_DISPLAY"] = "wayland-0";
+  environment["XDG_SESSION_TYPE"] = "wayland";
+  const steamos_virtual_session::session_display_endpoint_t endpoint {
+    .origin = steamos_virtual_session::session_origin_e::attached_existing,
+    .xdg_runtime_directory = "/run/user/1000",
+    .wayland_display = "",
+    .gamescope_wayland_display = "gamescope-0",
+    .x11_display = ":0",
+    .pipewire_runtime_directory = "/run/user/1000",
+    .pipewire_remote = "pipewire-0",
+    .pulse_runtime_path = "/run/user/1000/pulse",
+    .xdg_session_type = "x11",
+    .xdg_current_desktop = "gamescope",
+    .verification = steamos_virtual_session::display_verification_e::verified,
+  };
+
+  proc::apply_session_display_environment(environment, endpoint);
+
+  EXPECT_TRUE(environment.find("XAUTHORITY") == environment.end());
+  EXPECT_TRUE(environment.find("WAYLAND_DISPLAY") == environment.end());
+  EXPECT_EQ(environment["DISPLAY"].to_string(), ":0");
+  EXPECT_EQ(environment["XDG_SESSION_TYPE"].to_string(), "x11");
+  EXPECT_EQ(environment["XDG_CURRENT_DESKTOP"].to_string(), "gamescope");
 }
 
 /**
@@ -123,6 +158,30 @@ TEST(ProcessDisplayEnvironmentTest, RemovesUnverifiedDbusAddressFromVirtualLaunc
   proc::apply_session_display_environment(environment, endpoint);
 
   EXPECT_TRUE(environment.find("DBUS_SESSION_BUS_ADDRESS") == environment.end());
+}
+
+TEST(ProcessCommandSelectionTest, SelectsOwnedDesktopOnlyForCaptureOnlyApplication) {
+  EXPECT_TRUE(proc::should_launch_owned_virtual_desktop("", 0, true));
+  EXPECT_FALSE(proc::should_launch_owned_virtual_desktop("", 1, true));
+  EXPECT_FALSE(proc::should_launch_owned_virtual_desktop("game --launch", 0, true));
+  EXPECT_FALSE(proc::should_launch_owned_virtual_desktop("", 0, false));
+}
+
+TEST(ProcessEnvironmentTest, RestoresBaselineBetweenLaunches) {
+  boost::process::v1::environment baseline;
+  baseline["STEAMSHINE_PROCESS_TEST_BASELINE"] = "configured";
+
+  auto launch_environment {baseline};
+  launch_environment["XDG_RUNTIME_DIR"] = "/owned/runtime";
+  launch_environment["WAYLAND_DISPLAY"] = "gamescope-0";
+  launch_environment["PIPEWIRE_REMOTE"] = "owned-pipewire";
+
+  proc::reset_launch_environment(launch_environment, baseline);
+
+  EXPECT_EQ(launch_environment["STEAMSHINE_PROCESS_TEST_BASELINE"].to_string(), "configured");
+  EXPECT_TRUE(launch_environment["XDG_RUNTIME_DIR"].empty());
+  EXPECT_TRUE(launch_environment["WAYLAND_DISPLAY"].empty());
+  EXPECT_TRUE(launch_environment["PIPEWIRE_REMOTE"].empty());
 }
 
 class ProcessPNGTest: public BaseTest {

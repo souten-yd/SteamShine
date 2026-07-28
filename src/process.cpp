@@ -51,6 +51,21 @@ namespace proc {
 
   proc_t proc;  ///< Global process registry used to track and terminate child processes.
 
+  bool should_launch_owned_virtual_desktop(
+    const std::string_view app_command,
+    const std::size_t detached_command_count,
+    const bool owned_virtual_display
+  ) {
+    return owned_virtual_display && app_command.empty() && detached_command_count == 0;
+  }
+
+  void reset_launch_environment(
+    boost::process::v1::environment &environment,
+    const boost::process::v1::environment &baseline
+  ) {
+    environment = baseline;
+  }
+
   std::string select_effective_command(
     const std::string_view app_command,
     const bool owned_virtual_display,
@@ -73,10 +88,18 @@ namespace proc {
       return;
     }
     environment["XDG_RUNTIME_DIR"] = endpoint->xdg_runtime_directory;
-    environment["WAYLAND_DISPLAY"] = endpoint->wayland_display;
+    if (!endpoint->wayland_display.empty()) {
+      environment["WAYLAND_DISPLAY"] = endpoint->wayland_display;
+    } else {
+      environment.erase("WAYLAND_DISPLAY");
+    }
     environment["GAMESCOPE_WAYLAND_DISPLAY"] = endpoint->gamescope_wayland_display;
     environment["DISPLAY"] = endpoint->x11_display;
-    environment["XAUTHORITY"] = endpoint->xauthority;
+    if (!endpoint->xauthority.empty()) {
+      environment["XAUTHORITY"] = endpoint->xauthority;
+    } else {
+      environment.erase("XAUTHORITY");
+    }
     environment["PIPEWIRE_RUNTIME_DIR"] = endpoint->pipewire_runtime_directory;
     environment["PIPEWIRE_REMOTE"] = endpoint->pipewire_remote;
     environment["PULSE_RUNTIME_PATH"] = endpoint->pulse_runtime_path;
@@ -84,6 +107,16 @@ namespace proc {
       environment["DBUS_SESSION_BUS_ADDRESS"] = endpoint->dbus_session_bus_address;
     } else {
       environment.erase("DBUS_SESSION_BUS_ADDRESS");
+    }
+    if (!endpoint->xdg_session_type.empty()) {
+      environment["XDG_SESSION_TYPE"] = endpoint->xdg_session_type;
+    } else {
+      environment.erase("XDG_SESSION_TYPE");
+    }
+    if (!endpoint->xdg_current_desktop.empty()) {
+      environment["XDG_CURRENT_DESKTOP"] = endpoint->xdg_current_desktop;
+    } else {
+      environment.erase("XDG_CURRENT_DESKTOP");
     }
   }
 
@@ -193,6 +226,7 @@ namespace proc {
   int proc_t::execute(int app_id, std::shared_ptr<rtsp_stream::launch_session_t> launch_session) {
     // Ensure starting from a clean slate
     terminate();
+    reset_launch_environment(_env, _base_env);
 
     auto iter = std::find_if(_apps.begin(), _apps.end(), [&app_id](const auto app) {
       return app.id == std::to_string(app_id);
@@ -209,10 +243,11 @@ namespace proc {
     _app_prep_it = _app_prep_begin;
 
     const auto virtual_status {steamos_virtual_session::status_snapshot()};
-    const bool launch_owned_virtual_desktop {
-      _app.cmd.empty() &&
+    const bool launch_owned_virtual_desktop {should_launch_owned_virtual_desktop(
+      _app.cmd,
+      _app.detached.size(),
       virtual_status.origin == steamos_virtual_session::session_origin_e::owned_private
-    };
+    )};
     const std::string effective_command {
       select_effective_command(_app.cmd, launch_owned_virtual_desktop, config::steamos_virtual_display.virtual_desktop_command)
     };

@@ -36,6 +36,8 @@ namespace steam_session {
     std::string xauthority;  ///< `XAUTHORITY` environment value.
     std::string gamescope_wayland_display;  ///< `GAMESCOPE_WAYLAND_DISPLAY` environment value.
     std::string dbus_session_bus_address;  ///< `DBUS_SESSION_BUS_ADDRESS` environment value.
+    std::string xdg_session_type;  ///< `XDG_SESSION_TYPE` environment value.
+    std::string xdg_current_desktop;  ///< `XDG_CURRENT_DESKTOP` environment value.
     std::string cgroup;  ///< Process cgroup membership.
     bool metadata_readable {true};  ///< Whether required process metadata was read safely.
   };
@@ -52,6 +54,9 @@ namespace steam_session {
     std::string x11_display;  ///< Dynamic Gamescope `DISPLAY` value.
     std::string xauthority;  ///< Xwayland authorization file path.
     std::string dbus_session_bus_address;  ///< Resident session bus address.
+    std::string xdg_session_type;  ///< Resident display protocol classification.
+    std::string xdg_current_desktop;  ///< Resident desktop identity.
+    bool allows_authless_xwayland {false};  ///< Whether the exact SteamOS vendor unit pair permits an omitted `XAUTHORITY`.
   };
 
   /**
