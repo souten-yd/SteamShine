@@ -199,6 +199,16 @@ TEST(VideoPipelineDiagnostics, RecordsBoundedStages) {
 }
 
 /**
+ * @brief Verify bounded queue saturation reports a consumer-limited pipeline.
+ */
+TEST(VideoPipelineDiagnostics, ReportsConsumerLimitedAtQueueCapacity) {
+  video::reset_pipeline_diagnostics();
+  video::record_capture_enqueued(std::nullopt, false, video::CAPTURE_QUEUE_FRAME_LIMIT);
+
+  EXPECT_EQ(video::pipeline_diagnostics_snapshot().output_status_reason, "consumer_limited");
+}
+
+/**
  * @brief Verify duplicate client IDR requests are limited without delaying recovery.
  */
 TEST(VideoPipelineDiagnostics, RateLimitsOnlyDuplicateClientIdrRequests) {

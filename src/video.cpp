@@ -380,7 +380,7 @@ namespace video {
     const auto request_den {requested_fps_denominator.load(std::memory_order_relaxed)};
     const auto requested_fps {request_den == 0 ? 0.0 : static_cast<double>(request_num) / request_den};
     std::string status_reason {"ok"};
-    if (pipewire_queue_overflows.load(std::memory_order_relaxed) > 0) {
+    if (pipewire_queue_overflows.load(std::memory_order_relaxed) > 0 || capture_queue_max.load(std::memory_order_relaxed) >= CAPTURE_QUEUE_FRAME_LIMIT || network_queue_frames_max.load(std::memory_order_relaxed) >= NETWORK_QUEUE_FRAME_LIMIT) {
       status_reason = "consumer_limited";
     } else if (output_static_mode.load(std::memory_order_relaxed)) {
       status_reason = "static_content";
