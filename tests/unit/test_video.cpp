@@ -138,9 +138,9 @@ TEST(VideoPipelineDiagnostics, RecordsBoundedStages) {
   video::record_encode_finished();
   video::record_encode_started(std::nullopt, false);
   video::record_encode_finished();
-  video::record_encode_started(std::nullopt, true);
-  video::record_encode_finished();
   video::record_encode_started(std::nullopt, false);
+  video::record_encode_finished();
+  video::record_encode_started(std::nullopt, true);
   video::record_encode_finished();
   video::record_capture_deadline_misses(3);
   video::record_pipewire_buffer(false, false);
