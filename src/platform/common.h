@@ -516,6 +516,7 @@ namespace platf {
     std::int32_t row_pitch {};  ///< Bytes between consecutive image rows.
 
     std::optional<std::chrono::steady_clock::time_point> frame_timestamp;  ///< Capture timestamp associated with the frame.
+    std::uint64_t source_generation {0};  ///< Monotonic unique-source generation assigned by capture.
 
     /**
      * @brief Destroy the image.

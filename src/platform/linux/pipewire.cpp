@@ -3,6 +3,7 @@
  * @brief Shared classes for pipewire-based capture methods.
  */
 // standard includes
+#include <deque>
 #include <fstream>
 
 // lib includes
@@ -57,6 +58,80 @@ namespace {
 using namespace std::literals;
 
 namespace pipewire {
+  constexpr std::size_t pending_dma_buf_limit {4};  ///< Maximum ordered PipeWire buffers retained before explicit overflow.
+
+  /**
+   * @brief PipeWire stream state shared with outstanding DMA-BUF image leases.
+   */
+  struct buffer_release_state_t {
+    std::mutex mutex;  ///< Serializes stream teardown and buffer returns.
+    struct pw_thread_loop *loop {nullptr};  ///< PipeWire loop used to return buffers safely.
+    struct pw_stream *stream {nullptr};  ///< Active stream owning leased buffers.
+    std::atomic<bool> active {false};  ///< Whether outstanding leases may return buffers.
+
+    /**
+     * @brief Return one leased buffer exactly once while the stream is active.
+     *
+     * @param buffer PipeWire buffer retained by a captured image.
+     */
+    void release(struct pw_buffer *buffer) {
+      if (!buffer || !loop || !active.load(std::memory_order_acquire)) {
+        return;
+      }
+      const bool lock_needed {!pw_thread_loop_in_thread(loop)};
+      if (lock_needed) {
+        pw_thread_loop_lock(loop);
+      }
+      {
+        std::scoped_lock lock {mutex};
+        if (active.load(std::memory_order_acquire) && stream) {
+          pw_stream_queue_buffer(stream, buffer);
+        }
+      }
+      if (lock_needed) {
+        pw_thread_loop_unlock(loop);
+      }
+    }
+
+    /**
+     * @brief Disable future buffer returns before destroying the PipeWire stream.
+     */
+    void deactivate() {
+      std::scoped_lock lock {mutex};
+      active.store(false, std::memory_order_release);
+      stream = nullptr;
+    }
+  };
+
+  /**
+   * @brief RAII lease retaining a PipeWire buffer until its image is reusable.
+   */
+  struct buffer_lease_t {
+    std::shared_ptr<buffer_release_state_t> state;  ///< Stream state used for safe release.
+    struct pw_buffer *buffer {nullptr};  ///< Retained PipeWire buffer.
+
+    /**
+     * @brief Retain one PipeWire buffer for a captured image.
+     *
+     * @param release_state Shared stream state used for safe release.
+     * @param source_buffer PipeWire buffer retained until destruction.
+     */
+    buffer_lease_t(std::shared_ptr<buffer_release_state_t> release_state, struct pw_buffer *source_buffer):
+        state(std::move(release_state)),
+        buffer(source_buffer) {
+    }
+
+    buffer_lease_t(const buffer_lease_t &) = delete;
+    buffer_lease_t &operator=(const buffer_lease_t &) = delete;
+
+    /**
+     * @brief Return the retained buffer when the final image reference releases it.
+     */
+    ~buffer_lease_t() {
+      state->release(buffer);
+    }
+  };
+
   /**
    * @brief PipeWire SPA format mapped to Sunshine pixel format.
    */
@@ -90,13 +165,34 @@ namespace pipewire {
   };
 
   /**
+   * @brief Metadata copied while a PipeWire buffer is owned by the callback.
+   */
+  struct frame_metadata_t {
+    std::chrono::steady_clock::time_point arrival_time {};  ///< Local monotonic source-arrival timestamp.
+    std::optional<std::uint64_t> pts;  ///< Producer presentation timestamp when supplied.
+    std::optional<std::uint64_t> seq;  ///< Producer sequence number when supplied.
+    std::optional<bool> damage;  ///< Whether VideoDamage explicitly reports changed pixels.
+    std::optional<std::uint32_t> flags;  ///< SPA chunk flags copied before the buffer is returned.
+  };
+
+  /**
+   * @brief One retained DMA-BUF and metadata in producer order.
+   */
+  struct pending_buffer_t {
+    struct pw_buffer *buffer {nullptr};  ///< PipeWire buffer retained until capture accepts it.
+    frame_metadata_t metadata;  ///< Metadata sampled at callback arrival.
+  };
+
+  /**
    * @brief PipeWire stream handle, format, and shared state pointer.
    */
   struct stream_data_t {
     struct pw_stream *stream;  ///< PipeWire stream handle used for screencast frames.
     struct spa_hook stream_listener;  ///< Hook registering callbacks on the PipeWire stream.
     struct spa_video_info format;  ///< Negotiated PipeWire video format.
-    struct pw_buffer *current_buffer;  ///< PipeWire buffer currently exposed to the capture thread.
+    std::deque<pending_buffer_t> pending_dma_bufs;  ///< Ordered DMA-BUFs waiting for capture.
+    frame_metadata_t current_memory_metadata;  ///< Metadata paired with the current MemPtr staging copy.
+    std::shared_ptr<buffer_release_state_t> release_state;  ///< State shared with outstanding image leases.
     uint64_t drm_format;  ///< DRM format.
     std::shared_ptr<shared_state_t> shared;  ///< State shared between PipeWire callbacks and the capture backend.
     std::mutex frame_mutex;  ///< Synchronizes access to the current PipeWire frame.
@@ -130,7 +226,18 @@ namespace pipewire {
    * @brief Pipewire image assembled for encoding.
    */
   struct img_descriptor_t: public egl::img_descriptor_t {
+    std::shared_ptr<buffer_lease_t> buffer_lease;  ///< Source buffer retained through encode conversion.
+
+    /**
+     * @brief Release the previous PipeWire buffer and close duplicated DMA-BUF descriptors.
+     */
+    void reset() {
+      buffer_lease.reset();
+      egl::img_descriptor_t::reset();
+    }
+
     ~img_descriptor_t() override {
+      reset();
       if (data) {
         delete[] data;
         data = nullptr;
@@ -144,7 +251,10 @@ namespace pipewire {
   class pipewire_t {
   public:
     pipewire_t():
-        loop(pw_thread_loop_new("Pipewire thread", nullptr)) {
+        loop(pw_thread_loop_new("Pipewire thread", nullptr)),
+        release_state(std::make_shared<buffer_release_state_t>()) {
+      release_state->loop = loop;
+      stream_data.release_state = release_state;
       BOOST_LOG(debug) << "[pipewire] Start PW thread loop"sv;
       pw_thread_loop_start(loop);
     }
@@ -158,8 +268,14 @@ namespace pipewire {
       {
         std::scoped_lock lock(stream_data.frame_mutex);
         stream_data.frame_ready = false;
-        stream_data.current_buffer = nullptr;
+        for (const auto &pending : stream_data.pending_dma_bufs) {
+          if (stream_data.stream) {
+            pw_stream_queue_buffer(stream_data.stream, pending.buffer);
+          }
+        }
+        stream_data.pending_dma_bufs.clear();
       }
+      release_state->deactivate();
 
       // Release pipewire stream
       if (stream_data.stream) {
@@ -218,7 +334,7 @@ namespace pipewire {
      * @return True when PipeWire has delivered a frame ready for capture.
      */
     bool is_frame_ready() const {
-      return stream_data.frame_ready;
+      return stream_data.frame_ready || !stream_data.pending_dma_bufs.empty();
     }
 
     /**
@@ -299,6 +415,11 @@ namespace pipewire {
 
         BOOST_LOG(debug) << "[pipewire] Create PW stream"sv;
         stream_data.stream = pw_stream_new(core, "Sunshine Video Capture", props);
+        {
+          std::scoped_lock lock {release_state->mutex};
+          release_state->stream = stream_data.stream;
+          release_state->active.store(true, std::memory_order_release);
+        }
         pw_stream_add_listener(stream_data.stream, &stream_data.stream_listener, &stream_events, &stream_data);
 
         std::array<uint8_t, SPA_POD_BUFFER_SIZE> buffer;
@@ -370,27 +491,14 @@ namespace pipewire {
      * @brief Copy PipeWire metadata into the Sunshine image descriptor.
      *
      * @param img_descriptor Image descriptor receiving timestamps, sequence, and damage flags.
-     * @param buf Raw byte buffer used for serialization.
+     * @param metadata Metadata sampled at callback arrival.
      */
-    static void fill_img_metadata(egl::img_descriptor_t *img_descriptor, struct spa_buffer *buf) {
-      img_descriptor->frame_timestamp = std::chrono::steady_clock::now();
-
-      struct spa_meta_header *h = static_cast<struct spa_meta_header *>(
-        spa_buffer_find_meta_data(buf, SPA_META_Header, sizeof(*h))
-      );
-      if (h) {
-        img_descriptor->seq = h->seq;
-        img_descriptor->pts = h->pts;
-      }
-
-      if (buf->n_datas > 0) {
-        img_descriptor->pw_flags = buf->datas[0].chunk->flags;
-      }
-
-      struct spa_meta_region *damage = static_cast<struct spa_meta_region *>(
-        spa_buffer_find_meta_data(buf, SPA_META_VideoDamage, sizeof(*damage))
-      );
-      img_descriptor->pw_damage = damage ? std::optional<bool>(damage->region.size.width > 0 && damage->region.size.height > 0) : std::nullopt;
+    static void fill_img_metadata(egl::img_descriptor_t *img_descriptor, const frame_metadata_t &metadata) {
+      img_descriptor->frame_timestamp = metadata.arrival_time;
+      img_descriptor->seq = metadata.seq;
+      img_descriptor->pts = metadata.pts;
+      img_descriptor->pw_flags = metadata.flags;
+      img_descriptor->pw_damage = metadata.damage;
     }
 
     /**
@@ -420,30 +528,39 @@ namespace pipewire {
     void fill_img(platf::img_t *img) {
       pw_thread_loop_lock(loop);
       std::scoped_lock lock(stream_data.frame_mutex);
+      auto *img_descriptor {static_cast<img_descriptor_t *>(img)};
 
       if (stream_data.shared && stream_data.shared->stream_dead.load()) {
         img->data = nullptr;
-        close_img_fds(static_cast<egl::img_descriptor_t *>(img));
+        close_img_fds(img_descriptor);
         pw_thread_loop_unlock(loop);
         return;
       }
 
-      if (!stream_data.current_buffer) {
+      struct pw_buffer *source_buffer {nullptr};
+      frame_metadata_t metadata;
+      if (!stream_data.pending_dma_bufs.empty()) {
+        source_buffer = stream_data.pending_dma_bufs.front().buffer;
+        metadata = stream_data.pending_dma_bufs.front().metadata;
+        stream_data.pending_dma_bufs.pop_front();
+      }
+      if (!source_buffer && !stream_data.frame_ready) {
         img->data = nullptr;
         pw_thread_loop_unlock(loop);
         return;
       }
 
-      struct spa_buffer *buf = stream_data.current_buffer->buffer;
-      if (buf->datas[0].chunk->size != 0) {
-        auto *img_descriptor = static_cast<egl::img_descriptor_t *>(img);
-        fill_img_metadata(img_descriptor, buf);
-        if (buf->datas[0].type == SPA_DATA_DmaBuf) {
+      if (source_buffer) {
+        struct spa_buffer *buf = source_buffer->buffer;
+        img_descriptor->buffer_lease = std::make_shared<buffer_lease_t>(stream_data.release_state, source_buffer);
+        if (buf->datas[0].chunk->size != 0) {
+          fill_img_metadata(img_descriptor, metadata);
           fill_img_dmabuf(img_descriptor, buf, stream_data);
-        } else {
-          img->data = stream_data.front_buffer->data();
-          img->row_pitch = stream_data.local_stride;
         }
+      } else if (!stream_data.front_buffer->empty()) {
+        fill_img_metadata(img_descriptor, stream_data.current_memory_metadata);
+        img->data = stream_data.front_buffer->data();
+        img->row_pitch = stream_data.local_stride;
       }
 
       pw_thread_loop_unlock(loop);
@@ -460,6 +577,7 @@ namespace pipewire {
 
   private:
     struct pw_thread_loop *loop;
+    std::shared_ptr<buffer_release_state_t> release_state;  ///< State retained by outstanding DMA-BUF leases.
     struct pw_context *context;
     struct pw_core *core;
     struct spa_hook core_listener;
@@ -547,25 +665,35 @@ namespace pipewire {
             {
               std::scoped_lock lock(d->frame_mutex);
               d->frame_ready = false;
-              d->current_buffer = nullptr;
+              for (const auto &pending : d->pending_dma_bufs) {
+                pw_stream_queue_buffer(d->stream, pending.buffer);
+              }
+              d->pending_dma_bufs.clear();
               d->shared->stream_dead.store(true);
               d->shared->current_state = state;
               d->shared->previous_state = old;
               d->shared->err_msg = "";
             }
+            d->release_state->deactivate();
             d->frame_cv.notify_all();
           }
           break;
         case PW_STREAM_STATE_ERROR:
-          {
+          if (d->shared) {
             std::scoped_lock lock(d->frame_mutex);
             d->shared->current_state = state;
             d->shared->previous_state = old;
-            d->shared->err_msg = std::string(err_msg);
+            d->shared->err_msg = err_msg ? std::string(err_msg) : std::string {};
           }
           [[fallthrough]];
         case PW_STREAM_STATE_UNCONNECTED:
           if (d->shared) {
+            {
+              std::scoped_lock lock(d->frame_mutex);
+              d->frame_ready = false;
+              d->pending_dma_bufs.clear();
+            }
+            d->release_state->deactivate();
             d->shared->stream_dead.store(true);
             d->frame_cv.notify_all();
           }
@@ -581,80 +709,104 @@ namespace pipewire {
      * @param d PipeWire stream state retaining the preceding valid PTS.
      * @param buffer Buffer whose header and damage metadata are inspected.
      */
-    static void record_buffer_metadata(stream_data_t *d, struct spa_buffer *buffer) {
+    static frame_metadata_t record_buffer_metadata(stream_data_t *d, struct spa_buffer *buffer) {
+      frame_metadata_t metadata {
+        .arrival_time = std::chrono::steady_clock::now(),
+      };
       const auto *header {static_cast<struct spa_meta_header *>(
         spa_buffer_find_meta_data(buffer, SPA_META_Header, sizeof(struct spa_meta_header))
       )};
       const bool valid_pts {header && header->pts != SPA_TIME_INVALID};
       const bool redundant_pts {valid_pts && d->last_received_pts && header->pts == *d->last_received_pts};
+      if (header) {
+        metadata.seq = header->seq;
+      }
       if (valid_pts) {
+        metadata.pts = header->pts;
         d->last_received_pts = header->pts;
+      }
+
+      if (buffer->n_datas > 0) {
+        metadata.flags = buffer->datas[0].chunk->flags;
       }
 
       const auto *damage {static_cast<struct spa_meta_region *>(
         spa_buffer_find_meta_data(buffer, SPA_META_VideoDamage, sizeof(struct spa_meta_region))
       )};
       const bool no_damage {damage && (damage->region.size.width == 0 || damage->region.size.height == 0)};
+      metadata.damage = damage ? std::optional<bool> {!no_damage} : std::nullopt;
       video::record_pipewire_buffer(redundant_pts, no_damage);
+      return metadata;
     }
 
     static void on_process(void *user_data) {
       const auto d = static_cast<struct stream_data_t *>(user_data);
-      struct pw_buffer *b = nullptr;
+      struct pw_buffer *memory_buffer {nullptr};
+      frame_metadata_t memory_metadata;
+      bool frame_available {false};
 
-      // 1. Drain the queue: Always grab the most recent buffer
+      // Retain DMA-BUFs in producer order. MemPtr sources retain the newest
+      // staging copy because each accepted software frame requires a full copy.
       while (struct pw_buffer *aux = pw_stream_dequeue_buffer(d->stream)) {
-        record_buffer_metadata(d, aux->buffer);
-        if (b) {
-          pw_stream_queue_buffer(d->stream, b);  // Return the older, unused buffer
+        auto metadata {record_buffer_metadata(d, aux->buffer)};
+        if (aux->buffer->datas[0].type == SPA_DATA_DmaBuf) {
+          std::scoped_lock lock {d->frame_mutex};
+          if (d->pending_dma_bufs.size() < pending_dma_buf_limit) {
+            d->pending_dma_bufs.push_back({aux, metadata});
+            frame_available = true;
+          } else {
+            video::record_pipewire_queue_overflow();
+            pw_stream_queue_buffer(d->stream, aux);
+          }
+          continue;
         }
-        b = aux;
+        if (memory_buffer) {
+          video::record_pipewire_queue_overflow();
+          pw_stream_queue_buffer(d->stream, memory_buffer);
+        }
+        memory_buffer = aux;
+        memory_metadata = metadata;
       }
 
-      if (!b) {
-        return;
-      }
-
-      // 2. Fast Path: DMA-BUF
-      if (b->buffer->datas[0].type == SPA_DATA_DmaBuf) {
-        std::scoped_lock lock(d->frame_mutex);
-        if (d->current_buffer) {
-          pw_stream_queue_buffer(d->stream, d->current_buffer);
-        }
-        d->current_buffer = b;
-        d->frame_ready = true;
-      }
-      // 3. Optimized Path: Software/MemPtr
-      else if (b->buffer->datas[0].data != nullptr) {
-        size_t size = b->buffer->datas[0].chunk->size;
+      if (memory_buffer && memory_buffer->buffer->datas[0].data != nullptr) {
+        size_t size = memory_buffer->buffer->datas[0].chunk->size;
 
         // Perform the copy to the BACK buffer while NOT holding the lock
         if (d->back_buffer->size() < size) {
           d->back_buffer->resize(size);
         }
-        std::memcpy(d->back_buffer->data(), b->buffer->datas[0].data, size);
+        std::memcpy(d->back_buffer->data(), memory_buffer->buffer->datas[0].data, size);
 
         {
           // Lock only for the pointer swap and state update
           std::scoped_lock lock(d->frame_mutex);
           std::swap(d->front_buffer, d->back_buffer);
 
-          d->local_stride = b->buffer->datas[0].chunk->stride;
+          d->local_stride = memory_buffer->buffer->datas[0].chunk->stride;
+          d->current_memory_metadata = memory_metadata;
           d->frame_ready = true;
-          d->current_buffer = b;
+          frame_available = true;
         }
 
         // Release the PW buffer immediately after copy
-        pw_stream_queue_buffer(d->stream, b);
+        pw_stream_queue_buffer(d->stream, memory_buffer);
       }
 
-      d->frame_cv.notify_one();
+      if (frame_available) {
+        d->frame_cv.notify_one();
+      }
     }
 
     static void on_param_changed(void *user_data, uint32_t id, const struct spa_pod *param) {
       const auto d = static_cast<struct stream_data_t *>(user_data);
 
-      d->current_buffer = nullptr;
+      {
+        std::scoped_lock lock {d->frame_mutex};
+        for (const auto &pending : d->pending_dma_bufs) {
+          pw_stream_queue_buffer(d->stream, pending.buffer);
+        }
+        d->pending_dma_bufs.clear();
+      }
 
       if (param == nullptr || id != SPA_PARAM_Format) {
         return;
@@ -679,6 +831,12 @@ namespace pipewire {
         BOOST_LOG(info) << "[pipewire] Framerate (from compositor): "sv << d->format.info.raw.framerate.num << "/"sv << d->format.info.raw.framerate.denom;
         BOOST_LOG(info) << "[pipewire] Framerate (from compositor, max): "sv << d->format.info.raw.max_framerate.num << "/"sv << d->format.info.raw.max_framerate.denom;
       }
+      video::record_pipewire_negotiated_frame_rate(
+        d->format.info.raw.framerate.num,
+        d->format.info.raw.framerate.denom,
+        d->format.info.raw.max_framerate.num,
+        d->format.info.raw.max_framerate.denom
+      );
 
       int physical_w = d->format.info.raw.size.width;
       int physical_h = d->format.info.raw.size.height;
@@ -941,14 +1099,14 @@ namespace pipewire {
           return platf::capture_e::interrupted;
         }
 
-        auto *img_egl = static_cast<egl::img_descriptor_t *>(img_out.get());
-        img_egl->reset();
-        pipewire.fill_img(img_egl);
+        auto *img_pipewire = static_cast<img_descriptor_t *>(img_out.get());
+        img_pipewire->reset();
+        pipewire.fill_img(img_pipewire);
 
         // Check if we got valid data (either DMA-BUF fd or memory pointer), then filter duplicates
-        if ((img_egl->sd.fds[0] >= 0 || img_egl->data != nullptr) && !is_buffer_redundant(img_egl)) {
+        if ((img_pipewire->sd.fds[0] >= 0 || img_pipewire->data != nullptr) && !is_buffer_redundant(img_pipewire)) {
           // Update frame metadata
-          update_metadata(img_egl, retries);
+          update_metadata(img_pipewire, retries);
           return platf::capture_e::ok;
         }
 
@@ -997,6 +1155,7 @@ namespace pipewire {
         return platf::capture_e::error;
       }
       sleep_overshoot_logger.reset();
+      const auto source_wait {std::max(1ms, std::chrono::duration_cast<std::chrono::milliseconds>(delay))};
 
       while (true) {
         // Check if PipeWire signaled a dead stream
@@ -1023,7 +1182,7 @@ namespace pipewire {
         }
 
         std::shared_ptr<platf::img_t> img_out;
-        switch (const auto status = snapshot(pull_free_image_cb, img_out, 1000ms, *cursor)) {
+        switch (const auto status = snapshot(pull_free_image_cb, img_out, source_wait, *cursor)) {
           case platf::capture_e::reinit:
           case platf::capture_e::error:
           case platf::capture_e::interrupted:
@@ -1174,7 +1333,7 @@ namespace pipewire {
       last_seq = img->seq;
       last_pts = img->pts;
       img->sequence = ++sequence;
-      video::record_pipewire_unique_frame();
+      video::record_pipewire_unique_frame(img->frame_timestamp);
 
       if (retries > 0) {
         BOOST_LOG(debug) << "[pipewire] Processed frame after " << retries << " redundant events."sv;

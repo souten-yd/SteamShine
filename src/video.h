@@ -6,6 +6,7 @@
 
 // standard includes
 #include <chrono>
+#include <string>
 
 // local includes
 #include "input.h"
@@ -125,6 +126,16 @@ namespace video {
     std::uint64_t pipewire_unique_frames {0};  ///< Valid unique PipeWire frames accepted for capture.
     std::uint64_t pipewire_redundant_pts {0};  ///< PipeWire buffers repeating the preceding PTS.
     std::uint64_t pipewire_no_damage_frames {0};  ///< PipeWire buffers explicitly reporting no damage.
+    std::uint64_t pipewire_queue_overflows {0};  ///< Source buffers rejected at the bounded producer handoff.
+    std::uint32_t requested_fps_numerator {0};  ///< Client-requested rational FPS numerator.
+    std::uint32_t requested_fps_denominator {1};  ///< Client-requested rational FPS denominator.
+    std::uint32_t negotiated_fps_numerator {0};  ///< PipeWire negotiated preferred FPS numerator.
+    std::uint32_t negotiated_fps_denominator {1};  ///< PipeWire negotiated preferred FPS denominator.
+    std::uint32_t negotiated_max_fps_numerator {0};  ///< PipeWire negotiated maximum FPS numerator.
+    std::uint32_t negotiated_max_fps_denominator {1};  ///< PipeWire negotiated maximum FPS denominator.
+    double observed_source_fps {0.0};  ///< Unique source generations observed per elapsed source interval.
+    double observed_encode_fps {0.0};  ///< Encoder submissions observed per elapsed encode interval.
+    std::string output_status_reason;  ///< Stable source/static/consumer status reason.
     latency_diagnostics::statistics_t source_interarrival_ms;  ///< Interarrival time between accepted unique source frames.
     latency_diagnostics::statistics_t encode_interarrival_ms;  ///< Interarrival time between encoder submissions.
     std::uint64_t network_queue_bytes {0};  ///< Encoded bytes waiting for the video sender.
@@ -168,8 +179,9 @@ namespace video {
    * @brief Mark the beginning of one frame encode operation.
    *
    * @param timestamp Source frame timestamp when available.
+   * @param unique_frame Whether this submission consumes a new source generation.
    */
-  void record_encode_started(const std::optional<std::chrono::steady_clock::time_point> &timestamp);
+  void record_encode_started(const std::optional<std::chrono::steady_clock::time_point> &timestamp, bool unique_frame);
 
   /**
    * @brief Mark completion of one frame encode operation.
@@ -193,8 +205,45 @@ namespace video {
 
   /**
    * @brief Record one valid unique PipeWire frame accepted by capture.
+   *
+   * @param timestamp Producer callback arrival time when available.
    */
-  void record_pipewire_unique_frame();
+  void record_pipewire_unique_frame(const std::optional<std::chrono::steady_clock::time_point> &timestamp = std::nullopt);
+
+  /**
+   * @brief Record one explicit overflow at the bounded PipeWire producer handoff.
+   */
+  void record_pipewire_queue_overflow();
+
+  /**
+   * @brief Record the client-requested rational output rate.
+   *
+   * @param numerator Requested FPS numerator.
+   * @param denominator Requested FPS denominator.
+   */
+  void record_requested_frame_rate(std::uint32_t numerator, std::uint32_t denominator);
+
+  /**
+   * @brief Record the rational frame rates negotiated with PipeWire.
+   *
+   * @param negotiated_num PipeWire preferred FPS numerator.
+   * @param negotiated_den PipeWire preferred FPS denominator.
+   * @param maximum_num PipeWire maximum FPS numerator.
+   * @param maximum_den PipeWire maximum FPS denominator.
+   */
+  void record_pipewire_negotiated_frame_rate(
+    std::uint32_t negotiated_num,
+    std::uint32_t negotiated_den,
+    std::uint32_t maximum_num,
+    std::uint32_t maximum_den
+  );
+
+  /**
+   * @brief Record whether static keepalive suppression is currently active.
+   *
+   * @param static_mode True while duplicate output is reduced to keepalives.
+   */
+  void record_output_static_mode(bool static_mode);
 
   /**
    * @brief Record an encoded frame after it enters the ordered network queue.

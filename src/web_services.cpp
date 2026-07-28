@@ -419,6 +419,22 @@ namespace web {
       {"pipewire_unique_frames", video_diagnostics.pipewire_unique_frames},
       {"pipewire_redundant_pts", video_diagnostics.pipewire_redundant_pts},
       {"pipewire_no_damage_frames", video_diagnostics.pipewire_no_damage_frames},
+      {"pipewire_queue_overflows", video_diagnostics.pipewire_queue_overflows},
+      {"requested_fps", {
+                          {"numerator", video_diagnostics.requested_fps_numerator},
+                          {"denominator", video_diagnostics.requested_fps_denominator},
+                        }},
+      {"negotiated_fps", {
+                           {"numerator", video_diagnostics.negotiated_fps_numerator},
+                           {"denominator", video_diagnostics.negotiated_fps_denominator},
+                         }},
+      {"negotiated_max_fps", {
+                               {"numerator", video_diagnostics.negotiated_max_fps_numerator},
+                               {"denominator", video_diagnostics.negotiated_max_fps_denominator},
+                             }},
+      {"observed_source_fps", video_diagnostics.observed_source_fps},
+      {"observed_encode_fps", video_diagnostics.observed_encode_fps},
+      {"output_status_reason", video_diagnostics.output_status_reason},
       {"source_interarrival_ms", latency_statistics_json(video_diagnostics.source_interarrival_ms)},
       {"encode_interarrival_ms", latency_statistics_json(video_diagnostics.encode_interarrival_ms)},
       {"network_queue_bytes", video_diagnostics.network_queue_bytes},

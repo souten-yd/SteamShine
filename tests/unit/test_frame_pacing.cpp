@@ -131,3 +131,43 @@ TEST(FramePacingDeadline, PreservesIrregularUniqueFrameOrder) {
   EXPECT_EQ(encoded, (std::vector<std::size_t> {0, 1, 2, 3, 4}));
   EXPECT_TRUE(pending.empty());
 }
+
+/**
+ * @brief Verify static content suppresses duplicate encodes until keepalive.
+ */
+TEST(FramePacingOutputPolicy, SuppressesStaticDuplicates) {
+  frame_pacing::output_policy_t policy {500ms, 1s};
+  policy.reset(at(0ms));
+
+  EXPECT_TRUE(policy.should_encode(at(499ms), false));
+  policy.record_output(at(499ms));
+  EXPECT_TRUE(policy.static_mode(at(500ms)));
+  EXPECT_FALSE(policy.should_encode(at(1498ms), false));
+  EXPECT_TRUE(policy.should_encode(at(1499ms), false));
+}
+
+/**
+ * @brief Verify a low-rate unique frame exits static mode without being lost.
+ */
+TEST(FramePacingOutputPolicy, UniqueFrameRestoresActiveOutput) {
+  frame_pacing::output_policy_t policy {500ms, 1s};
+  policy.reset(at(0ms));
+  policy.record_output(at(500ms));
+  ASSERT_TRUE(policy.static_mode(at(900ms)));
+
+  policy.observe_unique(at(900ms));
+  EXPECT_FALSE(policy.static_mode(at(900ms)));
+  EXPECT_TRUE(policy.should_encode(at(900ms), false));
+}
+
+/**
+ * @brief Verify IDR and reconnect requests bypass static keepalive suppression.
+ */
+TEST(FramePacingOutputPolicy, ForcedOutputBypassesStaticDelay) {
+  frame_pacing::output_policy_t policy {500ms, 1s};
+  policy.reset(at(0ms));
+  policy.record_output(at(500ms));
+
+  ASSERT_FALSE(policy.should_encode(at(600ms), false));
+  EXPECT_TRUE(policy.should_encode(at(600ms), true));
+}

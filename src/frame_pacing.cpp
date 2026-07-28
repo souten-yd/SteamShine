@@ -72,4 +72,30 @@ namespace frame_pacing {
     const auto offset {clamp_nanoseconds(numerator / rate_.numerator)};
     return epoch_ + std::chrono::nanoseconds {offset};
   }
+
+  output_policy_t::output_policy_t(const std::chrono::steady_clock::duration static_after, const std::chrono::steady_clock::duration keepalive_interval):
+      static_after_ {std::max(static_after, std::chrono::steady_clock::duration::zero())},
+      keepalive_interval_ {std::max(keepalive_interval, std::chrono::steady_clock::duration::zero())} {
+  }
+
+  void output_policy_t::reset(const std::chrono::steady_clock::time_point now) {
+    last_unique_ = now;
+    last_output_ = now;
+  }
+
+  void output_policy_t::observe_unique(const std::chrono::steady_clock::time_point now) {
+    last_unique_ = now;
+  }
+
+  bool output_policy_t::should_encode(const std::chrono::steady_clock::time_point now, const bool force_immediate) const {
+    return force_immediate || !static_mode(now) || now - last_output_ >= keepalive_interval_;
+  }
+
+  void output_policy_t::record_output(const std::chrono::steady_clock::time_point now) {
+    last_output_ = now;
+  }
+
+  bool output_policy_t::static_mode(const std::chrono::steady_clock::time_point now) const {
+    return now - last_unique_ >= static_after_;
+  }
 }  // namespace frame_pacing

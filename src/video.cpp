@@ -58,7 +58,17 @@ namespace video {
     std::atomic_uint64_t pipewire_unique_frames {0};  ///< Unique PipeWire frames accepted by capture.
     std::atomic_uint64_t pipewire_redundant_pts {0};  ///< PipeWire buffers repeating producer PTS.
     std::atomic_uint64_t pipewire_no_damage_frames {0};  ///< PipeWire buffers explicitly reporting no damage.
+    std::atomic_uint64_t pipewire_queue_overflows {0};  ///< Rejected buffers at the bounded producer handoff.
+    std::atomic_uint32_t requested_fps_numerator {0};  ///< Client-requested rational FPS numerator.
+    std::atomic_uint32_t requested_fps_denominator {1};  ///< Client-requested rational FPS denominator.
+    std::atomic_uint32_t negotiated_fps_numerator {0};  ///< PipeWire preferred FPS numerator.
+    std::atomic_uint32_t negotiated_fps_denominator {1};  ///< PipeWire preferred FPS denominator.
+    std::atomic_uint32_t negotiated_max_fps_numerator {0};  ///< PipeWire maximum FPS numerator.
+    std::atomic_uint32_t negotiated_max_fps_denominator {1};  ///< PipeWire maximum FPS denominator.
+    std::atomic_bool output_static_mode {false};  ///< Whether static keepalive suppression is active.
+    std::atomic_int64_t first_source_frame_microseconds {0};  ///< Timestamp of the first accepted source frame.
     std::atomic_int64_t last_source_frame_microseconds {0};  ///< Timestamp of the preceding accepted source frame.
+    std::atomic_int64_t first_encode_frame_microseconds {0};  ///< Timestamp of the first encoder submission.
     std::atomic_int64_t last_encode_frame_microseconds {0};  ///< Timestamp of the preceding encoder submission.
     std::atomic_uint64_t network_queue_bytes {0};  ///< Encoded bytes waiting for packetization.
     std::atomic_uint64_t network_queue_frames {0};  ///< Encoded frames waiting for packetization.
@@ -101,6 +111,21 @@ namespace video {
       auto current {counter.load(std::memory_order_relaxed)};
       while (!counter.compare_exchange_weak(current, current > value ? current - value : 0, std::memory_order_relaxed)) {
       }
+    }
+
+    /**
+     * @brief Calculate an observed event rate from first/last timestamps.
+     *
+     * @param count Number of observed events.
+     * @param first_microseconds First event timestamp.
+     * @param last_microseconds Last event timestamp.
+     * @return Events per second, or zero when fewer than two timed events exist.
+     */
+    double observed_rate(const std::uint64_t count, const std::int64_t first_microseconds, const std::int64_t last_microseconds) {
+      if (count < 2 || first_microseconds <= 0 || last_microseconds <= first_microseconds) {
+        return 0.0;
+      }
+      return static_cast<double>(count - 1) * 1000000.0 / static_cast<double>(last_microseconds - first_microseconds);
     }
 
     /**
@@ -148,7 +173,17 @@ namespace video {
     pipewire_unique_frames.store(0, std::memory_order_relaxed);
     pipewire_redundant_pts.store(0, std::memory_order_relaxed);
     pipewire_no_damage_frames.store(0, std::memory_order_relaxed);
+    pipewire_queue_overflows.store(0, std::memory_order_relaxed);
+    requested_fps_numerator.store(0, std::memory_order_relaxed);
+    requested_fps_denominator.store(1, std::memory_order_relaxed);
+    negotiated_fps_numerator.store(0, std::memory_order_relaxed);
+    negotiated_fps_denominator.store(1, std::memory_order_relaxed);
+    negotiated_max_fps_numerator.store(0, std::memory_order_relaxed);
+    negotiated_max_fps_denominator.store(1, std::memory_order_relaxed);
+    output_static_mode.store(false, std::memory_order_relaxed);
+    first_source_frame_microseconds.store(0, std::memory_order_relaxed);
     last_source_frame_microseconds.store(0, std::memory_order_relaxed);
+    first_encode_frame_microseconds.store(0, std::memory_order_relaxed);
     last_encode_frame_microseconds.store(0, std::memory_order_relaxed);
     network_queue_bytes.store(0, std::memory_order_relaxed);
     network_queue_frames.store(0, std::memory_order_relaxed);
@@ -185,19 +220,23 @@ namespace video {
     capture_queue_current.store(queue_depth, std::memory_order_relaxed);
   }
 
-  void record_encode_started(const std::optional<std::chrono::steady_clock::time_point> &timestamp) {
+  void record_encode_started(const std::optional<std::chrono::steady_clock::time_point> &timestamp, const bool unique_frame) {
     const auto now {std::chrono::steady_clock::now()};
     const auto now_microseconds {std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch()).count()};
+    auto unset_first {std::int64_t {0}};
+    first_encode_frame_microseconds.compare_exchange_strong(unset_first, now_microseconds, std::memory_order_relaxed);
     const auto previous_microseconds {last_encode_frame_microseconds.exchange(now_microseconds, std::memory_order_relaxed)};
     if (previous_microseconds > 0) {
       encode_interarrival.record(std::chrono::microseconds {now_microseconds - previous_microseconds});
     }
     const auto current {encoder_queue_current.fetch_add(1, std::memory_order_relaxed) + 1};
     update_maximum(encoder_queue_max, current);
-    if (timestamp) {
+    if (unique_frame) {
       encoded_unique_frames.fetch_add(1, std::memory_order_relaxed);
       duplicate_run_current.store(0, std::memory_order_relaxed);
-      frame_age_at_encode.record(now - *timestamp);
+      if (timestamp) {
+        frame_age_at_encode.record(now - *timestamp);
+      }
     } else {
       encoded_duplicate_frames.fetch_add(1, std::memory_order_relaxed);
       const auto run {duplicate_run_current.fetch_add(1, std::memory_order_relaxed) + 1};
@@ -223,13 +262,41 @@ namespace video {
     }
   }
 
-  void record_pipewire_unique_frame() {
+  void record_pipewire_unique_frame(const std::optional<std::chrono::steady_clock::time_point> &timestamp) {
     pipewire_unique_frames.fetch_add(1, std::memory_order_relaxed);
-    const auto now_microseconds {std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch()).count()};
+    const auto source_time {timestamp.value_or(std::chrono::steady_clock::now())};
+    const auto now_microseconds {std::chrono::duration_cast<std::chrono::microseconds>(source_time.time_since_epoch()).count()};
+    auto unset_first {std::int64_t {0}};
+    first_source_frame_microseconds.compare_exchange_strong(unset_first, now_microseconds, std::memory_order_relaxed);
     const auto previous_microseconds {last_source_frame_microseconds.exchange(now_microseconds, std::memory_order_relaxed)};
     if (previous_microseconds > 0) {
       source_interarrival.record(std::chrono::microseconds {now_microseconds - previous_microseconds});
     }
+  }
+
+  void record_pipewire_queue_overflow() {
+    pipewire_queue_overflows.fetch_add(1, std::memory_order_relaxed);
+  }
+
+  void record_requested_frame_rate(const std::uint32_t numerator, const std::uint32_t denominator) {
+    requested_fps_numerator.store(numerator, std::memory_order_relaxed);
+    requested_fps_denominator.store(denominator == 0 ? 1 : denominator, std::memory_order_relaxed);
+  }
+
+  void record_pipewire_negotiated_frame_rate(
+    const std::uint32_t negotiated_num,
+    const std::uint32_t negotiated_den,
+    const std::uint32_t maximum_num,
+    const std::uint32_t maximum_den
+  ) {
+    negotiated_fps_numerator.store(negotiated_num, std::memory_order_relaxed);
+    negotiated_fps_denominator.store(negotiated_den == 0 ? 1 : negotiated_den, std::memory_order_relaxed);
+    negotiated_max_fps_numerator.store(maximum_num, std::memory_order_relaxed);
+    negotiated_max_fps_denominator.store(maximum_den == 0 ? 1 : maximum_den, std::memory_order_relaxed);
+  }
+
+  void record_output_static_mode(const bool static_mode) {
+    output_static_mode.store(static_mode, std::memory_order_relaxed);
   }
 
   void record_network_enqueued(const std::size_t bytes, const std::size_t queue_frames) {
@@ -297,6 +364,29 @@ namespace video {
   }
 
   pipeline_diagnostics_t pipeline_diagnostics_snapshot() {
+    const auto unique_count {pipewire_unique_frames.load(std::memory_order_relaxed)};
+    const auto encode_count {encoded_unique_frames.load(std::memory_order_relaxed) + encoded_duplicate_frames.load(std::memory_order_relaxed)};
+    const auto source_fps {observed_rate(
+      unique_count,
+      first_source_frame_microseconds.load(std::memory_order_relaxed),
+      last_source_frame_microseconds.load(std::memory_order_relaxed)
+    )};
+    const auto encode_fps {observed_rate(
+      encode_count,
+      first_encode_frame_microseconds.load(std::memory_order_relaxed),
+      last_encode_frame_microseconds.load(std::memory_order_relaxed)
+    )};
+    const auto request_num {requested_fps_numerator.load(std::memory_order_relaxed)};
+    const auto request_den {requested_fps_denominator.load(std::memory_order_relaxed)};
+    const auto requested_fps {request_den == 0 ? 0.0 : static_cast<double>(request_num) / request_den};
+    std::string status_reason {"ok"};
+    if (pipewire_queue_overflows.load(std::memory_order_relaxed) > 0) {
+      status_reason = "consumer_limited";
+    } else if (output_static_mode.load(std::memory_order_relaxed)) {
+      status_reason = "static_content";
+    } else if (encoded_duplicate_frames.load(std::memory_order_relaxed) > 0 && source_fps > 0.0 && requested_fps > 0.0 && source_fps < requested_fps * 0.95) {
+      status_reason = "source_limited";
+    }
     return {
       .capture_queue_current = capture_queue_current.load(std::memory_order_relaxed),
       .capture_queue_max = capture_queue_max.load(std::memory_order_relaxed),
@@ -311,6 +401,16 @@ namespace video {
       .pipewire_unique_frames = pipewire_unique_frames.load(std::memory_order_relaxed),
       .pipewire_redundant_pts = pipewire_redundant_pts.load(std::memory_order_relaxed),
       .pipewire_no_damage_frames = pipewire_no_damage_frames.load(std::memory_order_relaxed),
+      .pipewire_queue_overflows = pipewire_queue_overflows.load(std::memory_order_relaxed),
+      .requested_fps_numerator = request_num,
+      .requested_fps_denominator = request_den,
+      .negotiated_fps_numerator = negotiated_fps_numerator.load(std::memory_order_relaxed),
+      .negotiated_fps_denominator = negotiated_fps_denominator.load(std::memory_order_relaxed),
+      .negotiated_max_fps_numerator = negotiated_max_fps_numerator.load(std::memory_order_relaxed),
+      .negotiated_max_fps_denominator = negotiated_max_fps_denominator.load(std::memory_order_relaxed),
+      .observed_source_fps = source_fps,
+      .observed_encode_fps = encode_fps,
+      .output_status_reason = std::move(status_reason),
       .source_interarrival_ms = source_interarrival.snapshot(),
       .encode_interarrival_ms = encode_interarrival.snapshot(),
       .network_queue_bytes = network_queue_bytes.load(std::memory_order_relaxed),
@@ -1763,6 +1863,7 @@ namespace video {
     const encoder_t &encoder
   ) {
     std::vector<capture_ctx_t> capture_ctxs;
+    std::uint64_t source_generation {0};
 
     auto fg = util::fail_guard([&]() {
       capture_ctx_queue->stop();
@@ -1909,6 +2010,7 @@ namespace video {
           }
 
           if (frame_captured) {
+            img->source_generation = ++source_generation;
             if (!capture_ctx->images->raise(img)) {
               return false;
             }
@@ -2641,11 +2743,19 @@ namespace video {
     });
 
     const auto requested_rate {framerate_to_rational(config)};
+    record_requested_frame_rate(
+      static_cast<std::uint32_t>(requested_rate.num),
+      static_cast<std::uint32_t>(requested_rate.den)
+    );
     frame_pacing::deadline_pacer_t frame_pacer {{
       static_cast<std::uint32_t>(requested_rate.num),
       static_cast<std::uint32_t>(requested_rate.den),
     }};
-    frame_pacer.reset(std::chrono::steady_clock::now());
+    const auto pacing_epoch {std::chrono::steady_clock::now()};
+    frame_pacer.reset(pacing_epoch);
+    frame_pacing::output_policy_t output_policy {500ms, 1s};
+    output_policy.reset(pacing_epoch);
+    std::uint64_t last_encoded_generation {0};
     BOOST_LOG(info) << "Output frame pacer set to "sv << requested_rate.num << '/' << requested_rate.den << " FPS"sv;
 
     auto shutdown_event = mail->event<bool>(mail::shutdown);
@@ -2691,6 +2801,7 @@ namespace video {
       }
 
       std::optional<std::chrono::steady_clock::time_point> frame_timestamp;
+      bool unique_frame {false};
 
       // Active output uses the client rational clock. A source frame may arrive
       // before its deadline and be converted early, but it is emitted only when
@@ -2698,9 +2809,14 @@ namespace video {
       if (!requested_idr_frame || images->peek()) {
         const auto deadline {frame_pacer.next_deadline()};
         const auto now {std::chrono::steady_clock::now()};
-        const auto wait_duration {deadline > now ? deadline - now : std::chrono::steady_clock::duration::zero()};
+        const auto wait_duration {
+          requested_idr_frame ? std::chrono::steady_clock::duration::zero() :
+                                (deadline > now ? deadline - now : std::chrono::steady_clock::duration::zero())
+        };
         if (auto img = images->pop(wait_duration)) {
           frame_timestamp = img->frame_timestamp;
+          unique_frame = img->source_generation != 0 && img->source_generation != last_encoded_generation;
+          last_encoded_generation = img->source_generation;
           record_capture_dequeued(images->size());
           if (session->convert(*img)) {
             BOOST_LOG(error) << "Could not convert image"sv;
@@ -2710,11 +2826,13 @@ namespace video {
           break;
         }
 
-        if (const auto after_conversion {std::chrono::steady_clock::now()}; after_conversion < deadline) {
-          std::this_thread::sleep_until(deadline);
+        if (!requested_idr_frame) {
+          if (const auto after_conversion {std::chrono::steady_clock::now()}; after_conversion < deadline) {
+            std::this_thread::sleep_until(deadline);
+          }
+          const auto pacing {frame_pacer.poll(std::chrono::steady_clock::now())};
+          record_capture_deadline_misses(pacing.missed_deadlines);
         }
-        const auto pacing {frame_pacer.poll(std::chrono::steady_clock::now())};
-        record_capture_deadline_misses(pacing.missed_deadlines);
       }
 
       // Break out of the encoding loop if any of the following are true:
@@ -2731,7 +2849,17 @@ namespace video {
         break;
       }
 
-      record_encode_started(frame_timestamp);
+      const auto output_time {std::chrono::steady_clock::now()};
+      if (unique_frame) {
+        output_policy.observe_unique(output_time);
+      }
+      record_output_static_mode(output_policy.static_mode(output_time));
+      if (!output_policy.should_encode(output_time, requested_idr_frame)) {
+        continue;
+      }
+      output_policy.record_output(output_time);
+
+      record_encode_started(frame_timestamp, unique_frame);
       const auto encode_guard {util::fail_guard([]() {
         record_encode_finished();
       })};
@@ -3032,7 +3160,7 @@ namespace video {
             frame_timestamp = img->frame_timestamp;
           }
 
-          record_encode_started(frame_timestamp);
+          record_encode_started(frame_timestamp, frame_captured);
           const auto encode_guard {util::fail_guard([]() {
             record_encode_finished();
           })};

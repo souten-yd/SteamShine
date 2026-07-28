@@ -93,4 +93,67 @@ namespace frame_pacing {
     std::chrono::steady_clock::time_point epoch_ {};  ///< Immutable origin of the current schedule.
     std::uint64_t next_index_ {1};  ///< One-based index of the next expected deadline.
   };
+
+  /**
+   * @brief Conservative active/static output policy independent of capture APIs.
+   *
+   * Active content emits on every requested deadline. After a bounded interval
+   * without a unique source generation, unchanged content emits only periodic
+   * keepalives. A new unique generation or forced IDR immediately restores an
+   * eligible output without inventing a captured frame.
+   */
+  class output_policy_t {
+  public:
+    /**
+     * @brief Construct an output policy with explicit bounded intervals.
+     *
+     * @param static_after Inactivity interval before entering static mode.
+     * @param keepalive_interval Minimum static interval between duplicate encodes.
+     */
+    output_policy_t(std::chrono::steady_clock::duration static_after, std::chrono::steady_clock::duration keepalive_interval);
+
+    /**
+     * @brief Start or restart policy accounting for a stream session.
+     *
+     * @param now Monotonic session start time.
+     */
+    void reset(std::chrono::steady_clock::time_point now);
+
+    /**
+     * @brief Record consumption of a new unique source generation.
+     *
+     * @param now Monotonic time at which the generation became available to output.
+     */
+    void observe_unique(std::chrono::steady_clock::time_point now);
+
+    /**
+     * @brief Decide whether the current deadline should encode.
+     *
+     * @param now Current monotonic time.
+     * @param force_immediate Whether an IDR or reconnect request must bypass static suppression.
+     * @return True for active CFR, a due static keepalive, or a forced encode.
+     */
+    [[nodiscard]] bool should_encode(std::chrono::steady_clock::time_point now, bool force_immediate) const;
+
+    /**
+     * @brief Record completion of an output decision.
+     *
+     * @param now Monotonic time of the encoder submission.
+     */
+    void record_output(std::chrono::steady_clock::time_point now);
+
+    /**
+     * @brief Report whether the source is currently treated as static.
+     *
+     * @param now Current monotonic time.
+     * @return True after the configured unique-source inactivity interval.
+     */
+    [[nodiscard]] bool static_mode(std::chrono::steady_clock::time_point now) const;
+
+  private:
+    std::chrono::steady_clock::duration static_after_;  ///< Unique-frame inactivity required for static mode.
+    std::chrono::steady_clock::duration keepalive_interval_;  ///< Minimum interval between static outputs.
+    std::chrono::steady_clock::time_point last_unique_ {};  ///< Most recent unique generation observation.
+    std::chrono::steady_clock::time_point last_output_ {};  ///< Most recent encoder submission.
+  };
 }  // namespace frame_pacing

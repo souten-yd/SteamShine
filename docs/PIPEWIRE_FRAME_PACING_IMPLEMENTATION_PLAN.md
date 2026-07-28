@@ -2,11 +2,11 @@
 
 ## Status and scope
 
-This document must be reviewed and kept current before implementation changes are
-made on `fix/pipewire-frame-pacing`. The eventual draft pull request will be based
-on PR #10 after that pull request is merged. It must contain only capture,
-pacing, diagnostics, and KScreen timeout work; unrelated owned-Gamescope desktop
-or autostart changes are out of scope.
+This document is reviewed and kept current before implementation changes are
+made on `fix/pipewire-frame-pacing`. At the maintainer's explicit request, tested
+increments are pushed to the fork branch currently backing draft PR #10. Commits
+remain independently scoped so the frame-pacing work can be split from autostart
+history later without mixing source changes inside a single commit.
 
 The observed failure is a 60 FPS client request with only 47.6 or 32.7 unique
 PipeWire frames per second. The encoder then re-encodes the preceding converted
@@ -152,8 +152,9 @@ not block daemon teardown and retains the state file until restore succeeds.
 6. Run synthetic PipeWire integration cases and full CI.
 7. Run hardware acceptance. Only then evaluate the owned-session refresh flag if
    producer evidence still shows a Gamescope-side limit.
-8. After PR #10 merges, rebase this branch, exclude unrelated changes, push to
-   the fork, and create the requested draft PR.
+8. Push independently tested commits to the fork branch backing draft PR #10,
+   then update its title/body and matching artifact after the full acceptance
+   matrix is complete.
 
 ## Verification matrix
 
