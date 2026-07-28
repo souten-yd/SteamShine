@@ -3,7 +3,6 @@
  * @brief Shared classes for pipewire-based capture methods.
  */
 // standard includes
-#include <deque>
 #include <fstream>
 
 // lib includes
@@ -190,7 +189,7 @@ namespace pipewire {
     struct pw_stream *stream;  ///< PipeWire stream handle used for screencast frames.
     struct spa_hook stream_listener;  ///< Hook registering callbacks on the PipeWire stream.
     struct spa_video_info format;  ///< Negotiated PipeWire video format.
-    std::deque<pending_buffer_t> pending_dma_bufs;  ///< Ordered DMA-BUFs waiting for capture.
+    pipewire_capture::bounded_source_queue_t<pending_buffer_t> pending_dma_bufs {pending_dma_buf_limit};  ///< Ordered DMA-BUFs waiting for capture.
     frame_metadata_t current_memory_metadata;  ///< Metadata paired with the current MemPtr staging copy.
     std::shared_ptr<buffer_release_state_t> release_state;  ///< State shared with outstanding image leases.
     uint64_t drm_format;  ///< DRM format.
@@ -268,12 +267,11 @@ namespace pipewire {
       {
         std::scoped_lock lock(stream_data.frame_mutex);
         stream_data.frame_ready = false;
-        for (const auto &pending : stream_data.pending_dma_bufs) {
+        stream_data.pending_dma_bufs.drain([&](const pending_buffer_t &pending) {
           if (stream_data.stream) {
             pw_stream_queue_buffer(stream_data.stream, pending.buffer);
           }
-        }
-        stream_data.pending_dma_bufs.clear();
+        });
       }
       release_state->deactivate();
 
@@ -539,10 +537,9 @@ namespace pipewire {
 
       struct pw_buffer *source_buffer {nullptr};
       frame_metadata_t metadata;
-      if (!stream_data.pending_dma_bufs.empty()) {
-        source_buffer = stream_data.pending_dma_bufs.front().buffer;
-        metadata = stream_data.pending_dma_bufs.front().metadata;
-        stream_data.pending_dma_bufs.pop_front();
+      if (auto pending = stream_data.pending_dma_bufs.pop()) {
+        source_buffer = pending->buffer;
+        metadata = pending->metadata;
       }
       if (!source_buffer && !stream_data.frame_ready) {
         img->data = nullptr;
@@ -665,10 +662,9 @@ namespace pipewire {
             {
               std::scoped_lock lock(d->frame_mutex);
               d->frame_ready = false;
-              for (const auto &pending : d->pending_dma_bufs) {
+              d->pending_dma_bufs.drain([&](const pending_buffer_t &pending) {
                 pw_stream_queue_buffer(d->stream, pending.buffer);
-              }
-              d->pending_dma_bufs.clear();
+              });
               d->shared->stream_dead.store(true);
               d->shared->current_state = state;
               d->shared->previous_state = old;
@@ -751,8 +747,7 @@ namespace pipewire {
         auto metadata {record_buffer_metadata(d, aux->buffer)};
         if (aux->buffer->datas[0].type == SPA_DATA_DmaBuf) {
           std::scoped_lock lock {d->frame_mutex};
-          if (d->pending_dma_bufs.size() < pending_dma_buf_limit) {
-            d->pending_dma_bufs.push_back({aux, metadata});
+          if (d->pending_dma_bufs.push({aux, metadata})) {
             frame_available = true;
           } else {
             video::record_pipewire_queue_overflow();
@@ -802,10 +797,9 @@ namespace pipewire {
 
       {
         std::scoped_lock lock {d->frame_mutex};
-        for (const auto &pending : d->pending_dma_bufs) {
+        d->pending_dma_bufs.drain([&](const pending_buffer_t &pending) {
           pw_stream_queue_buffer(d->stream, pending.buffer);
-        }
-        d->pending_dma_bufs.clear();
+        });
       }
 
       if (param == nullptr || id != SPA_PARAM_Format) {
@@ -1316,17 +1310,8 @@ namespace pipewire {
 
   private:
     bool is_buffer_redundant(const egl::img_descriptor_t *img) {
-      // Check for corrupted frame
-      if (img->pw_flags.has_value() && (img->pw_flags.value() & SPA_CHUNK_FLAG_CORRUPTED)) {
-        return true;
-      }
-
-      // If PTS is identical, only drop if damage metadata confirms no change
-      if (img->pts.has_value() && last_pts.has_value() && img->pts.value() == last_pts.value()) {
-        return img->pw_damage.has_value() && !img->pw_damage.value();
-      }
-
-      return false;
+      const bool corrupted {img->pw_flags && (*img->pw_flags & SPA_CHUNK_FLAG_CORRUPTED)};
+      return !pipewire_capture::classify_frame(last_pts, img->pts, img->pw_damage, corrupted).unique;
     }
 
     void update_metadata(egl::img_descriptor_t *img, int retries) {

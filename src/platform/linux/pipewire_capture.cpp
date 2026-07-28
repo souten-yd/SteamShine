@@ -5,6 +5,22 @@
 #include "pipewire_capture.h"
 
 namespace pipewire_capture {
+  frame_classification_t classify_frame(
+    const std::optional<std::uint64_t> &previous_pts,
+    const std::optional<std::uint64_t> &current_pts,
+    const std::optional<bool> &damage,
+    const bool corrupted
+  ) {
+    const bool redundant_pts {previous_pts && current_pts && *previous_pts == *current_pts};
+    const bool no_damage {damage && !*damage};
+    return {
+      .redundant_pts = redundant_pts,
+      .no_damage = no_damage,
+      .corrupted = corrupted,
+      .unique = !corrupted && !(redundant_pts && no_damage),
+    };
+  }
+
   max_framerate_range_t max_framerate_range(const uint32_t requested_fps) {
     if (requested_fps == 0) {
       return {};

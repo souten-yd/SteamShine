@@ -4,10 +4,102 @@
  */
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
+#include <deque>
+#include <optional>
 #include <string>
+#include <utility>
 
 namespace pipewire_capture {
+  /**
+   * @brief Small ordered source queue with explicit overflow and fixed capacity.
+   *
+   * @tparam T Source item retained until the capture consumer accepts it.
+   */
+  template<typename T>
+  class bounded_source_queue_t {
+  public:
+    /**
+     * @brief Construct an empty queue with a fixed maximum depth.
+     *
+     * @param capacity Maximum number of retained source items.
+     */
+    explicit bounded_source_queue_t(const std::size_t capacity):
+        capacity_ {capacity} {
+    }
+
+    /**
+     * @brief Append an item without replacing an older generation.
+     *
+     * @param value Source item to append.
+     * @return True when retained, or false when the bounded queue is full.
+     */
+    bool push(T value) {
+      if (items_.size() >= capacity_) {
+        return false;
+      }
+      items_.push_back(std::move(value));
+      return true;
+    }
+
+    /**
+     * @brief Remove the oldest retained source item.
+     *
+     * @return Oldest item, or no value when empty.
+     */
+    std::optional<T> pop() {
+      if (items_.empty()) {
+        return std::nullopt;
+      }
+      T value {std::move(items_.front())};
+      items_.pop_front();
+      return value;
+    }
+
+    /**
+     * @brief Visit and remove every retained item in source order.
+     *
+     * @tparam Function Callable accepting one moved source item.
+     * @param function Callable invoked once for each retained item.
+     */
+    template<typename Function>
+    void drain(Function &&function) {
+      while (auto value = pop()) {
+        function(std::move(*value));
+      }
+    }
+
+    /**
+     * @brief Discard every retained item.
+     */
+    void clear() {
+      items_.clear();
+    }
+
+    /**
+     * @brief Report whether no source item is pending.
+     *
+     * @return True when empty.
+     */
+    [[nodiscard]] bool empty() const {
+      return items_.empty();
+    }
+
+    /**
+     * @brief Return current bounded queue occupancy.
+     *
+     * @return Number of retained source items.
+     */
+    [[nodiscard]] std::size_t size() const {
+      return items_.size();
+    }
+
+  private:
+    std::size_t capacity_ {0};  ///< Fixed source queue capacity.
+    std::deque<T> items_;  ///< Retained source items in producer order.
+  };
+
   /**
    * @brief Maximum-frame-rate range advertised to a PipeWire producer.
    */
@@ -25,6 +117,32 @@ namespace pipewire_capture {
     complete,  ///< A positive frame size has been negotiated.
     failed,  ///< The stream terminated before negotiating a frame size.
   };
+
+  /**
+   * @brief Pure classification of one PipeWire producer buffer.
+   */
+  struct frame_classification_t {
+    bool redundant_pts {false};  ///< Whether the producer repeated the preceding valid PTS.
+    bool no_damage {false};  ///< Whether VideoDamage explicitly reports no changed pixels.
+    bool corrupted {false};  ///< Whether SPA marked the buffer corrupt.
+    bool unique {false};  ///< Whether capture should assign a new source generation.
+  };
+
+  /**
+   * @brief Classify producer metadata without treating PTS repetition alone as loss.
+   *
+   * @param previous_pts Previously accepted producer PTS when available.
+   * @param current_pts Current producer PTS when available.
+   * @param damage Optional VideoDamage state; absence remains unknown.
+   * @param corrupted Whether SPA marked the current buffer corrupt.
+   * @return Independent metadata flags and the resulting unique-frame decision.
+   */
+  frame_classification_t classify_frame(
+    const std::optional<std::uint64_t> &previous_pts,
+    const std::optional<std::uint64_t> &current_pts,
+    const std::optional<bool> &damage,
+    bool corrupted
+  );
 
   /**
    * @brief Immutable identity for one verified PipeWire video producer.
