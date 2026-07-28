@@ -37,6 +37,23 @@ TEST(ProcessCommandSelectionTest, SelectsOwnedDesktopOnlyForCaptureOnlyApplicati
   EXPECT_FALSE(proc::should_launch_owned_virtual_desktop("", 0, false));
 }
 
+TEST(ProcessEnvironmentTest, RestoresBaselineBetweenLaunches) {
+  boost::process::v1::environment baseline;
+  baseline["STEAMSHINE_PROCESS_TEST_BASELINE"] = "configured";
+
+  auto launch_environment {baseline};
+  launch_environment["XDG_RUNTIME_DIR"] = "/owned/runtime";
+  launch_environment["WAYLAND_DISPLAY"] = "gamescope-0";
+  launch_environment["PIPEWIRE_REMOTE"] = "owned-pipewire";
+
+  proc::reset_launch_environment(launch_environment, baseline);
+
+  EXPECT_EQ(launch_environment["STEAMSHINE_PROCESS_TEST_BASELINE"].to_string(), "configured");
+  EXPECT_TRUE(launch_environment["XDG_RUNTIME_DIR"].empty());
+  EXPECT_TRUE(launch_environment["WAYLAND_DISPLAY"].empty());
+  EXPECT_TRUE(launch_environment["PIPEWIRE_REMOTE"].empty());
+}
+
 class ProcessPNGTest: public BaseTest {
 protected:
   void SetUp() override {

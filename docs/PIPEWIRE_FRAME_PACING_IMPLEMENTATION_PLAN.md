@@ -176,6 +176,22 @@ This decision is based on launch semantics, not a localized application name,
 icon, or hard-coded Steam command. Physical Desktop and attached existing Game
 Mode remain capture-only and never receive the private folder fallback.
 
+### 8. Session-scoped launch environment
+
+The parsed application environment is an immutable baseline. Every application
+launch rebuilds its child environment from that baseline before adding the
+current Moonlight request and, when selected, the current owned-session runtime
+selectors. Owned Gamescope values such as `XDG_RUNTIME_DIR`, `WAYLAND_DISPLAY`,
+`PIPEWIRE_RUNTIME_DIR`, and `PIPEWIRE_REMOTE` must never leak into a later
+physical Desktop or attached Game Mode launch.
+
+This reset happens before prep commands so KScreen state is always stored under
+the host runtime directory. It also avoids fixing individual variables with an
+ever-growing denylist: any future per-session selector is discarded naturally
+when the next launch starts from the parsed baseline. Unit coverage exercises an
+owned-to-physical transition and verifies both removal of the owned selectors
+and preservation of configured baseline variables.
+
 ## Delivery sequence
 
 1. Record baseline producer PTS/sequence/damage and current encoded cadence.
@@ -185,10 +201,12 @@ Mode remain capture-only and never receive the private folder fallback.
 5. Add KScreen timeout behavior, launch-time graphical-environment refresh, and
    integration tests.
 6. Prevent the private Desktop fallback from obscuring detached applications.
-7. Run synthetic PipeWire integration cases and full CI.
-8. Run hardware acceptance. Only then evaluate the owned-session refresh flag if
+7. Rebuild child environments per launch so private-session selectors cannot
+   contaminate later physical or attached launches.
+8. Run synthetic PipeWire integration cases and full CI.
+9. Run hardware acceptance. Only then evaluate the owned-session refresh flag if
    producer evidence still shows a Gamescope-side limit.
-9. Push independently tested commits to the fork branch backing draft PR #10,
+10. Push independently tested commits to the fork branch backing draft PR #10,
    then update its title/body and matching artifact after the full acceptance
    matrix is complete.
 

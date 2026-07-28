@@ -45,6 +45,14 @@ namespace proc {
   bool should_launch_owned_virtual_desktop(std::string_view app_command, std::size_t detached_command_count, bool owned_virtual_display);
 
   /**
+   * @brief Restore the immutable application environment before a new launch.
+   *
+   * @param environment Mutable child-process environment from a preceding launch.
+   * @param baseline Parsed host and application environment to restore.
+   */
+  void reset_launch_environment(boost::process::v1::environment &environment, const boost::process::v1::environment &baseline);
+
+  /**
    * @brief Select the command that represents a configured application launch.
    *
    * A commandless Desktop entry remains a capture-only placebo on the physical
@@ -127,6 +135,7 @@ namespace proc {
       std::vector<ctx_t> &&apps
     ):
         _app_id(0),
+        _base_env(env),
         _env(std::move(env)),
         _apps(std::move(apps)) {
     }
@@ -180,6 +189,7 @@ namespace proc {
   private:
     int _app_id;
 
+    boost::process::v1::environment _base_env;
     boost::process::v1::environment _env;
     std::vector<ctx_t> _apps;
     ctx_t _app;

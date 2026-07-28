@@ -54,6 +54,13 @@ namespace proc {
     return owned_virtual_display && app_command.empty() && detached_command_count == 0;
   }
 
+  void reset_launch_environment(
+    boost::process::v1::environment &environment,
+    const boost::process::v1::environment &baseline
+  ) {
+    environment = baseline;
+  }
+
   std::string select_effective_command(
     const std::string_view app_command,
     const bool owned_virtual_display,
@@ -174,6 +181,7 @@ namespace proc {
   int proc_t::execute(int app_id, std::shared_ptr<rtsp_stream::launch_session_t> launch_session) {
     // Ensure starting from a clean slate
     terminate();
+    reset_launch_environment(_env, _base_env);
 
     auto iter = std::find_if(_apps.begin(), _apps.end(), [&app_id](const auto app) {
       return app.id == std::to_string(app_id);
