@@ -544,14 +544,14 @@ namespace {
       .executable_name = "reaper",
       .cgroup = "0::/user.slice/user-1000.slice/user@1000.service/app.slice/app-steam-game.scope\n",
     };
-    const auto selected_with_stale_game {steam_session::select_resident_environment({vendor_gamescope, vendor_steam, stale_game_reaper}, vendor_target, 1000)};
+    const auto selected_with_stale_game {steam_session::select_resident_environment({gamescope, steam, stale_game_reaper}, target, 1000)};
     ASSERT_TRUE(selected_with_stale_game);
     EXPECT_EQ(selected_with_stale_game->steam_pid, 101);
 
-    auto outside_steam {vendor_steam};
+    auto outside_steam {steam};
     outside_steam.pid = 104;
     outside_steam.cgroup = "0::/user.slice/user-1000.slice/user@1000.service/app.slice/app-steam-desktop.scope\n";
-    EXPECT_FALSE(steam_session::select_resident_environment({vendor_gamescope, vendor_steam, outside_steam}, vendor_target, 1000));
+    EXPECT_FALSE(steam_session::select_resident_environment({gamescope, steam, outside_steam}, target, 1000));
 
     auto wrong_uid {steam};
     wrong_uid.uid = 1001;
