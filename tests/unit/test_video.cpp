@@ -134,8 +134,24 @@ TEST(VideoPipelineDiagnostics, RecordsBoundedStages) {
   video::record_capture_enqueued(timestamp, false);
   video::record_capture_enqueued(timestamp, true);
   video::record_capture_dequeued();
-  video::record_encode_started(timestamp);
+  video::record_encode_started(timestamp, true);
   video::record_encode_finished();
+  video::record_encode_started(std::nullopt, false);
+  video::record_encode_finished();
+  video::record_encode_started(std::nullopt, false);
+  video::record_encode_finished();
+  video::record_encode_started(std::nullopt, true);
+  video::record_encode_finished();
+  video::record_capture_deadline_misses(3);
+  video::record_pipewire_buffer(false, false);
+  video::record_pipewire_buffer(true, true);
+  video::record_pipewire_buffer_replaced();
+  video::record_pipewire_unique_frame();
+  video::record_pipewire_unique_frame();
+  video::record_pipewire_queue_overflow();
+  video::record_requested_frame_rate(60000, 1001);
+  video::record_pipewire_negotiated_frame_rate(0, 1, 60000, 1001);
+  video::record_output_static_mode(true);
   video::record_network_enqueued(1000, 1);
   video::record_network_enqueued(500, 2);
   video::record_network_dequeued(1000, 1, timestamp);
@@ -149,8 +165,30 @@ TEST(VideoPipelineDiagnostics, RecordsBoundedStages) {
   EXPECT_EQ(snapshot.capture_queue_current, 0U);
   EXPECT_EQ(snapshot.capture_queue_max, 1U);
   EXPECT_EQ(snapshot.capture_frames_replaced, 1U);
+  EXPECT_EQ(snapshot.pipewire_buffers_received, 2U);
+  EXPECT_EQ(snapshot.pipewire_buffers_replaced, 1U);
   EXPECT_EQ(snapshot.encoder_queue_current, 0U);
   EXPECT_EQ(snapshot.encoder_queue_max, 1U);
+  EXPECT_EQ(snapshot.capture_deadline_misses, 3U);
+  EXPECT_EQ(snapshot.encoded_unique_frames, 2U);
+  EXPECT_EQ(snapshot.encoded_duplicate_frames, 2U);
+  EXPECT_EQ(snapshot.encoded_frames, 4U);
+  EXPECT_EQ(snapshot.duplicate_frames, 2U);
+  EXPECT_EQ(snapshot.duplicate_run_max, 2U);
+  EXPECT_EQ(snapshot.pipewire_buffers_received, 2U);
+  EXPECT_EQ(snapshot.pipewire_unique_frames, 2U);
+  EXPECT_EQ(snapshot.pipewire_redundant_pts, 1U);
+  EXPECT_EQ(snapshot.pipewire_no_damage_frames, 1U);
+  EXPECT_EQ(snapshot.pipewire_queue_overflows, 1U);
+  EXPECT_EQ(snapshot.requested_fps_numerator, 60000U);
+  EXPECT_EQ(snapshot.requested_fps_denominator, 1001U);
+  EXPECT_EQ(snapshot.negotiated_fps_numerator, 0U);
+  EXPECT_EQ(snapshot.negotiated_fps_denominator, 1U);
+  EXPECT_EQ(snapshot.negotiated_max_fps_numerator, 60000U);
+  EXPECT_EQ(snapshot.negotiated_max_fps_denominator, 1001U);
+  EXPECT_EQ(snapshot.output_status_reason, "consumer_limited");
+  EXPECT_EQ(snapshot.source_interarrival_ms.count, 1U);
+  EXPECT_EQ(snapshot.encode_interarrival_ms.count, 3U);
   EXPECT_EQ(snapshot.network_queue_bytes, 500U);
   EXPECT_EQ(snapshot.network_queue_frames, 1U);
   EXPECT_EQ(snapshot.network_queue_frames_max, 2U);
@@ -163,6 +201,29 @@ TEST(VideoPipelineDiagnostics, RecordsBoundedStages) {
   EXPECT_EQ(snapshot.frame_age_at_capture_ms.count, 2U);
   EXPECT_EQ(snapshot.frame_age_at_encode_ms.count, 1U);
   EXPECT_EQ(snapshot.frame_age_at_network_ms.count, 1U);
+}
+
+/**
+ * @brief Verify a transient latest-frame replacement does not imply backlog.
+ */
+TEST(VideoPipelineDiagnostics, AllowsTransientCaptureReplacement) {
+  video::reset_pipeline_diagnostics();
+  video::record_capture_enqueued(std::nullopt, false);
+  video::record_capture_enqueued(std::nullopt, true);
+
+  EXPECT_EQ(video::pipeline_diagnostics_snapshot().output_status_reason, "ok");
+}
+
+/**
+ * @brief Verify sustained latest-frame replacement reports consumer limitation.
+ */
+TEST(VideoPipelineDiagnostics, ReportsPersistentCaptureReplacementPressure) {
+  video::reset_pipeline_diagnostics();
+  video::record_capture_enqueued(std::nullopt, true);
+  video::record_capture_enqueued(std::nullopt, true);
+  video::record_capture_enqueued(std::nullopt, true);
+
+  EXPECT_EQ(video::pipeline_diagnostics_snapshot().output_status_reason, "consumer_limited");
 }
 
 /**
@@ -181,17 +242,14 @@ TEST(VideoPipelineDiagnostics, RateLimitsOnlyDuplicateClientIdrRequests) {
 }
 
 /**
- * @brief Verify a slow encoder observes only the newest pending capture frame.
+ * @brief Verify capture handoff retains only the newest source frame.
  */
-TEST(VideoPipelineBackpressure, SlowEncoderRetainsNewestPendingCapture) {
+TEST(VideoPipelineBackpressure, CaptureHandoffReplacesObsoleteFrame) {
   safe::event_t<std::uint64_t> capture_handoff;
-  EXPECT_FALSE(capture_handoff.raise_replacing(41U));
-  EXPECT_TRUE(capture_handoff.raise_replacing(42U));
 
-  const auto newest {capture_handoff.pop()};
-  ASSERT_TRUE(newest);
-  EXPECT_EQ(*newest, 42U);
-  EXPECT_FALSE(capture_handoff.try_pop());
+  EXPECT_FALSE(capture_handoff.raise_replacing(1U));
+  EXPECT_TRUE(capture_handoff.raise_replacing(2U));
+  EXPECT_EQ(capture_handoff.pop(), 2U);
 }
 
 /**

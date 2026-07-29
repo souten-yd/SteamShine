@@ -87,7 +87,7 @@ namespace steamos_virtual_session {
       std::atomic_uint64_t encoded_packets {0};  ///< Encoded packets emitted during the owned session.
       std::atomic_uint64_t encoded_bytes {0};  ///< Encoded payload bytes emitted during the owned session.
       std::atomic_uint64_t idr_packets {0};  ///< IDR packets emitted during the owned session.
-      std::atomic_uint64_t captured_frames {0};  ///< Wayland DMA-BUF frames acquired for the owned session.
+      std::atomic_uint64_t captured_frames {0};  ///< Verified Gamescope frames acquired for the selected session.
 #if defined(__linux__)
       pid_t process_group {-1};  ///< Process group containing Gamescope and its children.
       std::filesystem::path verified_input_socket;  ///< EIS socket whose kernel peer matched the selected Gamescope.
@@ -948,6 +948,8 @@ namespace steamos_virtual_session {
         endpoint.x11_display = report.get("display", std::string {});
         endpoint.xauthority = report.get("xauthority", std::string {});
         endpoint.dbus_session_bus_address = verified_dbus_session_bus_address(report.get("dbus_session_bus_address", std::string {}));
+        endpoint.xdg_session_type = report.get("xdg_session_type", std::string {"wayland"});
+        endpoint.xdg_current_desktop = report.get("xdg_current_desktop", std::string {"gamescope"});
         endpoint.pipewire_runtime_directory = pipewire_runtime;
         endpoint.pipewire_remote = pipewire_remote;
         endpoint.pulse_runtime_path = pulse_runtime;
@@ -992,8 +994,8 @@ namespace steamos_virtual_session {
      * @brief Validate a display endpoint read from a resident Steam process.
      *
      * @param environment Allow-listed resident Steam environment.
-     * @param gamescope_pid Verified parent Gamescope PID.
-     * @param gamescope_start_time Verified parent Gamescope start time.
+     * @param gamescope_pid Verified producer Gamescope PID.
+     * @param gamescope_start_time Verified producer Gamescope start time.
      * @param generation New endpoint generation.
      * @param pipewire_runtime Verified host PipeWire runtime.
      * @param pipewire_remote Verified host PipeWire remote.
@@ -1018,6 +1020,8 @@ namespace steamos_virtual_session {
         .pipewire_remote = pipewire_remote,
         .pulse_runtime_path = (std::filesystem::path {pipewire_runtime} / "pulse").string(),
         .dbus_session_bus_address = verified_dbus_session_bus_address(environment.dbus_session_bus_address),
+        .xdg_session_type = environment.xdg_session_type,
+        .xdg_current_desktop = environment.xdg_current_desktop,
         .producer_pid = gamescope_pid,
         .producer_start_time = gamescope_start_time,
         .environment_source_pid = environment.steam_pid,
@@ -1039,17 +1043,18 @@ namespace steamos_virtual_session {
         endpoint.error = "xwayland_identity_unverified";
         return endpoint;
       }
-      if (!current_user_regular_file(endpoint.xauthority)) {
-        endpoint.error = endpoint.xauthority.empty() ? "xwayland_auth_missing" : "xwayland_identity_unverified";
-        return endpoint;
-      }
       struct stat runtime_stat {};
       const std::filesystem::path runtime {endpoint.xdg_runtime_directory};
       if (!runtime.is_absolute() || ::lstat(runtime.c_str(), &runtime_stat) != 0 || !S_ISDIR(runtime_stat.st_mode) || runtime_stat.st_uid != ::getuid()) {
         endpoint.error = "xwayland_identity_unverified";
         return endpoint;
       }
-      if (!path_is_within_runtime_root(endpoint.xauthority, runtime)) {
+      if (endpoint.xauthority.empty()) {
+        if (!environment.allows_authless_xwayland) {
+          endpoint.error = "xwayland_auth_missing";
+          return endpoint;
+        }
+      } else if (!current_user_regular_file(endpoint.xauthority) || !path_is_within_runtime_root(endpoint.xauthority, runtime)) {
         endpoint.error = "xwayland_identity_unverified";
         return endpoint;
       }
@@ -1405,7 +1410,20 @@ namespace steamos_virtual_session {
           .gamescope_pid = selected->producer_pid,
           .cgroup = steam_session::cgroup_for_process(selected->producer_pid),
         };
-        const auto resident_environment {steam_session::verified_resident_environment(target)};
+        std::optional<steam_session::resident_environment_t> resident_environment;
+        session_display_endpoint_t display_endpoint;
+        const uint64_t display_generation {next_display_generation.fetch_add(1, std::memory_order_relaxed)};
+        const auto resident_deadline {std::chrono::steady_clock::now() + std::chrono::seconds {config::steamos_virtual_display.startup_timeout_seconds}};
+        do {
+          resident_environment = steam_session::verified_resident_environment(target);
+          if (resident_environment) {
+            display_endpoint = attached_display_endpoint(*resident_environment, selected->producer_pid, selected->producer_start_time, display_generation, pipewire_runtime->string(), pipewire_remote);
+            if (display_endpoint.verification == display_verification_e::verified) {
+              break;
+            }
+          }
+          std::this_thread::sleep_for(std::chrono::milliseconds {50});
+        } while (std::chrono::steady_clock::now() < resident_deadline);
         if (!resident_environment) {
           manager.app_launch_rejected_reason = "resident_steam_environment_unavailable";
           manager.app_launch_rejected_message = "A verified resident Steam environment is required for the selected Game Mode session";
@@ -1413,8 +1431,6 @@ namespace steamos_virtual_session {
           manager.current = state_e::Failed;
           return false;
         }
-        const uint64_t display_generation {next_display_generation.fetch_add(1, std::memory_order_relaxed)};
-        const auto display_endpoint {attached_display_endpoint(*resident_environment, selected->producer_pid, selected->producer_start_time, display_generation, pipewire_runtime->string(), pipewire_remote)};
         if (display_endpoint.verification != display_verification_e::verified) {
           manager.display_endpoint = display_endpoint;
           manager.app_launch_rejected_reason = display_endpoint.error;
@@ -2123,8 +2139,7 @@ namespace steamos_virtual_session {
     }
     ucred credentials {};
     socklen_t credentials_size {sizeof(credentials)};
-    if (::getsockopt(descriptor, SOL_SOCKET, SO_PEERCRED, &credentials, &credentials_size) != 0 ||
-        credentials_size != sizeof(credentials) || credentials.pid != manager.process_group) {
+    if (::getsockopt(descriptor, SOL_SOCKET, SO_PEERCRED, &credentials, &credentials_size) != 0 || credentials_size != sizeof(credentials) || credentials.pid != manager.process_group) {
       ::close(descriptor);
       descriptor = -1;
       error = "gamescope_input_eis_socket_unverified";
@@ -2242,6 +2257,25 @@ namespace steamos_virtual_session {
       manager.current = manager.stream_requested ? state_e::Streaming : state_e::Ready;
       BOOST_LOG(info) << "SteamOS virtual display capture attached";
     }
+  }
+
+  bool mark_capture_reinitializing() {
+    std::scoped_lock lock {manager.mutex};
+#if defined(__linux__)
+    if (manager.process_group <= 0 || manager.source_process_start_time == 0 ||
+        (manager.current != state_e::Ready && manager.current != state_e::Streaming)) {
+      return false;
+    }
+    const auto identity {gamescope_source::read_process_identity(manager.process_group)};
+    if (!identity || identity->start_time != manager.source_process_start_time) {
+      return false;
+    }
+    manager.packet_tracking.store(false, std::memory_order_release);
+    manager.current = state_e::WaitingForCapture;
+    return true;
+#else
+    return false;
+#endif
   }
 
   void mark_capture_lost() {

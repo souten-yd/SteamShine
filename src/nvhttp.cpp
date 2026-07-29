@@ -1038,6 +1038,10 @@ namespace nvhttp {
     host_audio = util::from_view(get_arg(args, "localAudioPlayMode"));
     auto launch_session = make_launch_session(host_audio, args);
 
+#if defined(__linux__)
+    platf::refresh_capture_environment();
+#endif
+
     std::string virtual_session_error;
     if (!steamos_virtual_session::prepare(*launch_session, virtual_session_error)) {
       BOOST_LOG(error) << "SteamOS virtual session preparation failed: " << virtual_session_error;
@@ -1181,6 +1185,9 @@ namespace nvhttp {
     const auto launch_session = make_launch_session(host_audio, args);
 
     if (no_active_sessions) {
+#if defined(__linux__)
+      platf::refresh_capture_environment();
+#endif
       // We want to prepare display only if there are no active sessions at
       // the moment. This should be done before probing encoders as it could
       // change the active displays.

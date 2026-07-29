@@ -12,7 +12,8 @@ if(NOT FREEBSD)
 endif()
 
 option(STEAMSHINE_BUILD_INPUT_VISUALIZER "Build the SteamShine fullscreen input-latency probe" ON)
-if(STEAMSHINE_BUILD_INPUT_VISUALIZER AND X11_FOUND AND X11_Xi_LIB)
+pkg_check_modules(STEAMSHINE_VISUALIZER_GPU IMPORTED_TARGET egl glesv2)
+if(STEAMSHINE_BUILD_INPUT_VISUALIZER AND X11_FOUND AND X11_Xi_LIB AND STEAMSHINE_VISUALIZER_GPU_FOUND)
     add_executable(steamshine_input_visualizer
         "${CMAKE_SOURCE_DIR}/tools/steamshine_input_visualizer.cpp")
     target_include_directories(steamshine_input_visualizer PRIVATE
@@ -20,7 +21,8 @@ if(STEAMSHINE_BUILD_INPUT_VISUALIZER AND X11_FOUND AND X11_Xi_LIB)
         "${X11_Xi_INCLUDE_PATH}")
     target_link_libraries(steamshine_input_visualizer PRIVATE
         "${X11_LIBRARIES}"
-        "${X11_Xi_LIB}")
+        "${X11_Xi_LIB}"
+        PkgConfig::STEAMSHINE_VISUALIZER_GPU)
     target_compile_options(steamshine_input_visualizer PRIVATE ${SUNSHINE_COMPILE_OPTIONS})
     set_target_properties(steamshine_input_visualizer PROPERTIES
         OUTPUT_NAME "steamshine-input-visualizer")

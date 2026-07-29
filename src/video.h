@@ -6,6 +6,7 @@
 
 // standard includes
 #include <chrono>
+#include <string>
 
 // local includes
 #include "input.h"
@@ -22,6 +23,7 @@ extern "C" {
 struct AVPacket;
 
 namespace video {
+  constexpr std::uint32_t CAPTURE_QUEUE_FRAME_LIMIT = 1;  ///< Latest captured image retained for low-latency encoding.
   constexpr std::uint32_t NETWORK_QUEUE_FRAME_LIMIT = 2;  ///< Encoded frames retained before producer backpressure.
 
   /**
@@ -103,7 +105,7 @@ namespace video {
    */
   using sws_t = util::safe_ptr<SwsContext, sws_freeContext>;
   /**
-   * @brief Shared event that transports captured images between capture and encode threads.
+   * @brief Latest-frame event transporting captured images to the encoder.
    */
   using img_event_t = std::shared_ptr<safe::event_t<std::shared_ptr<platf::img_t>>>;
 
@@ -114,8 +116,31 @@ namespace video {
     std::uint64_t capture_queue_current {0};  ///< Captured images currently waiting for encode.
     std::uint64_t capture_queue_max {0};  ///< Greatest captured-image queue depth.
     std::uint64_t capture_frames_replaced {0};  ///< Older pending images replaced by a newer frame.
+    std::uint64_t pipewire_buffers_received {0};  ///< Producer buffers dequeued by PipeWire callbacks.
+    std::uint64_t pipewire_buffers_replaced {0};  ///< Producer buffers superseded before capture consumed them.
     std::uint64_t encoder_queue_current {0};  ///< Frames currently executing in the encoder.
     std::uint64_t encoder_queue_max {0};  ///< Greatest concurrent encoder occupancy.
+    std::uint64_t capture_deadline_misses {0};  ///< Output deadlines skipped instead of creating catch-up bursts.
+    std::uint64_t encoded_unique_frames {0};  ///< Encoder submissions carrying a newly captured frame.
+    std::uint64_t encoded_duplicate_frames {0};  ///< Encoder submissions reusing the preceding converted frame.
+    std::uint64_t encoded_frames {0};  ///< Compatibility total of unique and duplicate encoder submissions.
+    std::uint64_t duplicate_frames {0};  ///< Compatibility alias for duplicate encoder submissions.
+    std::uint64_t duplicate_run_max {0};  ///< Longest consecutive run of duplicate encoder submissions.
+    std::uint64_t pipewire_unique_frames {0};  ///< Valid unique PipeWire frames accepted for capture.
+    std::uint64_t pipewire_redundant_pts {0};  ///< PipeWire buffers repeating the preceding PTS.
+    std::uint64_t pipewire_no_damage_frames {0};  ///< PipeWire buffers explicitly reporting no damage.
+    std::uint64_t pipewire_queue_overflows {0};  ///< Source buffers rejected at the bounded producer handoff.
+    std::uint32_t requested_fps_numerator {0};  ///< Client-requested rational FPS numerator.
+    std::uint32_t requested_fps_denominator {1};  ///< Client-requested rational FPS denominator.
+    std::uint32_t negotiated_fps_numerator {0};  ///< PipeWire negotiated preferred FPS numerator.
+    std::uint32_t negotiated_fps_denominator {1};  ///< PipeWire negotiated preferred FPS denominator.
+    std::uint32_t negotiated_max_fps_numerator {0};  ///< PipeWire negotiated maximum FPS numerator.
+    std::uint32_t negotiated_max_fps_denominator {1};  ///< PipeWire negotiated maximum FPS denominator.
+    double observed_source_fps {0.0};  ///< Unique source generations observed per elapsed source interval.
+    double observed_encode_fps {0.0};  ///< Encoder submissions observed per elapsed encode interval.
+    std::string output_status_reason;  ///< Stable source/static/consumer status reason.
+    latency_diagnostics::statistics_t source_interarrival_ms;  ///< Interarrival time between accepted unique source frames.
+    latency_diagnostics::statistics_t encode_interarrival_ms;  ///< Interarrival time between encoder submissions.
     std::uint64_t network_queue_bytes {0};  ///< Encoded bytes waiting for the video sender.
     std::uint64_t network_queue_frames {0};  ///< Encoded frames waiting for the video sender.
     std::uint64_t network_queue_frames_max {0};  ///< Greatest encoded-frame queue depth.
@@ -142,25 +167,91 @@ namespace video {
    *
    * @param timestamp Source frame timestamp when available.
    * @param replaced_pending Whether the previous pending frame was replaced.
+   * @param queue_depth Captured frames waiting after publication.
    */
-  void record_capture_enqueued(const std::optional<std::chrono::steady_clock::time_point> &timestamp, bool replaced_pending);
+  void record_capture_enqueued(const std::optional<std::chrono::steady_clock::time_point> &timestamp, bool replaced_pending, std::size_t queue_depth = 1);
 
   /**
    * @brief Record removal of a captured frame for conversion and encoding.
+   *
+   * @param queue_depth Captured frames still waiting after removal.
    */
-  void record_capture_dequeued();
+  void record_capture_dequeued(std::size_t queue_depth = 0);
+
+  /**
+   * @brief Record one PipeWire producer buffer superseded before capture.
+   */
+  void record_pipewire_buffer_replaced();
 
   /**
    * @brief Mark the beginning of one frame encode operation.
    *
    * @param timestamp Source frame timestamp when available.
+   * @param unique_frame Whether this submission consumes a new source generation.
    */
-  void record_encode_started(const std::optional<std::chrono::steady_clock::time_point> &timestamp);
+  void record_encode_started(const std::optional<std::chrono::steady_clock::time_point> &timestamp, bool unique_frame);
 
   /**
    * @brief Mark completion of one frame encode operation.
    */
   void record_encode_finished();
+
+  /**
+   * @brief Record output deadlines discarded after a late pacer wakeup.
+   *
+   * @param count Number of elapsed deadlines intentionally skipped.
+   */
+  void record_capture_deadline_misses(std::uint64_t count);
+
+  /**
+   * @brief Record metadata classification for one PipeWire callback buffer.
+   *
+   * @param redundant_pts Whether the buffer repeats the preceding producer PTS.
+   * @param no_damage Whether VideoDamage explicitly reports no changed region.
+   */
+  void record_pipewire_buffer(bool redundant_pts, bool no_damage);
+
+  /**
+   * @brief Record one valid unique PipeWire frame accepted by capture.
+   *
+   * @param timestamp Producer callback arrival time when available.
+   */
+  void record_pipewire_unique_frame(const std::optional<std::chrono::steady_clock::time_point> &timestamp = std::nullopt);
+
+  /**
+   * @brief Record one explicit overflow at the bounded PipeWire producer handoff.
+   */
+  void record_pipewire_queue_overflow();
+
+  /**
+   * @brief Record the client-requested rational output rate.
+   *
+   * @param numerator Requested FPS numerator.
+   * @param denominator Requested FPS denominator.
+   */
+  void record_requested_frame_rate(std::uint32_t numerator, std::uint32_t denominator);
+
+  /**
+   * @brief Record the rational frame rates negotiated with PipeWire.
+   *
+   * @param negotiated_num PipeWire preferred FPS numerator.
+   * @param negotiated_den PipeWire preferred FPS denominator.
+   * @param maximum_num PipeWire maximum FPS numerator.
+   * @param maximum_den PipeWire maximum FPS denominator.
+   */
+  void record_pipewire_negotiated_frame_rate(
+    std::uint32_t negotiated_num,
+    std::uint32_t negotiated_den,
+    std::uint32_t maximum_num,
+    std::uint32_t maximum_den
+  );
+
+  /**
+   * @brief Record whether static keepalive suppression is currently active.
+   *
+   * @param static_mode True while duplicate output is reduced to keepalives.
+   */
+  void record_output_static_mode(bool static_mode);
 
   /**
    * @brief Record an encoded frame after it enters the ordered network queue.
@@ -713,6 +804,16 @@ namespace video {
   extern int active_av1_mode;
   extern bool last_encoder_probe_supported_ref_frames_invalidation;
   extern std::array<bool, 3> last_encoder_probe_supported_yuv444_for_codec;  // 0 - H.264, 1 - HEVC, 2 - AV1
+
+  /**
+   * @brief Check whether encoder capability probing is currently active.
+   *
+   * Capture backends may use this to avoid consuming edge-triggered producer
+   * frames when codec validation only needs a dummy image and GPU device.
+   *
+   * @return True while @ref probe_encoders is validating encoder capabilities.
+   */
+  bool encoder_probe_in_progress();
 
   void capture(
     safe::mail_t mail,

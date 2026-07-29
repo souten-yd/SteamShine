@@ -13,18 +13,26 @@ session is active.
 The intended path is therefore:
 
 ```text
-owned Gamescope -> host PipeWire Video/Source node -> SteamShine PipeWire
-consumer -> DMA-BUF -> Vulkan Video encoder -> Moonlight
+verified Gamescope -> host PipeWire capture-output node -> SteamShine PipeWire
+consumer -> same-GPU DMA-BUF -> Vulkan Video/VA-API encoder -> Moonlight
 ```
 
 ## Implementation status
 
 The original first sprint described here is implemented. SteamShine discovers
-the `Video/Source` node published by owned Gamescope, joins it to the PipeWire
+the current `Stream/Output/Video` node or compatible `Video/Source` node published by owned or attached Gamescope, joins it to the PipeWire
 Client PID/UID, verifies the producer process identity and start time, and
 opens a dedicated PipeWire core connection for capture. The capture consumer
-requires DMA-BUF and feeds the Vulkan Video encoder without a CPU frame
-readback.
+queries importable DMA-BUF formats through GBM/EGL on the selected render node
+and feeds the Vulkan Video or VA-API encoder on that same GPU. This discovery
+does not consult `WAYLAND_DISPLAY`; a resident service may therefore cross
+from Desktop Mode to Game Mode without retaining a capture dependency on the
+vanished Desktop compositor.
+
+Gamescope can pause and resume an active PipeWire stream when the private
+requested capture size changes. That transition rebuilds the capture and
+encoder dimensions against the same verified Gamescope PID/start-time identity;
+it is not classified as node disappearance and cannot select a Desktop fallback.
 
 On the SteamOS RX 9070 XT baseline this route produced positive captured-frame,
 encoded-packet, encoded-byte, and IDR counters, and Moonlight video was
@@ -55,7 +63,7 @@ PipeWire variables explicitly retain the host runtime and remote.
 ## Capture source policy
 
 ```text
-force + verified owned Gamescope PipeWire Video/Source node
+force + verified Gamescope PipeWire capture-output node
   -> gamescope_pipewire
 force + no verified owned node
   -> fail closed
@@ -73,11 +81,13 @@ persistent identity.
 
 A candidate must satisfy all of the following:
 
-1. `media.class` is `Video/Source`.
-2. The producer PID equals the owned Gamescope PID.
+1. `media.class` is `Stream/Output/Video` or the compatible `Video/Source` spelling.
+2. The producer PID equals the selected Gamescope PID.
 3. The producer UID equals the SteamShine user.
 4. The candidate belongs to the currently connected host PipeWire core.
-5. Exactly one candidate matches.
+5. The live producer PID, UID, start time, and executable still match discovery.
+6. Any producer render-node property matches the selected GPU; omission is allowed only because the selected GPU is verified independently.
+7. Exactly one candidate matches.
 
 `application.name`, `node.name`, and `node.description` containing
 `gamescope` are diagnostic corroboration only.  They do not replace PID and
@@ -106,16 +116,45 @@ close it a second time.
 ## Lifecycle
 
 ```text
-launch -> resolve GPU -> create private runtime -> resolve host PipeWire
-endpoint -> start Gamescope -> private socket ready -> wait for verified node
--> attach PipeWire consumer -> first frame -> encode -> stream
+launch -> resolve GPU -> attach or create Gamescope -> resolve host PipeWire
+endpoint -> wait for verified node -> open an independent consumer descriptor
+-> bind DMA-BUF discovery to that descriptor's render node -> negotiate format
+-> first frame -> same-GPU hardware encode -> GameStream packet -> Moonlight
 ```
 
-Node disappearance during streaming calls `mark_capture_lost()` and lets the
-existing teardown path stop the owned process group and clean the private
-runtime.  Capture callbacks do not wait for child processes or delete files.
+Node disappearance during streaming calls `mark_capture_lost()`. The existing
+teardown path stops and cleans only a SteamShine-owned session; an attached
+vendor Game Mode session is detached and never signaled. Capture callbacks do
+not wait for child processes or delete files.
+
+Before PipeWire connects, the consumer opens the verified `/dev/dri/renderD*`
+path with `O_NOFOLLOW`, confirms it is still a character device, and creates a
+GBM/EGL capability display. It advertises only formats with explicit modifiers
+accepted by that GPU, plus the existing memory-buffer alternative on the same
+verified PipeWire stream. Failure never falls back to Desktop Wayland, KMS,
+X11, another PipeWire node, another GPU, or a software encoder.
 
 ## Observability
+
+Game Mode acceptance must reject an audio-only/input-only session whose video
+diagnostics contain no captured frame ages and whose encoded-frame count is
+entirely composed of duplicates. For the stock Gamescope producer, the
+consumer supplies Gamescope's private requested-size property in addition to
+the standard PipeWire size range so capture is bounded to the Moonlight
+request. The first delivered buffer is logged with its data type, descriptor,
+chunk size, stride, offset, flags, and plane count. If the producer reaches the
+streaming state without delivering any buffer, SteamShine emits
+`PIPEWIRE_FIRST_FRAME_TIMEOUT reason=no_producer_buffer`; this distinguishes
+producer starvation from DMA-BUF import or encoder failures.
+
+Gamescope 3.16.23.4 is edge-triggered: it retains the last focus and override
+commit IDs across PipeWire consumer connections and does not publish an
+unchanged frame to a later connection. Encoder capability validation uses a
+dummy image and the independently verified render node, so SteamShine defers
+the Gamescope PipeWire stream during those probes. Desktop KWin and portal
+sources retain live probe negotiation. The first Gamescope producer
+connection is consequently the real capture display rather than a disposable
+H.264, HEVC, or AV1 probe, preserving the initial frame for Moonlight.
 
 The implementation emits structured, non-secret events for endpoint
 resolution, node discovery, verification, PipeWire-core connection, stream

@@ -37,6 +37,7 @@ namespace gamescope_pipewire {
       }
       width = session.width;
       height = session.height;
+      pipewire.set_gamescope_requested_size(static_cast<uint32_t>(width), static_cast<uint32_t>(height));
       logical_width = width;
       logical_height = height;
       env_width = width;
@@ -49,6 +50,11 @@ namespace gamescope_pipewire {
       first_frame_timeout_at_.reset();
       if (!pipewire_capture::has_verified_source_identity(descriptor)) {
         BOOST_LOG(error) << "PIPEWIRE_NODE_DISCOVERY_FAILED reason=incomplete_verified_source_identity";
+        close(descriptor.connected_core_fd);
+        return -1;
+      }
+      if (!set_verified_dmabuf_render_node(descriptor.render_node)) {
+        BOOST_LOG(error) << "PIPEWIRE_NODE_DISCOVERY_FAILED reason=invalid_verified_render_node";
         close(descriptor.connected_core_fd);
         return -1;
       }
@@ -66,13 +72,36 @@ namespace gamescope_pipewire {
     void verify_and_update_display_parameters() override {}
 
     /**
-     * @brief Fail the virtual session when its verified PipeWire node disappears.
+     * @brief Preserve Gamescope's edge-triggered initial frame during encoder probes.
      *
-     * @param out_status Receives the terminal capture status.
-     * @return True because desktop-source fallback is unsafe.
+     * The verified session descriptor already supplies dimensions and GPU
+     * identity, so codec validation does not need to connect to the producer.
+     *
+     * @return False because a live stream is only needed for real capture.
+     */
+    bool live_stream_required_for_encoder_probe() const override {
+      return false;
+    }
+
+    /**
+     * @brief Reinitialize after a verified Gamescope PipeWire interruption.
+     *
+     * Gamescope pauses and resumes its stream during a size renegotiation. The
+     * shared PipeWire backend reports that pause as a dead stream so the image
+     * and encoder dimensions can be rebuilt. Preserve fail-closed behavior by
+     * permitting reinitialization only while the original Gamescope process
+     * identity remains current.
+     *
+     * @param out_status Receives reinitialization or terminal capture status.
+     * @return True because Gamescope uses identity-aware custom handling.
      */
     bool check_stream_dead(platf::capture_e &out_status) override {
-      BOOST_LOG(error) << "PIPEWIRE_NODE_DISAPPEARED source=gamescope_pipewire";
+      if (steamos_virtual_session::mark_capture_reinitializing()) {
+        BOOST_LOG(info) << "PIPEWIRE_STREAM_REINITIALIZING source=gamescope_pipewire reason=producer_pause";
+        out_status = platf::capture_e::reinit;
+        return true;
+      }
+      BOOST_LOG(error) << "PIPEWIRE_SOURCE_IDENTITY_LOST source=gamescope_pipewire";
       steamos_virtual_session::mark_capture_lost();
       out_status = platf::capture_e::error;
       return true;

@@ -206,7 +206,7 @@ void mainThreadLoop(const std::shared_ptr<safe::event_t<bool>> &shutdown_event) 
 
   // Conditions that would require the main thread event loop
 #ifndef _WIN32
-  run_loop = tray_is_enabled && config::sunshine.system_tray;  // On Windows, tray runs in separate thread, so no main loop needed for tray
+  run_loop = main_loop_uses_system_tray(tray_is_enabled && config::sunshine.system_tray, config::steamos_virtual_display.enabled);  // On Windows, tray runs in separate thread, so no main loop needed for tray
 #endif
 
   if (!run_loop) {
@@ -221,7 +221,11 @@ void mainThreadLoop(const std::shared_ptr<safe::event_t<bool>> &shutdown_event) 
 #if defined SUNSHINE_TRAY && SUNSHINE_TRAY >= 1
   while (system_tray::process_tray_events() == 0);
 #endif
-  BOOST_LOG(info) << "Main loop has exited"sv;
+  if (main_loop_requires_shutdown_wait(shutdown_event->peek())) {
+    BOOST_LOG(warning) << "Platform event loop ended without a shutdown request; keeping the server resident"sv;
+    shutdown_event->view();
+  }
+  BOOST_LOG(info) << "Main loop has exited after a shutdown request"sv;
 }
 
 /**
@@ -524,7 +528,11 @@ int main(int argc, char *argv[]) {
   }
 #endif
 
-  if (tray_is_enabled && config::sunshine.system_tray) {
+  const bool start_system_tray {main_loop_uses_system_tray(tray_is_enabled && config::sunshine.system_tray, config::steamos_virtual_display.enabled)};
+  if (tray_is_enabled && config::sunshine.system_tray && !start_system_tray) {
+    BOOST_LOG(warning) << "System tray disabled while SteamOS virtual display transitions are enabled"sv;
+  }
+  if (start_system_tray) {
     BOOST_LOG(info) << "Starting system tray"sv;
 #ifdef _WIN32
     // TODO: Windows has a weird bug where when running as a service and on the first Windows boot,

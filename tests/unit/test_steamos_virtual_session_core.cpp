@@ -272,9 +272,9 @@ namespace {
   /**
    * @brief Verify command generation only uses Gamescope-advertised options.
    */
-  TEST(SteamOSVirtualSessionCore, BuildsHeadlessGamescopeCommand) {
+  TEST(SteamOSVirtualSessionCore, BuildsGeneralApplicationHeadlessGamescopeCommand) {
     std::string error;
-    const auto arguments {steamos_virtual_session::gamescope_arguments("--backend headless --nested-width --nested-height --nested-refresh --expose-wayland --scaler --hdr-enabled --prefer-vk-device", 2560, 1440, 120, true, "1002:744c", error)};
+    const auto arguments {steamos_virtual_session::gamescope_arguments("--backend headless --nested-width --nested-height --nested-refresh --expose-wayland --steam --scaler --hdr-enabled --prefer-vk-device", 2560, 1440, 120, true, "1002:744c", error)};
     EXPECT_TRUE(error.empty());
     const std::vector<std::string> expected {
       "--backend",
@@ -293,6 +293,17 @@ namespace {
       "1002:744c"
     };
     EXPECT_EQ(arguments, expected);
+  }
+
+  /**
+   * @brief Verify Steam-controlled focus is omitted even when Gamescope advertises it.
+   */
+  TEST(SteamOSVirtualSessionCore, OmitsSteamControlledFocusForGeneralApplications) {
+    std::string error;
+    const auto arguments {steamos_virtual_session::gamescope_arguments("--backend headless --nested-width --nested-height --nested-refresh --expose-wayland --steam", 1920, 1080, 60, false, {}, error)};
+
+    EXPECT_TRUE(error.empty());
+    EXPECT_EQ(std::ranges::find(arguments, "--steam"), arguments.end());
   }
 
   /**
@@ -344,6 +355,40 @@ namespace {
     ASSERT_TRUE(selected.has_value());
     EXPECT_EQ(selected->origin, steamos_virtual_session::session_origin_e::attached_existing);
     EXPECT_EQ(selected->producer_pid, 200);
+  }
+
+  /**
+   * @brief Verify Gamescope's current output-stream class and the legacy source class are accepted.
+   */
+  TEST(SteamOSVirtualSessionCore, AcceptsGamescopeCaptureMediaClasses) {
+    EXPECT_TRUE(gamescope_source::is_gamescope_capture_media_class("Stream/Output/Video"));
+    EXPECT_TRUE(gamescope_source::is_gamescope_capture_media_class("Video/Source"));
+    EXPECT_FALSE(gamescope_source::is_gamescope_capture_media_class("Stream/Input/Video"));
+    EXPECT_FALSE(gamescope_source::is_gamescope_capture_media_class("Audio/Source"));
+
+    auto current_gamescope {verified_source(steamos_virtual_session::session_origin_e::attached_existing, 220)};
+    current_gamescope.media_class = "Stream/Output/Video";
+    const auto selected {gamescope_source::select_gamescope_source({current_gamescope}, {})};
+    ASSERT_TRUE(selected.has_value());
+    EXPECT_EQ(selected->producer_pid, 220);
+  }
+
+  /**
+   * @brief Verify absent GPU metadata is allowed while contradictory metadata remains rejected.
+   */
+  TEST(SteamOSVirtualSessionCore, AllowsAbsentGamescopeRenderNodeMetadata) {
+    auto source {verified_source(steamos_virtual_session::session_origin_e::attached_existing, 230, "")};
+    const gamescope_source::source_selection_request_t request {
+      .required_render_node = "/dev/dri/renderD128",
+    };
+    const auto selected {gamescope_source::select_gamescope_source({source}, request)};
+    ASSERT_TRUE(selected.has_value());
+    EXPECT_TRUE(selected->render_node.empty());
+
+    source.render_node = "/dev/dri/renderD129";
+    const auto mismatched {gamescope_source::select_gamescope_source({source}, request)};
+    EXPECT_FALSE(mismatched.has_value());
+    EXPECT_EQ(mismatched.error(), gamescope_source::source_error_e::unavailable);
   }
 
   /**
@@ -446,6 +491,19 @@ namespace {
   }
 
   /**
+   * @brief Verify stock SteamOS Game Mode is accepted without a `--steam` argument.
+   */
+  TEST(SteamOSVirtualSessionCore, ValidatesSteamOSGameModeSessionIdentity) {
+    constexpr char stock_command_data[] {"gamescope\0-e\0-R\0/run/user/1000/gamescope/startup.socket"};
+    const std::string stock_command {stock_command_data, sizeof(stock_command_data) - 1};
+    const std::string stock_cgroup {"0::/user.slice/user-1000.slice/user@1000.service/session.slice/gamescope-session.service\n"};
+    EXPECT_TRUE(gamescope_source::has_game_mode_session_identity(stock_command, stock_cgroup));
+    EXPECT_TRUE(gamescope_source::has_game_mode_session_identity("gamescope --steam", "0::/user.slice/steam-session.scope\n"));
+    EXPECT_FALSE(gamescope_source::has_game_mode_session_identity(stock_command, "0::/user.slice/not-gamescope-session.service\n"));
+    EXPECT_FALSE(gamescope_source::has_game_mode_session_identity("gamescope", "0::/user.slice/steam-session.scope\n"));
+  }
+
+  /**
    * @brief Verify Steam singleton placement uses target membership rather than a name alone.
    */
   TEST(SteamOSVirtualSessionCore, ClassifiesSteamInstanceLocation) {
@@ -482,6 +540,20 @@ namespace {
       {.pid = 401, .parent_pid = 1, .executable_name = "steamwebhelper", .cgroup = target.cgroup},
     };
     EXPECT_EQ(classify_instance_location(cgroup_inside, target), instance_location_e::inside_target_gamescope);
+
+    const steam_session::target_session_t vendor_target {
+      .gamescope_pid = 100,
+      .cgroup = "0::/user.slice/user-1000.slice/user@1000.service/session.slice/gamescope-session.service\n",
+    };
+    const std::vector<process_record_t> vendor_steam {
+      {.pid = 451, .parent_pid = 1, .executable_name = "steam", .cgroup = "0::/user.slice/user-1000.slice/user@1000.service/session.slice/steam-launcher.service\n"},
+      {.pid = 452, .parent_pid = 451, .executable_name = "steamwebhelper", .cgroup = "0::/user.slice/user-1000.slice/user@1000.service/session.slice/steam-launcher.service\n"},
+    };
+    EXPECT_EQ(classify_instance_location(vendor_steam, vendor_target), instance_location_e::inside_target_gamescope);
+
+    auto similar_vendor_steam {vendor_steam};
+    similar_vendor_steam[0].cgroup = "0::/user.slice/session.slice/not-steam-launcher.service\n";
+    EXPECT_EQ(classify_instance_location(similar_vendor_steam, vendor_target), instance_location_e::outside_target_gamescope);
 
     const target_session_t shared_cgroup_target {
       .gamescope_pid = 100,
@@ -528,6 +600,8 @@ namespace {
       .xauthority = "/run/user/1000/xauthority",
       .gamescope_wayland_display = "gamescope-0",
       .dbus_session_bus_address = "unix:path=/run/user/1000/bus",
+      .xdg_session_type = "x11",
+      .xdg_current_desktop = "gamescope",
       .cgroup = target.cgroup,
     };
     const auto selected {steam_session::select_resident_environment({gamescope, steam}, target, 1000)};
@@ -535,6 +609,23 @@ namespace {
     EXPECT_EQ(selected->steam_pid, 101);
     EXPECT_EQ(selected->steam_start_time, 20U);
     EXPECT_EQ(selected->x11_display, ":27");
+    EXPECT_EQ(selected->xdg_session_type, "x11");
+    EXPECT_EQ(selected->xdg_current_desktop, "gamescope");
+
+    auto vendor_gamescope {gamescope};
+    vendor_gamescope.cgroup = "0::/user.slice/user-1000.slice/user@1000.service/session.slice/gamescope-session.service\n";
+    auto vendor_steam {steam};
+    vendor_steam.parent_pid = 1;
+    vendor_steam.cgroup = "0::/user.slice/user-1000.slice/user@1000.service/session.slice/steam-launcher.service\n";
+    const steam_session::target_session_t vendor_target {
+      .gamescope_pid = 100,
+      .cgroup = vendor_gamescope.cgroup,
+    };
+    const auto vendor_selected {steam_session::select_resident_environment({vendor_gamescope, vendor_steam}, vendor_target, 1000)};
+    ASSERT_TRUE(vendor_selected);
+    EXPECT_EQ(vendor_selected->steam_pid, 101);
+    EXPECT_TRUE(vendor_selected->allows_authless_xwayland);
+    EXPECT_FALSE(selected->allows_authless_xwayland);
 
     const steam_session::process_record_t stale_game_reaper {
       .pid = 103,
@@ -612,25 +703,54 @@ namespace {
   }
 
   /**
+   * @brief Verify direct Gamescope capture never derives GPU capabilities from Desktop Wayland.
+   */
+  TEST(SteamOSVirtualSessionCore, SelectsVerifiedRenderNodeForGamescopeDmabufDiscovery) {
+    const auto desktop {pipewire_capture::desktop_dmabuf_device()};
+    EXPECT_EQ(desktop.origin, pipewire_capture::dmabuf_device_origin_e::desktop_wayland);
+    EXPECT_TRUE(desktop.render_node.empty());
+
+    const auto direct {pipewire_capture::verified_render_node_dmabuf_device("/dev/dri/renderD128")};
+    ASSERT_TRUE(direct);
+    EXPECT_EQ(direct->origin, pipewire_capture::dmabuf_device_origin_e::verified_render_node);
+    EXPECT_EQ(direct->render_node, "/dev/dri/renderD128");
+  }
+
+  /**
+   * @brief Verify untrusted or non-render paths cannot become direct DMA-BUF endpoints.
+   */
+  TEST(SteamOSVirtualSessionCore, RejectsInvalidGamescopeDmabufRenderNodes) {
+    EXPECT_FALSE(pipewire_capture::verified_render_node_dmabuf_device(""));
+    EXPECT_FALSE(pipewire_capture::verified_render_node_dmabuf_device("renderD128"));
+    EXPECT_FALSE(pipewire_capture::verified_render_node_dmabuf_device("/dev/dri/card0"));
+    EXPECT_FALSE(pipewire_capture::verified_render_node_dmabuf_device("/dev/dri/renderD"));
+    EXPECT_FALSE(pipewire_capture::verified_render_node_dmabuf_device("/dev/dri/renderD128/child"));
+    EXPECT_FALSE(pipewire_capture::verified_render_node_dmabuf_device("/tmp/renderD128"));
+  }
+
+  /**
    * @brief Verify PipeWire maximum-frame-rate negotiation intersects KWin's positive range.
    */
   TEST(SteamOSVirtualSessionCore, AdvertisesPositivePipeWireMaximumFrameRateRange) {
-    const auto range {pipewire_capture::max_framerate_range(60)};
+    const auto range {pipewire_capture::max_framerate_range(60000, 1001)};
 
-    EXPECT_EQ(range.preferred, 60U);
-    EXPECT_EQ(range.minimum, 1U);
-    EXPECT_EQ(range.maximum, 60U);
+    EXPECT_EQ(range.preferred.numerator, 60000U);
+    EXPECT_EQ(range.preferred.denominator, 1001U);
+    EXPECT_EQ(range.minimum.numerator, 1U);
+    EXPECT_EQ(range.minimum.denominator, 1U);
+    EXPECT_EQ(range.maximum.numerator, 60000U);
+    EXPECT_EQ(range.maximum.denominator, 1001U);
   }
 
   /**
    * @brief Verify an unspecified frame rate remains an unconstrained zero range.
    */
   TEST(SteamOSVirtualSessionCore, KeepsUnspecifiedPipeWireMaximumFrameRateRangeEmpty) {
-    const auto range {pipewire_capture::max_framerate_range(0)};
+    const auto range {pipewire_capture::max_framerate_range(0, 1)};
 
-    EXPECT_EQ(range.preferred, 0U);
-    EXPECT_EQ(range.minimum, 0U);
-    EXPECT_EQ(range.maximum, 0U);
+    EXPECT_EQ(range.preferred.numerator, 0U);
+    EXPECT_EQ(range.minimum.numerator, 0U);
+    EXPECT_EQ(range.maximum.numerator, 0U);
   }
 
   /**
@@ -643,6 +763,16 @@ namespace {
     EXPECT_EQ(pipewire_capture::negotiation_state(false, 3440, 1440), negotiation_state_e::complete);
     EXPECT_EQ(pipewire_capture::negotiation_state(true, 0, 0), negotiation_state_e::failed);
     EXPECT_EQ(pipewire_capture::negotiation_state(true, 3440, 1440), negotiation_state_e::failed);
+  }
+
+  /**
+   * @brief Verify capability probes preserve an edge-triggered producer's initial frame.
+   */
+  TEST(SteamOSVirtualSessionCore, DefersEdgeTriggeredPipeWireStreamDuringEncoderProbe) {
+    EXPECT_FALSE(pipewire_capture::should_start_stream_during_initialization(true, false));
+    EXPECT_TRUE(pipewire_capture::should_start_stream_during_initialization(true, true));
+    EXPECT_TRUE(pipewire_capture::should_start_stream_during_initialization(false, false));
+    EXPECT_TRUE(pipewire_capture::should_start_stream_during_initialization(false, true));
   }
 
   /**
@@ -683,5 +813,43 @@ namespace {
     auto next {complete};
     ++next.generation;
     EXPECT_EQ(next.generation, complete.generation + 1);
+  }
+
+  /**
+   * @brief Verify desktop endpoint discovery accepts one complete endpoint.
+   */
+  TEST(SteamOSVirtualSessionCore, SelectsUniqueHostDesktopEndpoint) {
+    const host_desktop_endpoint::endpoint_t endpoint {
+      .xdg_runtime_directory = "/run/user/1000",
+      .wayland_display = "wayland-0",
+      .x11_display = ":0",
+    };
+
+    const auto selected {host_desktop_endpoint::select_unique_endpoint({endpoint, endpoint})};
+
+    ASSERT_TRUE(selected.has_value());
+    EXPECT_EQ(selected->xdg_runtime_directory, endpoint.xdg_runtime_directory);
+    EXPECT_EQ(selected->wayland_display, endpoint.wayland_display);
+    EXPECT_EQ(selected->x11_display, endpoint.x11_display);
+  }
+
+  /**
+   * @brief Verify desktop endpoint discovery rejects ambiguity and partial data.
+   */
+  TEST(SteamOSVirtualSessionCore, RejectsAmbiguousHostDesktopEndpoints) {
+    const host_desktop_endpoint::endpoint_t first {
+      .xdg_runtime_directory = "/run/user/1000",
+      .wayland_display = "wayland-0",
+      .x11_display = ":0",
+    };
+    auto second {first};
+    second.wayland_display = "wayland-1";
+    const host_desktop_endpoint::endpoint_t partial {
+      .wayland_display = "wayland-0",
+      .x11_display = ":0",
+    };
+
+    EXPECT_FALSE(host_desktop_endpoint::select_unique_endpoint({first, second}).has_value());
+    EXPECT_FALSE(host_desktop_endpoint::select_unique_endpoint({partial}).has_value());
   }
 }  // namespace
