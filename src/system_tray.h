@@ -4,8 +4,6 @@
  */
 #pragma once
 
-#include <string>
-
 /**
  * @brief Handles the system tray icon and notification system.
  */

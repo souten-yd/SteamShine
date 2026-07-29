@@ -32,15 +32,3 @@ The user unit sets `XDG_RUNTIME_DIR=%t`, `PIPEWIRE_RUNTIME_DIR=%t`, and
 `GAMESCOPE_WAYLAND_DISPLAY` are deliberately absent: they are session endpoints discovered after
 startup and are not prerequisites for the control and streaming servers to remain resident. Run
 `./steamshine.sh autostart-status` to inspect the installed unit and current-boot process identity.
-When a physical KDE desktop is selected, the per-stream display helper refreshes Plasma's current
-`WAYLAND_DISPLAY`, `DISPLAY`, and related desktop values from the systemd user-manager environment
-before invoking KScreen. This allows the resident service to configure a monitor even when it began
-before Plasma published its session endpoint; non-KDE manager endpoints are ignored.
-KScreen operations have a bounded timeout so a missing or transitioning desktop cannot hold the
-stream launch path indefinitely.
-When SteamOS virtual-display support is enabled, the resident server omits the optional system tray.
-Qt's Wayland and X11 platform backends are tied to the current desktop compositor and can terminate
-their process when that compositor disappears. Omitting the tray allows Plasma to stop during a
-Desktop Mode to Game Mode transition without terminating the control and streaming servers. Normal
-tray behavior is unchanged when SteamOS virtual-display support is disabled, and a platform
-event-loop exit is not treated as a SteamShine shutdown request.

@@ -288,8 +288,7 @@ namespace steamos_virtual_session {
    *
    * The result never uses an option absent from @p help_text. This keeps the
    * virtual-display provider compatible with the Gamescope version installed on
-   * the SteamOS host. Owned sessions intentionally omit `--steam` so ordinary
-   * applications without a Steam AppID remain eligible for focus and capture.
+   * the SteamOS host.
    *
    * @param help_text Output captured from `gamescope --help`.
    * @param width Normalized nested display width.

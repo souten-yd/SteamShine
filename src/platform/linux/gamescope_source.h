@@ -46,30 +46,6 @@ namespace gamescope_source {
   bool has_gamescope_command_identity(std::string_view command_line, std::string_view comm);
 
   /**
-   * @brief Validate that a Gamescope process belongs to a Steam Game Mode session.
-   *
-   * SteamOS vendor sessions are identified by their exact systemd user-unit
-   * cgroup component. Other launchers must provide both a Steam command marker
-   * and Steam-related cgroup evidence.
-   *
-   * @param command_line Nul-separated `/proc/<pid>/cmdline` content.
-   * @param cgroup Complete `/proc/<pid>/cgroup` content.
-   * @return True only when the process has verified Game Mode session evidence.
-   */
-  bool has_game_mode_session_identity(std::string_view command_line, std::string_view cgroup);
-
-  /**
-   * @brief Check whether a PipeWire media class can represent Gamescope capture output.
-   *
-   * Current Gamescope versions publish `Stream/Output/Video`; the legacy
-   * `Video/Source` spelling remains accepted for compatible producers.
-   *
-   * @param media_class PipeWire `media.class` property.
-   * @return True only for a supported video-producing media class.
-   */
-  bool is_gamescope_capture_media_class(std::string_view media_class);
-
-  /**
    * @brief Verify that a source still identifies the originally discovered Gamescope process.
    *
    * @param source Source descriptor to validate against current `/proc` state.
@@ -78,7 +54,7 @@ namespace gamescope_source {
   bool source_identity_is_current(const gamescope_source_t &source);
 
   /**
-   * @brief Discover current-user Gamescope capture-output nodes from one PipeWire core.
+   * @brief Discover current-user Gamescope Video/Source nodes from one PipeWire core.
    *
    * @param runtime_directory Host PipeWire runtime directory.
    * @param remote_name Host PipeWire socket name.
@@ -102,7 +78,7 @@ namespace gamescope_source {
   std::optional<int> open_host_pipewire_socket(const std::string &runtime_directory, std::string_view remote_name, std::string &error);
 
   /**
-   * @brief Stable identity and PipeWire metadata for one Gamescope capture-output node.
+   * @brief Stable identity and PipeWire metadata for one Gamescope Video/Source node.
    */
   struct gamescope_source_t {
     uint32_t node_id {UINT32_MAX};  ///< Volatile PipeWire node ID.
@@ -116,7 +92,7 @@ namespace gamescope_source {
     std::string node_description;  ///< PipeWire node description.
     std::string application_name;  ///< PipeWire application name.
     std::string media_class;  ///< PipeWire media class.
-    std::string render_node;  ///< Optional producer DRM render node.
+    std::string render_node;  ///< Producer DRM render node.
     steamos_virtual_session::session_origin_e origin {steamos_virtual_session::session_origin_e::none};  ///< Ownership origin.
     bool identity_verified {false};  ///< PID, start time, executable, and UID were verified together.
     bool game_mode_verified {false};  ///< Candidate is a verified current-user Game Mode session.
@@ -137,7 +113,7 @@ namespace gamescope_source {
   struct source_selection_request_t {
     steamos_virtual_session::session_source_policy_e policy {steamos_virtual_session::session_source_policy_e::auto_select};  ///< Source policy from configuration.
     std::optional<int> explicit_gamescope_pid;  ///< Optional administrator-selected Gamescope PID.
-    std::string required_render_node;  ///< Selected capture/encoder DRM render node; present producer metadata must match it.
+    std::string required_render_node;  ///< Selected capture/encoder DRM render node.
   };
 
   /**

@@ -62,7 +62,6 @@
 #include "src/entry_handler.h"
 #include "src/logging.h"
 #include "src/platform/common.h"
-#include "src/platform/linux/host_desktop_endpoint.h"
 #include "src/steamos_virtual_session.h"
 #include "vaapi.h"
 
@@ -1271,34 +1270,6 @@ namespace platf {
   }
 #endif
 
-  void refresh_capture_environment() {
-    std::string previous_wayland_display;
-    (void) lizardbyte::common::get_env("WAYLAND_DISPLAY", previous_wayland_display);
-    if (!config::steamos_virtual_display.enabled || !host_desktop_endpoint::capture_live() || !host_desktop_endpoint::activate()) {
-#ifdef SUNSHINE_BUILD_KWIN
-      sources[source::KWIN] = false;
-#endif
-#ifdef SUNSHINE_BUILD_PORTAL
-      sources[source::PORTAL] = false;
-#endif
-      steamos_virtual_session::set_physical_compositor_capture_available(physical_compositor_capture_available());
-      return;
-    }
-    const auto endpoint {host_desktop_endpoint::current()};
-    if (endpoint.wayland_display != previous_wayland_display) {
-      BOOST_LOG(info) << "HOST_DESKTOP_ENDPOINT_REFRESHED wayland=" << endpoint.wayland_display
-                      << " display=" << endpoint.x11_display
-                      << " generation=" << endpoint.generation;
-    }
-#ifdef SUNSHINE_BUILD_WAYLAND
-    window_system = window_system_e::WAYLAND;
-#endif
-#ifdef SUNSHINE_BUILD_KWIN
-    sources[source::KWIN] = (config::video.capture.empty() || config::video.capture == "kwin") && verify_kwin();
-#endif
-    steamos_virtual_session::set_physical_compositor_capture_available(physical_compositor_capture_available());
-  }
-
   /**
    * @brief List display names accepted by the selected capture backend.
    */
@@ -1518,11 +1489,14 @@ namespace platf {
     }
 #endif
 #ifdef SUNSHINE_BUILD_PORTAL
-    if (steamos_virtual_session::should_probe_physical_portal(config::video.capture.empty(), config::video.capture == "portal", steamos_virtual_session::physical_output_connected(),
+    if (steamos_virtual_session::should_probe_physical_portal(
+          config::video.capture.empty(),
+          config::video.capture == "portal",
+          steamos_virtual_session::physical_output_connected(),
   #ifdef SUNSHINE_BUILD_KWIN
-                                                              sources[source::KWIN]
+          sources[source::KWIN]
   #else
-                                                              false
+          false
   #endif
         ) &&
         verify_portal()) {

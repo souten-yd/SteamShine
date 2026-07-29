@@ -4,8 +4,6 @@
  */
 #include "gamescope_source.h"
 
-#include "pipewire_capture.h"
-
 #include <algorithm>
 #include <cerrno>
 #include <climits>
@@ -86,8 +84,7 @@ namespace gamescope_source {
      * @return True only when the candidate is safe to consider further.
      */
     bool eligible(const gamescope_source_t &source, const source_selection_request_t &request) {
-      return source.identity_verified && is_gamescope_capture_media_class(source.media_class) && source.producer_pid > 0 && source.producer_start_time != 0 && !source.executable.empty() &&
-             (request.required_render_node.empty() || pipewire_capture::matches_selected_render_node(source.render_node, request.required_render_node));
+      return source.identity_verified && source.media_class == "Video/Source" && source.producer_pid > 0 && source.producer_start_time != 0 && !source.executable.empty() && (request.required_render_node.empty() || source.render_node == request.required_render_node);
     }
 
     /**
@@ -282,11 +279,13 @@ namespace gamescope_source {
       const std::string command {std::istreambuf_iterator<char> {command_line}, {}};
       std::ifstream cgroup_file {"/proc/" + std::to_string(identity.pid) + "/cgroup"};
       const std::string cgroup {std::istreambuf_iterator<char> {cgroup_file}, {}};
-      return has_game_mode_session_identity(command, cgroup);
+      const bool steam_argument {command.find("--steam") != std::string::npos || command.find("-steamdeck") != std::string::npos};
+      const bool steam_session {cgroup.find("gamescope-session") != std::string::npos || cgroup.find("steam") != std::string::npos};
+      return steam_argument && steam_session;
     }
 
     /**
-     * @brief Registry snapshot that joins capture-output nodes to PipeWire clients.
+     * @brief Registry snapshot that joins Video/Source nodes to PipeWire clients.
      */
     class pipewire_registry_t {
     public:
@@ -386,7 +385,7 @@ namespace gamescope_source {
        * Gamescope publishes its capture node. Waiting for a joined Gamescope
        * pair prevents those globals from ending discovery prematurely.
        *
-       * @return True when a capture-output node is joined to a live Gamescope client.
+       * @return True when a Video/Source node is joined to a live Gamescope client.
        */
       bool has_joined_gamescope_source() const {
         return std::any_of(sources_.begin(), sources_.end(), [this](const gamescope_source_t &source) {
@@ -426,7 +425,7 @@ namespace gamescope_source {
           self->clients_.push_back({id, static_cast<int>(*pid), static_cast<int>(*uid)});
           return;
         }
-        if (std::string_view {type} != PW_TYPE_INTERFACE_Node || !is_gamescope_capture_media_class(property(properties, {PW_KEY_MEDIA_CLASS}) ?: "")) {
+        if (std::string_view {type} != PW_TYPE_INTERFACE_Node || std::string_view {property(properties, {PW_KEY_MEDIA_CLASS}) ?: ""} != "Video/Source") {
           return;
         }
         const auto client_id {parse_property_integer(property(properties, {"client.id"}))};
@@ -480,7 +479,7 @@ namespace gamescope_source {
       spa_hook listener_ {};  ///< Registry callback hook.
       std::mutex mutex_;  ///< Synchronizes registry callback state.
       std::vector<pipewire_client_t> clients_;  ///< Current PipeWire client identities.
-      std::vector<gamescope_source_t> sources_;  ///< Current capture-output node descriptors.
+      std::vector<gamescope_source_t> sources_;  ///< Current Video/Source node descriptors.
     };
 #endif
   }  // namespace
@@ -529,31 +528,6 @@ namespace gamescope_source {
     const bool command_is_gamescope {command_name.filename() == "gamescope" || command_name.filename() == "gamescope-wl"};
     const bool comm_is_gamescope {comm == "gamescope" || comm == "gamescope-wl"};
     return command_is_gamescope && comm_is_gamescope;
-  }
-
-  bool has_game_mode_session_identity(const std::string_view command_line, const std::string_view cgroup) {
-    size_t component_start {};
-    while (component_start < cgroup.size()) {
-      const auto separator {cgroup.find('/', component_start)};
-      component_start = separator == std::string_view::npos ? cgroup.size() : separator + 1;
-      if (separator == std::string_view::npos) {
-        break;
-      }
-      const auto component_end {cgroup.find_first_of("/\n", component_start)};
-      const auto component {cgroup.substr(component_start, component_end - component_start)};
-      if (component == "gamescope-session.service" || (component.starts_with("gamescope-session@") && component.ends_with(".service"))) {
-        return true;
-      }
-      component_start = component_end == std::string_view::npos ? cgroup.size() : component_end;
-    }
-
-    const bool steam_argument {command_line.find("--steam") != std::string_view::npos || command_line.find("-steamdeck") != std::string_view::npos};
-    const bool steam_session {cgroup.find("gamescope-session") != std::string_view::npos || cgroup.find("steam") != std::string_view::npos};
-    return steam_argument && steam_session;
-  }
-
-  bool is_gamescope_capture_media_class(const std::string_view media_class) {
-    return media_class == "Stream/Output/Video" || media_class == "Video/Source";
   }
 
   bool source_identity_is_current(const gamescope_source_t &source) {

@@ -47,45 +47,6 @@ namespace steam_session {
     }
 
     /**
-     * @brief Check for one exact systemd unit component in a cgroup record.
-     *
-     * @param cgroup Raw cgroup membership text.
-     * @param unit_name Exact systemd unit filename to find.
-     * @return True when one slash-delimited component equals the unit name.
-     */
-    bool has_cgroup_unit_component(const std::string_view cgroup, const std::string_view unit_name) {
-      size_t component_start {};
-      while (component_start < cgroup.size()) {
-        const auto separator {cgroup.find('/', component_start)};
-        component_start = separator == std::string_view::npos ? cgroup.size() : separator + 1;
-        if (separator == std::string_view::npos) {
-          break;
-        }
-        const auto component_end {cgroup.find_first_of("/\n", component_start)};
-        if (cgroup.substr(component_start, component_end - component_start) == unit_name) {
-          return true;
-        }
-        component_start = component_end == std::string_view::npos ? cgroup.size() : component_end;
-      }
-      return false;
-    }
-
-    /**
-     * @brief Match SteamOS vendor Gamescope and Steam launcher sibling units.
-     *
-     * Stock SteamOS starts Gamescope and Steam in separate services which are
-     * both bound to the graphical session. Exact unit components distinguish
-     * that vendor topology from similarly named user scopes.
-     *
-     * @param record Steam-family process metadata.
-     * @param target Target Gamescope identity.
-     * @return True when the target and process occupy the vendor unit pair.
-     */
-    bool belongs_to_vendor_game_mode(const process_record_t &record, const target_session_t &target) {
-      return has_cgroup_unit_component(target.cgroup, "gamescope-session.service") && has_cgroup_unit_component(record.cgroup, "steam-launcher.service");
-    }
-
-    /**
      * @brief Check whether a process reaches the target Gamescope through parent links.
      *
      * @param record Process to inspect.
@@ -119,7 +80,7 @@ namespace steam_session {
     bool belongs_to_target(const process_record_t &record, const target_session_t &target, const std::unordered_map<int, const process_record_t *> &by_pid) {
       const bool runtime_match {!target.runtime_directory.empty() && record.xdg_runtime_directory == target.runtime_directory && !target.wayland_display.empty() && record.wayland_display == target.wayland_display};
       const bool cgroup_match {!target.cgroup.empty() && record.cgroup == target.cgroup && is_gamescope_specific_cgroup(target.cgroup)};
-      return runtime_match || cgroup_match || belongs_to_vendor_game_mode(record, target) || has_target_parent(record, by_pid, target.gamescope_pid);
+      return runtime_match || cgroup_match || has_target_parent(record, by_pid, target.gamescope_pid);
     }
 
     /**
@@ -235,8 +196,6 @@ namespace steam_session {
       record.xauthority = environment_value(environment_contents, "XAUTHORITY");
       record.gamescope_wayland_display = environment_value(environment_contents, "GAMESCOPE_WAYLAND_DISPLAY");
       record.dbus_session_bus_address = environment_value(environment_contents, "DBUS_SESSION_BUS_ADDRESS");
-      record.xdg_session_type = environment_value(environment_contents, "XDG_SESSION_TYPE");
-      record.xdg_current_desktop = environment_value(environment_contents, "XDG_CURRENT_DESKTOP");
       return record;
     }
 #endif
@@ -356,9 +315,6 @@ namespace steam_session {
       .x11_display = resident->x11_display,
       .xauthority = resident->xauthority,
       .dbus_session_bus_address = resident->dbus_session_bus_address,
-      .xdg_session_type = resident->xdg_session_type,
-      .xdg_current_desktop = resident->xdg_current_desktop,
-      .allows_authless_xwayland = belongs_to_vendor_game_mode(*resident, target),
     };
   }
 

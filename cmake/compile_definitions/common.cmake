@@ -84,8 +84,6 @@ set(SUNSHINE_TARGET_FILES
         "${CMAKE_SOURCE_DIR}/src/entry_handler.h"
         "${CMAKE_SOURCE_DIR}/src/file_handler.cpp"
         "${CMAKE_SOURCE_DIR}/src/file_handler.h"
-        "${CMAKE_SOURCE_DIR}/src/frame_pacing.cpp"
-        "${CMAKE_SOURCE_DIR}/src/frame_pacing.h"
         "${CMAKE_SOURCE_DIR}/src/globals.cpp"
         "${CMAKE_SOURCE_DIR}/src/globals.h"
         "${CMAKE_SOURCE_DIR}/src/logging.cpp"

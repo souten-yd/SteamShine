@@ -8,9 +8,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstring>
-#include <EGL/egl.h>
 #include <fcntl.h>
-#include <GLES2/gl2.h>
 #include <iostream>
 #include <linux/joystick.h>
 #include <poll.h>
@@ -22,7 +20,6 @@
 #include <X11/keysym.h>
 #include <X11/Xatom.h>
 #include <X11/Xlib.h>
-#include <X11/Xutil.h>
 
 namespace {
   constexpr std::chrono::milliseconds frame_interval {16};  ///< Approximate 60 Hz repaint interval.
@@ -169,23 +166,33 @@ namespace {
   }
 
   /**
-   * @brief Draw an animated diagnostic color through the GPU swapchain.
+   * @brief Draw the current counters and event timestamp over a solid color.
    *
+   * @param display X11 display connection.
+   * @param window Visualizer window.
+   * @param graphics Graphics context used for fill and text.
+   * @param colors Preallocated diagnostic palette.
    * @param state Current in-memory visual state.
    */
-  void draw_frame(visual_state_t &state) {
-    constexpr std::array<std::array<GLfloat, 3>, 6> colors {{
-      {0.91F, 0.30F, 0.24F},
-      {0.18F, 0.80F, 0.44F},
-      {0.20F, 0.60F, 0.86F},
-      {0.95F, 0.77F, 0.06F},
-      {0.61F, 0.35F, 0.71F},
-      {0.10F, 0.74F, 0.61F},
-    }};
-    const auto &color {colors[state.color_index]};
-    const GLfloat pulse {0.65F + 0.35F * static_cast<GLfloat>(state.frame_counter % 60) / 59.0F};
-    glClearColor(color[0] * pulse, color[1] * pulse, color[2] * pulse, 1.0F);
-    glClear(GL_COLOR_BUFFER_BIT);
+  void draw_frame(Display *display, const Window window, const GC graphics, const std::array<unsigned long, 6> &colors, visual_state_t &state) {
+    XWindowAttributes attributes {};
+    XGetWindowAttributes(display, window, &attributes);
+    XSetForeground(display, graphics, colors[state.color_index]);
+    XFillRectangle(display, window, graphics, 0, 0, static_cast<unsigned int>(attributes.width), static_cast<unsigned int>(attributes.height));
+    XSetForeground(display, graphics, BlackPixel(display, DefaultScreen(display)));
+
+    const std::array<std::string, 4> lines {
+      "SteamShine Input Visualizer",
+      "frame=" + std::to_string(state.frame_counter),
+      "event_sequence=" + std::to_string(state.event_sequence) + " event=" + state.event_name,
+      "event_CLOCK_MONOTONIC_RAW_ns=" + std::to_string(state.event_time_nanoseconds),
+    };
+    int y {80};
+    for (const auto &line : lines) {
+      XDrawString(display, window, graphics, 60, y, line.c_str(), static_cast<int>(line.size()));
+      y += 42;
+    }
+    XFlush(display);
     ++state.frame_counter;
   }
 
@@ -224,107 +231,26 @@ int main(const int argc, char **argv) {
     std::cerr << "Unable to open DISPLAY\n";
     return 1;
   }
-
-  const EGLDisplay egl_display {eglGetDisplay(reinterpret_cast<EGLNativeDisplayType>(display))};
-  EGLint egl_major {};
-  EGLint egl_minor {};
-  if (egl_display == EGL_NO_DISPLAY || eglInitialize(egl_display, &egl_major, &egl_minor) != EGL_TRUE || eglBindAPI(EGL_OPENGL_ES_API) != EGL_TRUE) {
-    std::cerr << "Unable to initialize EGL\n";
-    XCloseDisplay(display);
-    return 1;
-  }
-
-  constexpr std::array<EGLint, 13> config_attributes {
-    EGL_SURFACE_TYPE,
-    EGL_WINDOW_BIT,
-    EGL_RENDERABLE_TYPE,
-    EGL_OPENGL_ES2_BIT,
-    EGL_RED_SIZE,
-    8,
-    EGL_GREEN_SIZE,
-    8,
-    EGL_BLUE_SIZE,
-    8,
-    EGL_ALPHA_SIZE,
-    8,
-    EGL_NONE,
-  };
-  EGLConfig egl_config {};
-  EGLint config_count {};
-  if (eglChooseConfig(egl_display, config_attributes.data(), &egl_config, 1, &config_count) != EGL_TRUE || config_count == 0) {
-    std::cerr << "Unable to choose an EGL window configuration\n";
-    eglTerminate(egl_display);
-    XCloseDisplay(display);
-    return 1;
-  }
-
-  EGLint visual_id {};
-  if (eglGetConfigAttrib(egl_display, egl_config, EGL_NATIVE_VISUAL_ID, &visual_id) != EGL_TRUE) {
-    std::cerr << "Unable to query the EGL native visual\n";
-    eglTerminate(egl_display);
-    XCloseDisplay(display);
-    return 1;
-  }
-
-  XVisualInfo visual_template {};
-  visual_template.visualid = static_cast<VisualID>(visual_id);
-  int visual_count {};
-  XVisualInfo *const visual_info {XGetVisualInfo(display, VisualIDMask, &visual_template, &visual_count)};
-  if (!visual_info || visual_count == 0) {
-    std::cerr << "Unable to find the EGL-compatible X11 visual\n";
-    if (visual_info) {
-      XFree(visual_info);
-    }
-    eglTerminate(egl_display);
-    XCloseDisplay(display);
-    return 1;
-  }
-
-  const Window root {RootWindow(display, visual_info->screen)};
-  const Colormap colormap {XCreateColormap(display, root, visual_info->visual, AllocNone)};
-  XSetWindowAttributes window_attributes {};
-  window_attributes.colormap = colormap;
-  window_attributes.event_mask = ExposureMask | KeyPressMask | KeyReleaseMask | ButtonPressMask | ButtonReleaseMask | PointerMotionMask | StructureNotifyMask;
-  const Window window {XCreateWindow(
-    display,
-    root,
-    0,
-    0,
-    1280,
-    720,
-    0,
-    visual_info->depth,
-    InputOutput,
-    visual_info->visual,
-    CWColormap | CWEventMask,
-    &window_attributes
-  )};
-  XFree(visual_info);
+  const int screen {DefaultScreen(display)};
+  const Window root {RootWindow(display, screen)};
+  const Window window {XCreateSimpleWindow(display, root, 0, 0, 1280, 720, 0, BlackPixel(display, screen), WhitePixel(display, screen))};
   XStoreName(display, window, "SteamShine Input Visualizer");
+  XSelectInput(display, window, ExposureMask | KeyPressMask | KeyReleaseMask | ButtonPressMask | ButtonReleaseMask | PointerMotionMask | StructureNotifyMask);
   int xinput_opcode {-1};
   (void) select_xinput_events(display, window, xinput_opcode);
   request_fullscreen(display, window);
   XMapRaised(display, window);
 
-  const EGLSurface egl_surface {eglCreateWindowSurface(egl_display, egl_config, static_cast<EGLNativeWindowType>(window), nullptr)};
-  constexpr std::array<EGLint, 3> context_attributes {EGL_CONTEXT_CLIENT_VERSION, 2, EGL_NONE};
-  const EGLContext egl_context {eglCreateContext(egl_display, egl_config, EGL_NO_CONTEXT, context_attributes.data())};
-  if (egl_surface == EGL_NO_SURFACE || egl_context == EGL_NO_CONTEXT || eglMakeCurrent(egl_display, egl_surface, egl_surface, egl_context) != EGL_TRUE) {
-    std::cerr << "Unable to create the EGL GPU swapchain\n";
-    if (egl_context != EGL_NO_CONTEXT) {
-      eglDestroyContext(egl_display, egl_context);
-    }
-    if (egl_surface != EGL_NO_SURFACE) {
-      eglDestroySurface(egl_display, egl_surface);
-    }
-    XDestroyWindow(display, window);
-    XFreeColormap(display, colormap);
-    eglTerminate(egl_display);
-    XCloseDisplay(display);
-    return 1;
+  const GC graphics {XCreateGC(display, window, 0, nullptr)};
+  const std::array<std::string, 6> color_names {"#e74c3c", "#2ecc71", "#3498db", "#f1c40f", "#9b59b6", "#1abc9c"};
+  std::array<unsigned long, 6> colors {};
+  const Colormap colormap {DefaultColormap(display, screen)};
+  for (std::size_t index {}; index < colors.size(); ++index) {
+    XColor color {};
+    XParseColor(display, colormap, color_names[index].c_str(), &color);
+    XAllocColor(display, colormap, &color);
+    colors[index] = color.pixel;
   }
-  (void) eglSwapInterval(egl_display, 1);
-  glViewport(0, 0, 1280, 720);
 
   auto joysticks {open_joysticks()};
   visual_state_t state;
@@ -378,22 +304,14 @@ int main(const int argc, char **argv) {
 
     const auto now {std::chrono::steady_clock::now()};
     if (now >= next_frame) {
-      draw_frame(state);
-      if (eglSwapBuffers(egl_display, egl_surface) != EGL_TRUE) {
-        std::cerr << "EGL buffer swap failed\n";
-        running = false;
-      }
+      draw_frame(display, window, graphics, colors, state);
       next_frame = now + frame_interval;
     }
   }
 
   close_joysticks(joysticks);
-  eglMakeCurrent(egl_display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
-  eglDestroyContext(egl_display, egl_context);
-  eglDestroySurface(egl_display, egl_surface);
+  XFreeGC(display, graphics);
   XDestroyWindow(display, window);
-  XFreeColormap(display, colormap);
-  eglTerminate(egl_display);
   XCloseDisplay(display);
   return 0;
 }
