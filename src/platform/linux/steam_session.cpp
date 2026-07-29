@@ -327,7 +327,7 @@ namespace steam_session {
   }
 
   std::optional<resident_environment_t> select_resident_environment(const std::vector<process_record_t> &records, const target_session_t &target, const int current_uid) {
-    if (classify_instance_location(records, target) != instance_location_e::inside_target_gamescope) {
+    if (target.gamescope_pid <= 0) {
       return std::nullopt;
     }
     std::unordered_map<int, const process_record_t *> by_pid;
@@ -336,10 +336,10 @@ namespace steam_session {
     }
     const process_record_t *resident {};
     for (const auto &record : records) {
-      if (record.executable_name != "steam" || record.uid != current_uid || record.start_time == 0 || !record.metadata_readable || !belongs_to_target(record, target, by_pid)) {
+      if (record.executable_name != "steam" || record.uid != current_uid) {
         continue;
       }
-      if (resident) {
+      if (record.start_time == 0 || !record.metadata_readable || !belongs_to_target(record, target, by_pid) || resident) {
         return std::nullopt;
       }
       resident = &record;

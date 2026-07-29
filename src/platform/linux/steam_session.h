@@ -100,6 +100,11 @@ namespace steam_session {
   /**
    * @brief Select one resident Steam environment from an immutable process snapshot.
    *
+   * Selection validates the unique current-user `steam` executable itself.
+   * Steam-family game children outside the target do not invalidate a vendor
+   * Game Mode endpoint; singleton placement checks remain the responsibility
+   * of `classify_instance_location()`.
+   *
    * @param records Process metadata snapshot, including parent-chain records.
    * @param target Verified Gamescope target.
    * @param current_uid UID which every accepted record must match.
