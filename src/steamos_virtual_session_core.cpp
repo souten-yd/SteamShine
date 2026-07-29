@@ -129,32 +129,69 @@ namespace steamos_virtual_session {
     return "auto";
   }
 
-  virtual_display_decision_t decide_virtual_display(const virtual_display_decision_input_t &input) {
+  std::string_view to_string(const session_route_e route) {
+    switch (route) {
+      case session_route_e::physical_desktop:
+        return "physical_desktop";
+      case session_route_e::attached_existing:
+        return "attached_existing";
+      case session_route_e::retained_owned_private:
+        return "retained_owned_private";
+      case session_route_e::new_owned_private:
+        return "new_owned_private";
+      case session_route_e::reject:
+        return "reject";
+    }
+    return "reject";
+  }
+
+  session_route_decision_t select_session_route(const session_route_input_t &input) {
     if (!input.feature_enabled) {
-      return {false, "feature_disabled"};
+      return {session_route_e::physical_desktop, "feature_disabled"};
     }
     if (input.mode == virtual_display_mode_e::off) {
-      return {false, "mode_off"};
+      return {session_route_e::physical_desktop, "mode_off"};
     }
     if (input.mode == virtual_display_mode_e::force) {
-      if (input.existing_owned_session) {
-        return {true, "owned_session_active"};
+      if (input.retained_owned_session) {
+        return {session_route_e::retained_owned_private, "retained_owned_private"};
       }
-      return {true, input.host_supported ? "config_force" : "config_force_host_unsupported"};
+      return {
+        input.host_supported ? session_route_e::new_owned_private : session_route_e::reject,
+        input.host_supported ? "config_force" : "config_force_host_unsupported"
+      };
     }
+
+    if (input.source_policy == session_source_policy_e::owned_private) {
+      if (input.retained_owned_session) {
+        return {session_route_e::retained_owned_private, "retained_owned_private"};
+      }
+      return {
+        input.host_supported ? session_route_e::new_owned_private : session_route_e::reject,
+        input.host_supported ? "owned_private_required" : "owned_private_host_unsupported"
+      };
+    }
+
     if (input.verified_existing_gamescope_present) {
-      return {true, "verified_existing_gamescope"};
+      return {session_route_e::attached_existing, "verified_existing_gamescope"};
     }
-    if (input.existing_gamescope_required) {
-      return {true, "existing_gamescope_required"};
+    if (input.source_policy == session_source_policy_e::existing_gamescope) {
+      return {session_route_e::reject, "existing_gamescope_unavailable"};
     }
     if (input.capturable_output_present) {
-      return {false, "capturable_output_present"};
+      return {session_route_e::physical_desktop, "capturable_output_present"};
     }
-    if (input.existing_owned_session) {
-      return {true, "owned_session_active"};
+    if (input.retained_owned_session) {
+      return {session_route_e::retained_owned_private, "retained_owned_private"};
     }
-    return {true, input.host_supported ? "no_capturable_output" : "no_capturable_output_host_unsupported"};
+    return {
+      input.host_supported ? session_route_e::new_owned_private : session_route_e::reject,
+      input.host_supported ? "no_capturable_output" : "no_capturable_output_host_unsupported"
+    };
+  }
+
+  bool route_uses_gamescope_capture(const session_route_e route) {
+    return route != session_route_e::physical_desktop;
   }
 
   bool physical_desktop_capturable(

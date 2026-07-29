@@ -110,39 +110,123 @@ namespace {
   }
 
   /**
-   * @brief Verify force never falls back because a physical desktop exists.
+   * @brief Verify explicit policies and automatic priority select one route.
    */
-  TEST(SteamOSVirtualSessionCore, DecidesVirtualDisplayPolicy) {
-    using steamos_virtual_session::decide_virtual_display;
-    using steamos_virtual_session::virtual_display_decision_input_t;
+  TEST(SteamOSVirtualSessionCore, SelectsSessionRoutePolicy) {
+    using steamos_virtual_session::select_session_route;
+    using steamos_virtual_session::session_route_e;
+    using steamos_virtual_session::session_route_input_t;
+    using steamos_virtual_session::session_source_policy_e;
     using steamos_virtual_session::virtual_display_mode_e;
 
-    EXPECT_FALSE(decide_virtual_display({false, virtual_display_mode_e::force, true, true, true, false, true}).required);
-    EXPECT_FALSE(decide_virtual_display({true, virtual_display_mode_e::off, false, false, false, false, true}).required);
-    EXPECT_TRUE(decide_virtual_display({true, virtual_display_mode_e::force, true, true, true, false, true}).required);
-    EXPECT_EQ(
-      decide_virtual_display({true, virtual_display_mode_e::force, true, true, true, true, true}).reason,
-      "owned_session_active"
-    );
-    EXPECT_TRUE(decide_virtual_display({true, virtual_display_mode_e::force, false, false, true, false, true}).required);
-    EXPECT_TRUE(decide_virtual_display({true, virtual_display_mode_e::auto_detect, false, false, false, false, true}).required);
-    EXPECT_FALSE(decide_virtual_display({true, virtual_display_mode_e::auto_detect, true, true, true, false, true}).required);
-    EXPECT_EQ(
-      decide_virtual_display({true, virtual_display_mode_e::auto_detect, true, true, true, true, true, false, false}).reason,
-      "capturable_output_present"
-    );
-    EXPECT_EQ(
-      decide_virtual_display({true, virtual_display_mode_e::auto_detect, false, false, false, true, true, false, false}).reason,
-      "owned_session_active"
-    );
-    EXPECT_EQ(
-      decide_virtual_display({true, virtual_display_mode_e::auto_detect, true, true, true, true, true, true, false}).reason,
-      "verified_existing_gamescope"
-    );
-    EXPECT_EQ(
-      decide_virtual_display({true, virtual_display_mode_e::auto_detect, true, true, true, false, true, false, true}).reason,
-      "existing_gamescope_required"
-    );
+    const auto input = [](const virtual_display_mode_e mode, const session_source_policy_e source_policy) {
+      return session_route_input_t {
+        .feature_enabled = true,
+        .mode = mode,
+        .source_policy = source_policy,
+        .capturable_output_present = false,
+        .retained_owned_session = false,
+        .host_supported = true,
+        .verified_existing_gamescope_present = false,
+      };
+    };
+
+    auto request {input(virtual_display_mode_e::auto_detect, session_source_policy_e::auto_select)};
+    EXPECT_EQ(select_session_route(request).route, session_route_e::new_owned_private);
+    request.capturable_output_present = true;
+    EXPECT_EQ(select_session_route(request).route, session_route_e::physical_desktop);
+    request.verified_existing_gamescope_present = true;
+    EXPECT_EQ(select_session_route(request).route, session_route_e::attached_existing);
+    request.retained_owned_session = true;
+    EXPECT_EQ(select_session_route(request).route, session_route_e::attached_existing);
+
+    request = input(virtual_display_mode_e::auto_detect, session_source_policy_e::owned_private);
+    request.capturable_output_present = true;
+    request.verified_existing_gamescope_present = true;
+    EXPECT_EQ(select_session_route(request).route, session_route_e::new_owned_private);
+    request.retained_owned_session = true;
+    EXPECT_EQ(select_session_route(request).route, session_route_e::retained_owned_private);
+
+    request = input(virtual_display_mode_e::auto_detect, session_source_policy_e::existing_gamescope);
+    EXPECT_EQ(select_session_route(request).route, session_route_e::reject);
+    request.verified_existing_gamescope_present = true;
+    EXPECT_EQ(select_session_route(request).route, session_route_e::attached_existing);
+
+    request = input(virtual_display_mode_e::force, session_source_policy_e::auto_select);
+    request.capturable_output_present = true;
+    request.verified_existing_gamescope_present = true;
+    EXPECT_EQ(select_session_route(request).route, session_route_e::new_owned_private);
+    request.retained_owned_session = true;
+    EXPECT_EQ(select_session_route(request).route, session_route_e::retained_owned_private);
+
+    request.feature_enabled = false;
+    EXPECT_EQ(select_session_route(request).route, session_route_e::physical_desktop);
+    request.feature_enabled = true;
+    request.mode = virtual_display_mode_e::off;
+    EXPECT_EQ(select_session_route(request).route, session_route_e::physical_desktop);
+
+    request = input(virtual_display_mode_e::force, session_source_policy_e::auto_select);
+    request.host_supported = false;
+    EXPECT_EQ(select_session_route(request).route, session_route_e::reject);
+    request.mode = virtual_display_mode_e::auto_detect;
+    request.source_policy = session_source_policy_e::owned_private;
+    EXPECT_EQ(select_session_route(request).route, session_route_e::reject);
+    request.source_policy = session_source_policy_e::auto_select;
+    EXPECT_EQ(select_session_route(request).route, session_route_e::reject);
+
+    EXPECT_TRUE(steamos_virtual_session::route_uses_gamescope_capture(session_route_e::reject));
+    EXPECT_FALSE(steamos_virtual_session::route_uses_gamescope_capture(session_route_e::physical_desktop));
+    EXPECT_EQ(steamos_virtual_session::to_string(session_route_e::physical_desktop), "physical_desktop");
+    EXPECT_EQ(steamos_virtual_session::to_string(session_route_e::attached_existing), "attached_existing");
+    EXPECT_EQ(steamos_virtual_session::to_string(session_route_e::retained_owned_private), "retained_owned_private");
+    EXPECT_EQ(steamos_virtual_session::to_string(session_route_e::new_owned_private), "new_owned_private");
+    EXPECT_EQ(steamos_virtual_session::to_string(session_route_e::reject), "reject");
+  }
+
+  /**
+   * @brief Verify the four physical-output startup and reconnect scenarios.
+   */
+  TEST(SteamOSVirtualSessionCore, SelectsRoutesAcrossRequiredReconnectScenarios) {
+    using steamos_virtual_session::select_session_route;
+    using steamos_virtual_session::session_route_e;
+    using steamos_virtual_session::session_route_input_t;
+    using steamos_virtual_session::session_source_policy_e;
+    using steamos_virtual_session::virtual_display_mode_e;
+
+    session_route_input_t observation {
+      .feature_enabled = true,
+      .mode = virtual_display_mode_e::auto_detect,
+      .source_policy = session_source_policy_e::auto_select,
+      .capturable_output_present = false,
+      .retained_owned_session = false,
+      .host_supported = true,
+      .verified_existing_gamescope_present = false,
+    };
+
+    EXPECT_EQ(select_session_route(observation).route, session_route_e::new_owned_private);
+    observation.retained_owned_session = true;
+    observation.verified_existing_gamescope_present = true;
+    EXPECT_EQ(select_session_route(observation).route, session_route_e::attached_existing);
+
+    observation = {
+      .feature_enabled = true,
+      .mode = virtual_display_mode_e::auto_detect,
+      .source_policy = session_source_policy_e::auto_select,
+      .capturable_output_present = true,
+      .retained_owned_session = false,
+      .host_supported = true,
+      .verified_existing_gamescope_present = false,
+    };
+    EXPECT_EQ(select_session_route(observation).route, session_route_e::physical_desktop);
+    EXPECT_EQ(select_session_route(observation).route, session_route_e::physical_desktop);
+
+    EXPECT_EQ(select_session_route(observation).route, session_route_e::physical_desktop);
+
+    observation.capturable_output_present = false;
+    EXPECT_EQ(select_session_route(observation).route, session_route_e::new_owned_private);
+    observation.retained_owned_session = true;
+    observation.capturable_output_present = true;
+    EXPECT_EQ(select_session_route(observation).route, session_route_e::physical_desktop);
   }
 
   /**
@@ -679,6 +763,19 @@ namespace {
     EXPECT_TRUE(pipewire_capture::should_start_stream_during_initialization(true, true));
     EXPECT_TRUE(pipewire_capture::should_start_stream_during_initialization(false, false));
     EXPECT_TRUE(pipewire_capture::should_start_stream_during_initialization(false, true));
+  }
+
+  /**
+   * @brief Verify first-frame starvation fails only a retained productive source.
+   */
+  TEST(SteamOSVirtualSessionCore, FailsClosedAfterRetainedFirstFrameTimeout) {
+    using namespace std::chrono_literals;
+
+    EXPECT_FALSE(pipewire_capture::retained_first_frame_timeout_expired(false, false, 10s, 2s));
+    EXPECT_FALSE(pipewire_capture::retained_first_frame_timeout_expired(true, false, 1999ms, 2s));
+    EXPECT_TRUE(pipewire_capture::retained_first_frame_timeout_expired(true, false, 2s, 2s));
+    EXPECT_TRUE(pipewire_capture::retained_first_frame_timeout_expired(true, false, 3s, 2s));
+    EXPECT_FALSE(pipewire_capture::retained_first_frame_timeout_expired(true, true, 10s, 2s));
   }
 
   /**

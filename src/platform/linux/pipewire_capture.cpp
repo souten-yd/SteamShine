@@ -68,6 +68,15 @@ namespace pipewire_capture {
     return !encoder_probe || live_stream_required_for_probe;
   }
 
+  bool retained_first_frame_timeout_expired(
+    const bool source_was_productive,
+    const bool frame_received,
+    const std::chrono::milliseconds elapsed,
+    const std::chrono::milliseconds grace
+  ) {
+    return source_was_productive && !frame_received && elapsed >= grace;
+  }
+
   bool has_verified_source_identity(const stream_descriptor_t &descriptor) {
     return descriptor.node_id != UINT32_MAX && descriptor.object_serial != UINT64_MAX && descriptor.producer_pid > 0 && descriptor.producer_start_time > 0 && !descriptor.render_node.empty();
   }

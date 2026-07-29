@@ -4,6 +4,7 @@
  */
 #pragma once
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -238,6 +239,22 @@ namespace pipewire_capture {
    * @return True when initialization should connect and negotiate the stream.
    */
   bool should_start_stream_during_initialization(bool encoder_probe, bool live_stream_required_for_probe);
+
+  /**
+   * @brief Decide whether an already productive source exhausted its reconnect grace period.
+   *
+   * @param source_was_productive Whether the selected source produced frames before reconnecting.
+   * @param frame_received Whether the replacement consumer has received its first frame.
+   * @param elapsed Time since the replacement consumer connected.
+   * @param grace Maximum time allowed without a first producer frame.
+   * @return True only for a previously productive source whose replacement consumer remains empty at or beyond the grace period.
+   */
+  bool retained_first_frame_timeout_expired(
+    bool source_was_productive,
+    bool frame_received,
+    std::chrono::milliseconds elapsed,
+    std::chrono::milliseconds grace
+  );
 
   /**
    * @brief Validate the source identity required before opening a consumer.

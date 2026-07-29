@@ -1223,6 +1223,17 @@ namespace pipewire {
       return false;  // Return to default stream dead handling.
     }
 
+    /**
+     * @brief Allow a specialized source to fail closed after a frame timeout.
+     *
+     * @param frame_received Whether this capture consumer has received a frame.
+     * @param out_status Receives the terminal capture status.
+     * @return True when the timeout must terminate capture.
+     */
+    virtual bool check_frame_timeout(const bool frame_received, platf::capture_e &out_status) {
+      return false;
+    }
+
     platf::capture_e capture(const push_captured_image_cb_t &push_captured_image_cb, const pull_free_image_cb_t &pull_free_image_cb, bool *cursor) override {
       if (pipewire.ensure_stream(mem_type, width, height, framerate_numerator, framerate_denominator, dmabuf_infos.data(), n_dmabuf_infos, display_is_nvidia) < 0) {
         BOOST_LOG(error) << "[pipewire] Failed to ensure pipewire stream. capture() failed with error.";
@@ -1254,6 +1265,10 @@ namespace pipewire {
             pipewire.frame_cv().notify_all();
             return status;
           case platf::capture_e::timeout:
+            if (platf::capture_e timeout_status; check_frame_timeout(sequence > 0, timeout_status)) {
+              pipewire.frame_cv().notify_all();
+              return timeout_status;
+            }
             if (!pull_free_image_cb(img_out)) {
               // Detect if shutdown is pending
               BOOST_LOG(debug) << "[pipewire] PipeWire: timeout -> shutdown pending -> interrupt nudge";

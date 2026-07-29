@@ -1266,19 +1266,25 @@ namespace steamos_virtual_session {
 #else
     const bool retained_owned_session {false};
 #endif
-    const auto decision {decide_virtual_display({
+    const auto decision {select_session_route({
       .feature_enabled = config::steamos_virtual_display.enabled,
       .mode = config::steamos_virtual_display.mode,
-      .physical_output_connected = physical_output_connected,
-      .active_crtc_present = active_crtc_present,
+      .source_policy = config::steamos_virtual_display.session_source,
       .capturable_output_present = capturable_output_present,
-      .existing_owned_session = retained_owned_session,
+      .retained_owned_session = retained_owned_session,
       .host_supported = true,
       .verified_existing_gamescope_present = verified_existing_gamescope,
-      .existing_gamescope_required = config::steamos_virtual_display.session_source == session_source_policy_e::existing_gamescope,
     })};
     manager.selection_reason = decision.reason;
-    if (!decision.required) {
+    BOOST_LOG(info) << "SESSION_EVENT mode_decided mode=" << to_string(config::steamos_virtual_display.mode)
+                    << " route=" << to_string(decision.route)
+                    << " reason=" << decision.reason
+                    << " physical_output_connected=" << (physical_output_connected ? "true" : "false")
+                    << " active_crtc_present=" << (active_crtc_present ? "true" : "false")
+                    << " capturable_output_present=" << (capturable_output_present ? "true" : "false")
+                    << " retained_owned_session=" << (retained_owned_session ? "true" : "false")
+                    << " verified_existing_gamescope=" << (verified_existing_gamescope ? "true" : "false");
+    if (decision.route == session_route_e::physical_desktop) {
       if (manager.origin != session_origin_e::none) {
         BOOST_LOG(info) << "SESSION_EVENT source_released reason=desktop_capture_selected"
                         << " origin=" << to_string(manager.origin)
@@ -1288,17 +1294,19 @@ namespace steamos_virtual_session {
       manager.current = state_e::Disabled;
       return true;
     }
-    BOOST_LOG(info) << "SESSION_EVENT mode_decided mode=" << to_string(config::steamos_virtual_display.mode)
-                    << " reason=" << decision.reason
-                    << " physical_output_connected=" << (physical_output_connected ? "true" : "false")
-                    << " active_crtc_present=" << (active_crtc_present ? "true" : "false")
-                    << " verified_existing_gamescope=" << (verified_existing_gamescope ? "true" : "false");
 #if !defined(__linux__)
     error = "SteamOS virtual display is only available on Linux";
     manager.current = state_e::Disabled;
     return false;
 #else
-    if (decision.reason == "owned_session_active") {
+    if (decision.route == session_route_e::reject) {
+      error = decision.reason == "existing_gamescope_unavailable" ?
+                "No unique verified existing Gamescope source is available" :
+                "The configured SteamOS Gamescope route is unavailable on this host";
+      manager.current = state_e::Failed;
+      return false;
+    }
+    if (decision.route == session_route_e::retained_owned_private) {
       manager.selection_reason = "retained_owned_private";
       manager.packet_tracking.store(false, std::memory_order_release);
       manager.encoded_packets.store(0, std::memory_order_relaxed);
@@ -1325,18 +1333,8 @@ namespace steamos_virtual_session {
       error = "A SteamShine virtual display session is already active";
       return false;
     }
-    std::string help_text;
-    if (!read_gamescope_help(config::steamos_virtual_display.gamescope_path, help_text)) {
-      error = "Failed to read installed Gamescope help";
-      manager.current = state_e::Failed;
-      return false;
-    }
     const auto gpu {select_amd_dgpu(config::steamos_virtual_display.game_gpu, error)};
     if (!gpu) {
-      manager.current = state_e::Failed;
-      return false;
-    }
-    if (!gamescope_selector_is_unambiguous(*gpu, error)) {
       manager.current = state_e::Failed;
       return false;
     }
@@ -1363,20 +1361,24 @@ namespace steamos_virtual_session {
       manager.current = state_e::Failed;
       return false;
     }
-    const auto arguments {gamescope_arguments(help_text, request.width, request.height, request.fps, launch_session.enable_hdr, gpu->gamescope_device, error)};
-    if (arguments.empty()) {
-      manager.current = state_e::Failed;
-      return false;
-    }
     const auto *runtime_root_value {std::getenv("XDG_RUNTIME_DIR")};
-    const auto base {runtime_base()};
     const auto runtime_root {runtime_root_value ? std::filesystem::path {runtime_root_value} : std::filesystem::path {}};
-    if (base.empty() || runtime_root.empty() || !std::filesystem::is_directory(runtime_root) || !path_is_within_runtime_root(base, runtime_root)) {
+    if (runtime_root.empty() || !std::filesystem::is_directory(runtime_root)) {
       error = "XDG_RUNTIME_DIR is unavailable; refusing persistent runtime fallback";
       manager.current = state_e::Failed;
       return false;
     }
-    const auto pipewire_runtime {validate_host_pipewire_runtime(host_pipewire_runtime(runtime_root), base, error)};
+    const auto base {runtime_base()};
+    if (decision.route == session_route_e::new_owned_private &&
+        (base.empty() || !path_is_within_runtime_root(base, runtime_root))) {
+      error = "The owned Gamescope runtime must remain inside XDG_RUNTIME_DIR";
+      manager.current = state_e::Failed;
+      return false;
+    }
+    const auto private_base {
+      decision.route == session_route_e::new_owned_private ? base : runtime_root / "steamshine"
+    };
+    const auto pipewire_runtime {validate_host_pipewire_runtime(host_pipewire_runtime(runtime_root), private_base, error)};
     if (!pipewire_runtime) {
       manager.current = state_e::Failed;
       return false;
@@ -1391,7 +1393,7 @@ namespace steamos_virtual_session {
       manager.current = state_e::Failed;
       return false;
     }
-    if (config::steamos_virtual_display.session_source != session_source_policy_e::owned_private) {
+    if (decision.route == session_route_e::attached_existing) {
       std::string discovery_error;
       const auto discovery_timeout {std::min(std::chrono::milliseconds {500}, std::chrono::milliseconds {config::steamos_virtual_display.pipewire_node_timeout_milliseconds})};
       const auto sources {gamescope_source::discover_gamescope_sources(pipewire_runtime->string(), pipewire_remote, discovery_timeout, discovery_error)};
@@ -1487,13 +1489,26 @@ namespace steamos_virtual_session {
         manager.current = state_e::Failed;
         return false;
       }
-      if (config::steamos_virtual_display.session_source == session_source_policy_e::existing_gamescope || verified_existing_gamescope) {
-        error = verified_existing_gamescope ?
-                  "A verified Game Mode Gamescope exists but no unique same-GPU capture source is available" :
-                  "No unique verified existing Gamescope source is available";
-        manager.current = state_e::Failed;
-        return false;
-      }
+      error = verified_existing_gamescope ?
+                "A verified Game Mode Gamescope exists but no unique same-GPU capture source is available" :
+                "No unique verified existing Gamescope source is available";
+      manager.current = state_e::Failed;
+      return false;
+    }
+    if (!gamescope_selector_is_unambiguous(*gpu, error)) {
+      manager.current = state_e::Failed;
+      return false;
+    }
+    std::string help_text;
+    if (!read_gamescope_help(config::steamos_virtual_display.gamescope_path, help_text)) {
+      error = "Failed to read installed Gamescope help";
+      manager.current = state_e::Failed;
+      return false;
+    }
+    const auto arguments {gamescope_arguments(help_text, request.width, request.height, request.fps, launch_session.enable_hdr, gpu->gamescope_device, error)};
+    if (arguments.empty()) {
+      manager.current = state_e::Failed;
+      return false;
     }
     manager.runtime_directory = base / ("session-" + std::to_string(::getpid()) + "-" + std::to_string(launch_session.id));
     manager.selection_reason = "new_owned_private";
@@ -1699,16 +1714,24 @@ namespace steamos_virtual_session {
       active_crtc_present,
       physical_compositor_capture_available.load(std::memory_order_acquire)
     )};
-    return decide_virtual_display({
-                                    .feature_enabled = config::steamos_virtual_display.enabled,
-                                    .mode = config::steamos_virtual_display.mode,
-                                    .physical_output_connected = physical_output_connected,
-                                    .active_crtc_present = active_crtc_present,
-                                    .capturable_output_present = capturable_output_present,
-                                    .existing_owned_session = active(),
-                                    .host_supported = true,
-                                  })
-      .required;
+    session_origin_e active_origin {session_origin_e::none};
+    {
+      std::scoped_lock lock {manager.mutex};
+      if (manager.process_group > 0 &&
+          (manager.current == state_e::WaitingForCapture || manager.current == state_e::Ready || manager.current == state_e::Streaming || manager.current == state_e::Failed)) {
+        active_origin = manager.origin;
+      }
+    }
+    const auto route {select_session_route({
+      .feature_enabled = config::steamos_virtual_display.enabled,
+      .mode = config::steamos_virtual_display.mode,
+      .source_policy = config::steamos_virtual_display.session_source,
+      .capturable_output_present = capturable_output_present,
+      .retained_owned_session = active_origin == session_origin_e::owned_private,
+      .host_supported = true,
+      .verified_existing_gamescope_present = active_origin == session_origin_e::attached_existing,
+    })};
+    return route_uses_gamescope_capture(route.route);
   }
 
   bool physical_output_connected() {

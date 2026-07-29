@@ -46,6 +46,8 @@ namespace gamescope_pipewire {
       env_logical_height = height;
       offset_x = 0;
       offset_y = 0;
+      source_was_productive_ = session.captured_frames > 0;
+      first_frame_timeout_at_.reset();
       if (!pipewire_capture::has_verified_source_identity(descriptor)) {
         BOOST_LOG(error) << "PIPEWIRE_NODE_DISCOVERY_FAILED reason=incomplete_verified_source_identity";
         close(descriptor.connected_core_fd);
@@ -104,6 +106,46 @@ namespace gamescope_pipewire {
       out_status = platf::capture_e::error;
       return true;
     }
+
+    /**
+     * @brief Fail closed when a reused Gamescope source stops producing frames.
+     *
+     * A newly created owned session may legitimately need several seconds to
+     * start Steam and publish its first commit. A source that already produced
+     * frames has no equivalent startup dependency, so an empty reconnect is
+     * treated as a stale producer instead of streaming black duplicates.
+     *
+     * @param frame_received Whether this capture consumer has received a frame.
+     * @param out_status Receives the terminal capture error.
+     * @return True after the retained-source grace period expires.
+     */
+    bool check_frame_timeout(const bool frame_received, platf::capture_e &out_status) override {
+      if (frame_received) {
+        first_frame_timeout_at_.reset();
+        return false;
+      }
+      if (!source_was_productive_) {
+        return false;
+      }
+      const auto now {std::chrono::steady_clock::now()};
+      if (!first_frame_timeout_at_) {
+        first_frame_timeout_at_ = now;
+        return false;
+      }
+      const auto elapsed {std::chrono::duration_cast<std::chrono::milliseconds>(now - *first_frame_timeout_at_)};
+      if (!pipewire_capture::retained_first_frame_timeout_expired(source_was_productive_, frame_received, elapsed, retained_first_frame_timeout)) {
+        return false;
+      }
+      BOOST_LOG(error) << "PIPEWIRE_SOURCE_STALLED source=gamescope_pipewire reason=retained_first_frame_timeout";
+      steamos_virtual_session::mark_capture_lost();
+      out_status = platf::capture_e::error;
+      return true;
+    }
+
+  private:
+    static constexpr std::chrono::seconds retained_first_frame_timeout {2};  ///< Grace period for an already productive source.
+    bool source_was_productive_ {false};  ///< Whether this Gamescope source produced frames before the consumer connected.
+    std::optional<std::chrono::steady_clock::time_point> first_frame_timeout_at_;  ///< Start of retained first-frame starvation.
   };
 }  // namespace gamescope_pipewire
 

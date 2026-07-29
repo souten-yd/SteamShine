@@ -132,38 +132,67 @@ namespace steamos_virtual_session {
   std::string_view to_string(virtual_display_mode_e mode);
 
   /**
-   * @brief Inputs used to make a deterministic virtual-display decision.
+   * @brief Capture route selected for one Moonlight application launch.
    */
-  struct virtual_display_decision_input_t {
-    bool feature_enabled;  ///< Whether the SteamOS virtual-display feature is enabled.
-    virtual_display_mode_e mode;  ///< Requested virtual-display policy.
-    bool physical_output_connected;  ///< Whether DRM reports a connected physical output.
-    bool active_crtc_present;  ///< Whether a physical CRTC is active.
-    bool capturable_output_present;  ///< Whether a normal capture target is available.
-    bool existing_owned_session;  ///< Whether SteamShine already owns a compatible session.
-    bool host_supported;  ///< Whether the host can create an owned Gamescope session.
-    bool verified_existing_gamescope_present {false};  ///< Whether a verified resident Game Mode source must take precedence.
-    bool existing_gamescope_required {false};  ///< Whether policy requires attachment instead of normal desktop capture.
+  enum class session_route_e {
+    physical_desktop,  ///< Capture the currently usable physical compositor output.
+    attached_existing,  ///< Attach to a verified stock Game Mode Gamescope source.
+    retained_owned_private,  ///< Reuse a compatible SteamShine-owned Gamescope source.
+    new_owned_private,  ///< Create a new SteamShine-owned Gamescope source.
+    reject,  ///< Fail closed because the configured route is unavailable.
   };
 
   /**
-   * @brief Result of a virtual-display policy decision.
+   * @brief Return the stable diagnostic spelling for a launch route.
+   *
+   * @param route Route to serialize.
+   * @return Lowercase route name.
    */
-  struct virtual_display_decision_t {
-    bool required;  ///< Whether the launch must prepare an owned virtual display.
+  std::string_view to_string(session_route_e route);
+
+  /**
+   * @brief Inputs used to select one deterministic launch route.
+   */
+  struct session_route_input_t {
+    bool feature_enabled;  ///< Whether the SteamOS virtual-display feature is enabled.
+    virtual_display_mode_e mode;  ///< Requested virtual-display policy.
+    session_source_policy_e source_policy;  ///< Configured Gamescope source policy.
+    bool capturable_output_present;  ///< Whether a normal capture target is available.
+    bool retained_owned_session;  ///< Whether SteamShine owns a compatible retained session.
+    bool host_supported;  ///< Whether the host can create an owned Gamescope session.
+    bool verified_existing_gamescope_present;  ///< Whether a verified resident Game Mode source is available.
+  };
+
+  /**
+   * @brief Result of selecting a launch route.
+   */
+  struct session_route_decision_t {
+    session_route_e route;  ///< Selected common or source-specific route.
     std::string reason;  ///< Stable diagnostic reason for the decision.
   };
 
   /**
-   * @brief Decide whether a launch requires an owned virtual display.
+   * @brief Select the capture route for one launch from current observations.
    *
-   * Host support is deliberately not used to disable force mode: callers must
-   * report unsupported hosts as a launch error when this returns required.
+   * Automatic policy always prefers a verified stock Game Mode source, then a
+   * capturable physical Desktop, then a compatible retained owned source, and
+   * finally a new owned source. Explicit source policies remain authoritative.
    *
    * @param input Immutable policy and host-observation inputs.
-   * @return Deterministic requirement and diagnostic reason.
+   * @return Deterministic route and diagnostic reason.
    */
-  virtual_display_decision_t decide_virtual_display(const virtual_display_decision_input_t &input);
+  session_route_decision_t select_session_route(const session_route_input_t &input);
+
+  /**
+   * @brief Report whether a selected route requires Gamescope capture handling.
+   *
+   * Rejected Gamescope policies remain on the fail-closed backend instead of
+   * silently falling back to a physical capture source.
+   *
+   * @param route Selected launch route.
+   * @return True for attached, retained, new, and rejected Gamescope routes.
+   */
+  bool route_uses_gamescope_capture(session_route_e route);
 
   /**
    * @brief Determine whether the physical Desktop has a usable capture path.
