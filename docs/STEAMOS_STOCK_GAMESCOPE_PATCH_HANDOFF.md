@@ -27,7 +27,7 @@ override.
 
 ## Current checkpoint
 
-Updated: 2026-07-29 10:48 JST
+Updated: 2026-07-29 11:29 JST
 
 Repository:
 
@@ -35,7 +35,7 @@ Repository:
 path: /home/deck/SteamShine
 branch: fix/steamos-session-display-endpoint
 functional baseline commit: 1b0ec872ac9000bc686c53676579856fd0adba4b
-current documentation commit before this checkpoint: 1b0ec872ac9000bc686c53676579856fd0adba4b
+current documentation commit before this checkpoint: 38b2a1acf3f198e0af1b4a9935e2540de5c477ff
 PR: https://github.com/souten-yd/SteamShine/pull/11
 PR state: open draft
 ```
@@ -93,9 +93,23 @@ State:
   SteamShine baseline is PID `292981`, start `2026-07-29 10:47:27 JST`,
   `NRestarts=0`, `active/running`; KWin capture and Vulkan H.264/HEVC/AV1
   probes passed and configuration remains `auto`/`auto`.
-- The corrected collector is armed at PID `293210`, report
-  `/home/deck/.local/state/steamshine/stock-gamescope-investigation/20260729-104752-stage1-unpatched-vrr-on-menu`,
-  status `waiting-for-stock-gamescope`.
+- The corrected menu collector timed out at 11:18:41 JST because the normal
+  Game Mode transition began later, at 11:24:42. The late session was salvaged
+  at
+  `/home/deck/.local/state/steamshine/stock-gamescope-investigation/20260729-112442-stage1-unpatched-vrr-on-menu-late`.
+  It is not the planned 60-second matrix row because it lasted 34.274 seconds
+  and has no live pre-session snapshot, but it is valid failure evidence:
+  SteamShine attached stock Gamescope PID `300883`, received 4 PipeWire
+  buffers and only 3 unique frames, and required about 12 seconds for the
+  first buffer. Input was injected 148/148, while encode age p95 was
+  `0.468 ms` and network age p95 was `3.426 ms`. The operator confirmed that
+  display, input and audio were present but display feedback remained severely
+  delayed. This is producer starvation, not an input, encoder or network queue
+  backlog.
+- The next collector is armed at PID `312623`, report
+  `/home/deck/.local/state/steamshine/stock-gamescope-investigation/20260729-112824-stage1-unpatched-vrr-on-game`,
+  status `waiting-for-stock-gamescope`. Its Desktop-to-Game wait is four hours
+  so a delayed manual transition does not lose the pre-session snapshot again.
 - `/usr/bin/gamescope` remains the stock SteamOS binary.
 - Installed package observed before implementation:
   `gamescope 3.16.23.4-1`.
@@ -112,12 +126,14 @@ Next action:
 
 1. Use Steam's normal **Return to Gaming Mode** action. Do not reboot and do not
    restart SteamShine.
-2. Wait at least 30 seconds after Game Mode is fully visible. The corrected collector
+2. Wait at least 30 seconds after Game Mode is fully visible. The collector
    performs the executable and service verification automatically; no Game
    Mode console is required.
-3. Confirm VRR is enabled in the Game Mode display settings, then open
-   Moonlight and run the `Desktop` application for 60 seconds while navigating
-   the Steam menu continuously. Disconnect Moonlight after the interval.
+3. Confirm VRR is enabled. Start one real game that continuously changes the
+   whole scene, let it reach normal gameplay, then open Moonlight and run the
+   `Desktop` application for at least 60 seconds while continuously playing
+   that game. Do not use the Steam menu or a loading screen as the measured
+   interval. Disconnect Moonlight after the interval.
 4. Wait 30 seconds after disconnect so the post-session snapshot can finish,
    then return to Desktop Mode normally and resume this investigation. Do not
    start a second Moonlight session or change VRR before the evidence is
@@ -129,19 +145,19 @@ Before every reboot or Game Mode transition, replace all placeholders and
 commit or otherwise persist this block:
 
 ```text
-timestamp: 2026-07-29 10:48 JST
+timestamp: 2026-07-29 11:29 JST
 current SteamOS mode: Desktop Mode, KDE Wayland
-current stage: Stage 1, unpatched stock A/B, before corrected case 1 retry
-completed actions: plan pushed; Stage 0 captured; unpatched build/tests/smoke passed; invalid pre-capture attempt inspected; resident endpoint fix installed; corrected collector armed
-evidence directory: Stage 0 /home/deck/.local/state/steamshine/stock-gamescope-investigation/20260729-095521-stage0; invalid case /home/deck/.local/state/steamshine/stock-gamescope-investigation/20260729-103335-stage1-unpatched-vrr-on-menu; active retry /home/deck/.local/state/steamshine/stock-gamescope-investigation/20260729-104752-stage1-unpatched-vrr-on-menu
+current stage: Stage 1, unpatched stock A/B, before VRR-on continuously changing game
+completed actions: plan pushed; Stage 0 captured; unpatched build/tests/smoke passed; resident endpoint fix installed; late 34.274-second menu failure salvaged and operator observation recorded; VRR-on game collector armed
+evidence directory: Stage 0 /home/deck/.local/state/steamshine/stock-gamescope-investigation/20260729-095521-stage0; invalid rejection /home/deck/.local/state/steamshine/stock-gamescope-investigation/20260729-103335-stage1-unpatched-vrr-on-menu; timed-out collector /home/deck/.local/state/steamshine/stock-gamescope-investigation/20260729-104752-stage1-unpatched-vrr-on-menu; salvaged late failure /home/deck/.local/state/steamshine/stock-gamescope-investigation/20260729-112442-stage1-unpatched-vrr-on-menu-late; active game case /home/deck/.local/state/steamshine/stock-gamescope-investigation/20260729-112824-stage1-unpatched-vrr-on-game
 SteamShine commit and binary digest: source 1b0ec872; installed 7b51f316e3551cddeb7299ce7c2c1c0e0d8357a4acfd56dd85b35029523373b6; service PID 292981, start 2026-07-29 10:47:27 JST, NRestarts=0
 Gamescope package/path/digest/build ID/capability: 3.16.23.4-1; /usr/bin/gamescope; 7bbc654019ed17a8cf3637d221c2fd1cb59a4098198de2493337fe5629adbea2; 0baea3ee9ff9f8d5df2fcbf7f8fcb7881e8eab09; cap_sys_nice=eip
 test artifact path and digest, or NONE: NONE; unpatched build exists but is not installed or injected
 active gamescope-session override, or NONE: NONE
-rollback mechanism and armed state: not applicable because stock Gamescope remains selected; corrected evidence collector PID 293210 is manually active, static, and non-mutating
+rollback mechanism and armed state: not applicable because stock Gamescope remains selected; game evidence collector PID 312623 is manually active, static, and non-mutating
 expected next boot/session path: normal SteamOS Return to Gaming Mode using /usr/bin/gamescope
-first verification commands after resume: read active retry status.txt; inspect game-mode-before-moonlight and after-moonlight-disconnect snapshots; validate session-diagnostic.json; systemctl --user show steamshine.service -p MainPID -p NRestarts
-single operator action required: Return to Gaming Mode; wait 30 seconds; verify VRR on; stream Desktop while continuously navigating the Steam menu for 60 seconds; disconnect; wait 30 seconds; return to Desktop Mode; resume
+first verification commands after resume: read active game-case status.txt; inspect game-mode-before-moonlight and after-moonlight-disconnect snapshots; validate session-diagnostic.json; systemctl --user show steamshine.service -p MainPID -p NRestarts
+single operator action required: Return to Gaming Mode; wait 30 seconds; verify VRR on; start a continuously changing real game and reach gameplay; stream Desktop while continuously playing for at least 60 seconds; disconnect; wait 30 seconds; return to Desktop Mode; resume
 success evidence: corrected collector status capture-complete; stock executable identity; Game Mode services active; SteamShine baseline PID unchanged with NRestarts=0; one new session diagnostic of at least 60 seconds
 failure evidence to collect before retry: collector status and both snapshots when present; user-unit journal; Gamescope PID/cmdline/executable; SteamShine PID/restart count; any new session diagnostic
 rollback steps: none; no Gamescope override or system binary change exists. Stop steamshine-stock-gamescope-stage1-capture.service if the case is abandoned.
@@ -209,3 +225,20 @@ No Gamescope test artifact exists yet. Add one immutable row before use.
 - The operator no longer needs a Game Mode terminal. The only Game Mode work is
   the normal transition, confirming VRR is on, waiting 30 seconds, and running
   one 60-second continuously navigated Steam-menu stream.
+
+### 2026-07-29 11:28 JST: late menu failure salvaged; game case armed
+
+- The menu collector expired six minutes before the delayed Game Mode
+  transition, so it did not take its automatic live snapshots. The bounded
+  service journal and the first later session diagnostic were preserved in a
+  separate report with that limitation stated explicitly.
+- The 34.274-second session attached the verified existing stock Gamescope and
+  carried display, audio and all 148 input events, but only 3 unique frames
+  reached SteamShine. The first producer buffer arrived about 12 seconds after
+  client connection. The operator observed severe display latency. Fast
+  per-frame encode/network ages show the late producer frames were processed
+  promptly once they arrived.
+- This confirms the prior stock menu starvation symptom but does not replace a
+  60-second continuously changing-game rate measurement. A new static,
+  non-mutating collector is armed for the VRR-on game case, with a four-hour
+  transition wait to tolerate delayed operator action.
