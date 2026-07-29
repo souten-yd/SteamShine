@@ -27,7 +27,7 @@ override.
 
 ## Current checkpoint
 
-Updated: 2026-07-29 10:07:45 JST
+Updated: 2026-07-29 10:34 JST
 
 Repository:
 
@@ -35,7 +35,7 @@ Repository:
 path: /home/deck/SteamShine
 branch: fix/steamos-session-display-endpoint
 functional baseline commit: cf8408a90e161739d340e5c6fbe697ef3ff9237b
-current documentation commit: 0ba0d33487d62b168eac00c375ec965a0e65c349
+current documentation commit before this checkpoint: 25629bb8711e3c312f1d3111f16a783a183c5940
 PR: https://github.com/souten-yd/SteamShine/pull/11
 PR state: open draft
 ```
@@ -65,6 +65,15 @@ State:
   but distribution-local patch absence remains unverified. Functional parity
   is therefore still gated on the unpatched Game Mode test.
 - No systemd override or rollback timer has been created.
+- A non-enabled, manually started evidence collector is waiting for stock Game
+  Mode Gamescope. Its unit is
+  `steamshine-stock-gamescope-stage1-capture.service`, its PID is `280614`, and
+  its report directory is
+  `/home/deck/.local/state/steamshine/stock-gamescope-investigation/20260729-103335-stage1-unpatched-vrr-on-menu`.
+  It does not alter Gamescope or SteamShine. It captures the stock executable,
+  process, service, DRM, PipeWire, X root properties, and journal before
+  Moonlight, then copies the first new session diagnostic and a second snapshot
+  after disconnect. It is intentionally static rather than enabled at login.
 - `/usr/bin/gamescope` remains the stock SteamOS binary.
 - Installed package observed before implementation:
   `gamescope 3.16.23.4-1`.
@@ -77,16 +86,20 @@ State:
 - The source branch contains unrelated untracked reports and build output.
   Stage only explicit files; never use `git add -A` for this worktree.
 
-Next action after this checkpoint is pushed to PR #11:
+Next action:
 
 1. Use Steam's normal **Return to Gaming Mode** action. Do not reboot and do not
    restart SteamShine.
-2. Resume this investigation after Game Mode is fully visible.
-3. Before opening Moonlight, verify the stock Gamescope executable and capture
-   the commands listed in the pre-transition block below.
-4. Run the first 60-second unpatched matrix case: VRR on, Steam menu with
-   continuous visible navigation. Save the resulting SteamShine session JSON
-   and journal before changing VRR or starting another case.
+2. Wait at least 30 seconds after Game Mode is fully visible. The collector
+   performs the executable and service verification automatically; no Game
+   Mode console is required.
+3. Confirm VRR is enabled in the Game Mode display settings, then open
+   Moonlight and run the `Desktop` application for 60 seconds while navigating
+   the Steam menu continuously. Disconnect Moonlight after the interval.
+4. Wait 30 seconds after disconnect so the post-session snapshot can finish,
+   then return to Desktop Mode normally and resume this investigation. Do not
+   start a second Moonlight session or change VRR before the evidence is
+   inspected.
 
 ## Mandatory pre-transition handoff block
 
@@ -94,22 +107,22 @@ Before every reboot or Game Mode transition, replace all placeholders and
 commit or otherwise persist this block:
 
 ```text
-timestamp: 2026-07-29 10:07:45 JST
+timestamp: 2026-07-29 10:34 JST
 current SteamOS mode: Desktop Mode, KDE Wayland
 current stage: Stage 1, unpatched stock A/B, before case 1
-completed actions: plan pushed; Stage 0 captured; unpatched build/tests/smoke passed
-evidence directory: /home/deck/.local/state/steamshine/stock-gamescope-investigation/20260729-095521-stage0
-SteamShine commit and binary digest: source 0ba0d334; installed digest must be recaptured after resume
+completed actions: plan pushed; Stage 0 captured; unpatched build/tests/smoke passed; automatic case-1 collector started
+evidence directory: Stage 0 /home/deck/.local/state/steamshine/stock-gamescope-investigation/20260729-095521-stage0; active case 1 /home/deck/.local/state/steamshine/stock-gamescope-investigation/20260729-103335-stage1-unpatched-vrr-on-menu
+SteamShine commit and binary digest: installed functional source cf8408a9; /home/deck/.local/bin/steamshine d6612d56c01cf4b78545c08a1b495615e53b9a02f4d67ea42f0143243f705b77
 Gamescope package/path/digest/build ID/capability: 3.16.23.4-1; /usr/bin/gamescope; 7bbc654019ed17a8cf3637d221c2fd1cb59a4098198de2493337fe5629adbea2; 0baea3ee9ff9f8d5df2fcbf7f8fcb7881e8eab09; cap_sys_nice=eip
 test artifact path and digest, or NONE: NONE; unpatched build exists but is not installed or injected
 active gamescope-session override, or NONE: NONE
-rollback mechanism and armed state: not applicable because stock Gamescope remains selected
+rollback mechanism and armed state: not applicable because stock Gamescope remains selected; evidence collector is manually active, static, and non-mutating
 expected next boot/session path: normal SteamOS Return to Gaming Mode using /usr/bin/gamescope
-first verification commands after resume: pgrep -xo gamescope; readlink -f /proc/<pid>/exe; tr '\0' ' ' </proc/<pid>/cmdline; systemctl --user show gamescope-session.service steam-launcher.service steamshine.service -p Id -p ActiveState -p SubState -p MainPID -p NRestarts
-single operator action required: select Return to Gaming Mode, then resume this task without starting Moonlight
-success evidence: Game Mode visible; gamescope-session and steam-launcher active; /proc/<pid>/exe is /usr/bin/gamescope; SteamShine remains active with NRestarts=0
-failure evidence to collect before retry: user-unit status and journal, Gamescope PID/cmdline/executable, SteamShine PID/restart count
-rollback steps: none; no override or system file change exists. Return to Desktop Mode normally if Game Mode fails.
+first verification commands after resume: read active case status.txt; inspect game-mode-before-moonlight and after-moonlight-disconnect snapshots; validate session-diagnostic.json; systemctl --user show steamshine.service -p MainPID -p NRestarts
+single operator action required: Return to Gaming Mode; wait 30 seconds; verify VRR on; stream Desktop while continuously navigating the Steam menu for 60 seconds; disconnect; wait 30 seconds; return to Desktop Mode; resume
+success evidence: collector status capture-complete; stock executable identity; Game Mode services active; SteamShine PID unchanged with NRestarts=0; one new session diagnostic of at least 60 seconds
+failure evidence to collect before retry: collector status and both snapshots when present; user-unit journal; Gamescope PID/cmdline/executable; SteamShine PID/restart count; any new session diagnostic
+rollback steps: none; no override or system binary change exists. Stop steamshine-stock-gamescope-stage1-capture.service if the case is abandoned.
 ```
 
 ## Test-artifact ledger
@@ -158,3 +171,19 @@ No Gamescope test artifact exists yet. Add one immutable row before use.
   capability-enabled and must not be injected in its current source-tree path.
 - Next is the unmodified stock Game Mode A/B baseline. No vblank patch has been
   applied yet.
+
+### 2026-07-29 10:34 JST: console-free case-1 capture armed
+
+- Corrected the transition procedure because the local development console is
+  unavailable in Game Mode.
+- Installed and manually started a user-level evidence collector before the
+  transition. It waits for the exact stock `/usr/bin/gamescope` and both vendor
+  Game Mode services, waits another ten seconds for settlement, captures the
+  pre-Moonlight snapshot, then waits for exactly the first new SteamShine
+  session diagnostic and captures the post-disconnect state.
+- The collector is not enabled at login, does not restart either service, does
+  not consume the Gamescope stats FIFO, and makes no launcher, override, stock
+  binary, configuration, or VRR change.
+- The operator no longer needs a Game Mode terminal. The only Game Mode work is
+  the normal transition, confirming VRR is on, waiting 30 seconds, and running
+  one 60-second continuously navigated Steam-menu stream.
