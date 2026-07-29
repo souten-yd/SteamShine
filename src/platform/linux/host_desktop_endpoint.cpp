@@ -8,8 +8,11 @@
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
+#include <optional>
+#include <vector>
 
 #if defined(SUNSHINE_BUILD_WAYLAND)
+  #include <gio/gio.h>
   #include <sys/socket.h>
   #include <sys/stat.h>
   #include <sys/un.h>
@@ -35,6 +38,23 @@ namespace host_desktop_endpoint {
     }
 
 #if defined(SUNSHINE_BUILD_WAYLAND)
+    /**
+     * @brief Read one NUL-separated environment value.
+     *
+     * @param entries Complete systemd manager environment entries.
+     * @param name Variable name without the equals sign.
+     * @return Owned value, or an empty string when absent.
+     */
+    std::string environment_value(const std::vector<std::string> &entries, const std::string_view name) {
+      const std::string prefix {std::string {name} + '='};
+      for (const auto &entry : entries) {
+        if (entry.starts_with(prefix)) {
+          return std::string {entry.substr(prefix.size())};
+        }
+      }
+      return {};
+    }
+
     /**
      * @brief Validate and construct the current user's host Wayland socket path.
      *
@@ -65,6 +85,85 @@ namespace host_desktop_endpoint {
       }
       return true;
     }
+
+    /**
+     * @brief Read the live KWin endpoint imported into the systemd user manager.
+     *
+     * @return Socket-validated compositor endpoint, or no value when unavailable.
+     */
+    std::optional<endpoint_t> live_kwin_endpoint() {
+      GError *dbus_error {nullptr};
+      GDBusConnection *const connection {g_bus_get_sync(G_BUS_TYPE_SESSION, nullptr, &dbus_error)};
+      if (!connection) {
+        g_clear_error(&dbus_error);
+        return std::nullopt;
+      }
+      GVariant *const owner_reply {g_dbus_connection_call_sync(
+        connection,
+        "org.freedesktop.DBus",
+        "/org/freedesktop/DBus",
+        "org.freedesktop.DBus",
+        "NameHasOwner",
+        g_variant_new("(s)", "org.kde.KWin"),
+        G_VARIANT_TYPE("(b)"),
+        G_DBUS_CALL_FLAGS_NONE,
+        1000,
+        nullptr,
+        &dbus_error
+      )};
+      gboolean kwin_owned {false};
+      if (owner_reply) {
+        g_variant_get(owner_reply, "(b)", &kwin_owned);
+        g_variant_unref(owner_reply);
+      }
+      if (!kwin_owned) {
+        g_object_unref(connection);
+        g_clear_error(&dbus_error);
+        return std::nullopt;
+      }
+      GVariant *const environment_reply {g_dbus_connection_call_sync(
+        connection,
+        "org.freedesktop.systemd1",
+        "/org/freedesktop/systemd1",
+        "org.freedesktop.DBus.Properties",
+        "Get",
+        g_variant_new("(ss)", "org.freedesktop.systemd1.Manager", "Environment"),
+        G_VARIANT_TYPE("(v)"),
+        G_DBUS_CALL_FLAGS_NONE,
+        1000,
+        nullptr,
+        &dbus_error
+      )};
+      g_object_unref(connection);
+      if (!environment_reply) {
+        g_clear_error(&dbus_error);
+        return std::nullopt;
+      }
+      GVariant *environment_variant {nullptr};
+      g_variant_get(environment_reply, "(@v)", &environment_variant);
+      GVariant *const environment_array {g_variant_get_variant(environment_variant)};
+      std::vector<std::string> entries;
+      GVariantIter iterator;
+      g_variant_iter_init(&iterator, environment_array);
+      const gchar *entry {nullptr};
+      while (g_variant_iter_next(&iterator, "&s", &entry)) {
+        entries.emplace_back(entry);
+      }
+      g_variant_unref(environment_array);
+      g_variant_unref(environment_variant);
+      g_variant_unref(environment_reply);
+      endpoint_t candidate {
+        .xdg_runtime_directory = environment_value(entries, "XDG_RUNTIME_DIR"),
+        .wayland_display = environment_value(entries, "WAYLAND_DISPLAY"),
+        .x11_display = environment_value(entries, "DISPLAY"),
+      };
+      std::string socket_path;
+      std::string socket_error;
+      if (!host_socket_path(candidate, socket_path, socket_error)) {
+        return std::nullopt;
+      }
+      return candidate;
+    }
 #endif
   }  // namespace
 
@@ -74,6 +173,61 @@ namespace host_desktop_endpoint {
            (current.xdg_runtime_directory != candidate.xdg_runtime_directory ||
             current.wayland_display != candidate.wayland_display ||
             current.x11_display != candidate.x11_display);
+  }
+
+  std::optional<endpoint_t> select_unique_endpoint(const std::vector<endpoint_t> &candidates) {
+    std::optional<endpoint_t> selected;
+    for (const auto &candidate : candidates) {
+      if (candidate.xdg_runtime_directory.empty() || candidate.wayland_display.empty()) {
+        continue;
+      }
+      if (!selected) {
+        selected = candidate;
+        continue;
+      }
+      if (selected->xdg_runtime_directory != candidate.xdg_runtime_directory || selected->wayland_display != candidate.wayland_display || selected->x11_display != candidate.x11_display) {
+        return std::nullopt;
+      }
+    }
+    return selected;
+  }
+
+  bool capture_live() {
+#if defined(SUNSHINE_BUILD_WAYLAND)
+    const auto live_endpoint {live_kwin_endpoint()};
+    const auto candidate {live_endpoint ? select_unique_endpoint({*live_endpoint}) : std::nullopt};
+    if (!candidate) {
+      return false;
+    }
+    std::scoped_lock lock {endpoint_mutex};
+    if (should_refresh(endpoint, *candidate)) {
+      const auto generation {endpoint.generation + 1};
+      endpoint = *candidate;
+      endpoint.generation = generation;
+    }
+    return true;
+#else
+    return false;
+#endif
+  }
+
+  bool activate() {
+#if defined(__linux__)
+    const auto host {current()};
+    if (host.xdg_runtime_directory.empty() || host.wayland_display.empty()) {
+      return false;
+    }
+    ::setenv("XDG_RUNTIME_DIR", host.xdg_runtime_directory.c_str(), 1);
+    ::setenv("WAYLAND_DISPLAY", host.wayland_display.c_str(), 1);
+    if (host.x11_display.empty()) {
+      ::unsetenv("DISPLAY");
+    } else {
+      ::setenv("DISPLAY", host.x11_display.c_str(), 1);
+    }
+    return true;
+#else
+    return false;
+#endif
   }
 
   void capture() {

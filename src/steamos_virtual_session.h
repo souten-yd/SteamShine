@@ -36,11 +36,13 @@ namespace steamos_virtual_session {
     std::string wayland_display;  ///< Wayland socket name exposed to compatible applications.
     std::string gamescope_wayland_display;  ///< Gamescope's explicitly exposed Wayland socket name.
     std::string x11_display;  ///< Dynamically allocated Gamescope Xwayland display name.
-    std::string xauthority;  ///< Xauthority file used by the selected Xwayland server.
+    std::string xauthority;  ///< Xauthority file, or empty for a verified auth-less SteamOS vendor Xwayland.
     std::string pipewire_runtime_directory;  ///< Verified host PipeWire runtime directory.
     std::string pipewire_remote;  ///< Verified host PipeWire remote socket name.
     std::string pulse_runtime_path;  ///< Host PulseAudio compatibility runtime path.
     std::string dbus_session_bus_address;  ///< Verified resident session bus address, when available.
+    std::string xdg_session_type;  ///< Verified display protocol classification for application launches.
+    std::string xdg_current_desktop;  ///< Verified desktop identity for application launches.
     int producer_pid {-1};  ///< Gamescope producer PID bound to the snapshot.
     uint64_t producer_start_time {0};  ///< Producer start time used to reject PID reuse.
     int environment_source_pid {-1};  ///< Bootstrap or resident Steam PID supplying the environment.
@@ -194,7 +196,7 @@ namespace steamos_virtual_session {
   void mark_encoded_packet(size_t bytes, bool idr);
 
   /**
-   * @brief Record one successfully acquired Wayland DMA-BUF frame.
+   * @brief Record one successfully acquired verified-session frame.
    *
    * This lock-free counter is maintained only while the owned session is
    * streaming. It supplies final acceptance evidence without file I/O on the
@@ -359,6 +361,17 @@ namespace steamos_virtual_session {
    * treating a socket's existence as proof that frames can be captured.
    */
   void mark_capture_ready();
+
+  /**
+   * @brief Prepare an active verified capture source for backend reinitialization.
+   *
+   * PipeWire may pause a Gamescope stream while renegotiating its frame size.
+   * Reinitialization is permitted only while the selected compositor process
+   * still has the original PID start-time identity.
+   *
+   * @return True when capture may be rebuilt against the same verified source.
+   */
+  bool mark_capture_reinitializing();
 
   /**
    * @brief Record an owned virtual-display capture failure without blocking capture.

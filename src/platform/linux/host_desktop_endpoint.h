@@ -6,7 +6,9 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
+#include <vector>
 
 namespace host_desktop_endpoint {
   /**
@@ -38,6 +40,38 @@ namespace host_desktop_endpoint {
    * @return True when the candidate is complete and materially different.
    */
   bool should_refresh(const endpoint_t &current, const endpoint_t &candidate);
+
+  /**
+   * @brief Select one unambiguous complete desktop endpoint.
+   *
+   * Identical endpoints are treated as one compositor endpoint. Conflicting
+   * complete candidates fail closed.
+   *
+   * @param candidates Verified current-user compositor endpoint candidates.
+   * @return The unique complete endpoint, or no value when none is safe.
+   */
+  std::optional<endpoint_t> select_unique_endpoint(const std::vector<endpoint_t> &candidates);
+
+  /**
+   * @brief Refresh the retained endpoint from a live host desktop compositor.
+   *
+   * Linux requires a live KWin D-Bus owner, reads the environment imported
+   * into the systemd user manager, and validates its Wayland socket. Other
+   * platforms report that no live endpoint was found.
+   *
+   * @return True when a unique live desktop endpoint is available.
+   */
+  bool capture_live();
+
+  /**
+   * @brief Apply the retained live desktop endpoint to this process.
+   *
+   * This is used before an idle server re-probes capture after it started
+   * before the graphical session. The caller must ensure no stream is active.
+   *
+   * @return True when a complete endpoint was applied.
+   */
+  bool activate();
 
   /**
    * @brief Return the latest accepted host desktop endpoint.
