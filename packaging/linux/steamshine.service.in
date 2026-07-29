@@ -1,0 +1,18 @@
+[Unit]
+Description=SteamShine game streaming host
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+Environment=XDG_RUNTIME_DIR=%t
+Environment=PIPEWIRE_RUNTIME_DIR=%t
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=%t/bus
+Environment=STEAMSHINE_LAUNCH_MODE=systemd_user_service
+ExecStart=%h/.local/bin/steamshine %h/.config/steamshine/sunshine.conf
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=10
+
+[Install]
+WantedBy=default.target

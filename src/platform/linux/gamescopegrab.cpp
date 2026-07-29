@@ -37,6 +37,7 @@ namespace gamescope_pipewire {
       }
       width = session.width;
       height = session.height;
+      pipewire.set_gamescope_requested_size(static_cast<uint32_t>(width), static_cast<uint32_t>(height));
       logical_width = width;
       logical_height = height;
       env_width = width;
@@ -45,8 +46,15 @@ namespace gamescope_pipewire {
       env_logical_height = height;
       offset_x = 0;
       offset_y = 0;
+      source_was_productive_ = session.captured_frames > 0;
+      first_frame_timeout_at_.reset();
       if (!pipewire_capture::has_verified_source_identity(descriptor)) {
         BOOST_LOG(error) << "PIPEWIRE_NODE_DISCOVERY_FAILED reason=incomplete_verified_source_identity";
+        close(descriptor.connected_core_fd);
+        return -1;
+      }
+      if (!set_verified_dmabuf_render_node(descriptor.render_node)) {
+        BOOST_LOG(error) << "PIPEWIRE_NODE_DISCOVERY_FAILED reason=invalid_verified_render_node";
         close(descriptor.connected_core_fd);
         return -1;
       }
@@ -64,17 +72,80 @@ namespace gamescope_pipewire {
     void verify_and_update_display_parameters() override {}
 
     /**
-     * @brief Fail the virtual session when its verified PipeWire node disappears.
+     * @brief Preserve Gamescope's edge-triggered initial frame during encoder probes.
      *
-     * @param out_status Receives the terminal capture status.
-     * @return True because desktop-source fallback is unsafe.
+     * The verified session descriptor already supplies dimensions and GPU
+     * identity, so codec validation does not need to connect to the producer.
+     *
+     * @return False because a live stream is only needed for real capture.
+     */
+    bool live_stream_required_for_encoder_probe() const override {
+      return false;
+    }
+
+    /**
+     * @brief Reinitialize after a verified Gamescope PipeWire interruption.
+     *
+     * Gamescope pauses and resumes its stream during a size renegotiation. The
+     * shared PipeWire backend reports that pause as a dead stream so the image
+     * and encoder dimensions can be rebuilt. Preserve fail-closed behavior by
+     * permitting reinitialization only while the original Gamescope process
+     * identity remains current.
+     *
+     * @param out_status Receives reinitialization or terminal capture status.
+     * @return True because Gamescope uses identity-aware custom handling.
      */
     bool check_stream_dead(platf::capture_e &out_status) override {
-      BOOST_LOG(error) << "PIPEWIRE_NODE_DISAPPEARED source=gamescope_pipewire";
+      if (steamos_virtual_session::mark_capture_reinitializing()) {
+        BOOST_LOG(info) << "PIPEWIRE_STREAM_REINITIALIZING source=gamescope_pipewire reason=producer_pause";
+        out_status = platf::capture_e::reinit;
+        return true;
+      }
+      BOOST_LOG(error) << "PIPEWIRE_SOURCE_IDENTITY_LOST source=gamescope_pipewire";
       steamos_virtual_session::mark_capture_lost();
       out_status = platf::capture_e::error;
       return true;
     }
+
+    /**
+     * @brief Fail closed when a reused Gamescope source stops producing frames.
+     *
+     * A newly created owned session may legitimately need several seconds to
+     * start Steam and publish its first commit. A source that already produced
+     * frames has no equivalent startup dependency, so an empty reconnect is
+     * treated as a stale producer instead of streaming black duplicates.
+     *
+     * @param frame_received Whether this capture consumer has received a frame.
+     * @param out_status Receives the terminal capture error.
+     * @return True after the retained-source grace period expires.
+     */
+    bool check_frame_timeout(const bool frame_received, platf::capture_e &out_status) override {
+      if (frame_received) {
+        first_frame_timeout_at_.reset();
+        return false;
+      }
+      if (!source_was_productive_) {
+        return false;
+      }
+      const auto now {std::chrono::steady_clock::now()};
+      if (!first_frame_timeout_at_) {
+        first_frame_timeout_at_ = now;
+        return false;
+      }
+      const auto elapsed {std::chrono::duration_cast<std::chrono::milliseconds>(now - *first_frame_timeout_at_)};
+      if (!pipewire_capture::retained_first_frame_timeout_expired(source_was_productive_, frame_received, elapsed, retained_first_frame_timeout)) {
+        return false;
+      }
+      BOOST_LOG(error) << "PIPEWIRE_SOURCE_STALLED source=gamescope_pipewire reason=retained_first_frame_timeout";
+      steamos_virtual_session::mark_capture_lost();
+      out_status = platf::capture_e::error;
+      return true;
+    }
+
+  private:
+    static constexpr std::chrono::seconds retained_first_frame_timeout {2};  ///< Grace period for an already productive source.
+    bool source_was_productive_ {false};  ///< Whether this Gamescope source produced frames before the consumer connected.
+    std::optional<std::chrono::steady_clock::time_point> first_frame_timeout_at_;  ///< Start of retained first-frame starvation.
   };
 }  // namespace gamescope_pipewire
 

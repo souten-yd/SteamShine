@@ -19,6 +19,40 @@ namespace rtsp_stream {
 
 namespace steamos_virtual_session {
   /**
+   * @brief Verification state for a session display endpoint.
+   */
+  enum class display_verification_e {
+    unavailable,  ///< No session-specific display endpoint is available.
+    verified,  ///< The producer identity, sockets, and authorization file were verified.
+    rejected,  ///< Endpoint evidence was present but failed closed validation.
+  };
+
+  /**
+   * @brief Immutable application display endpoint for one verified session generation.
+   */
+  struct session_display_endpoint_t {
+    session_origin_e origin {session_origin_e::none};  ///< Session that produced the endpoint.
+    std::string xdg_runtime_directory;  ///< Runtime directory inherited by session applications.
+    std::string wayland_display;  ///< Wayland socket name exposed to compatible applications.
+    std::string gamescope_wayland_display;  ///< Gamescope's explicitly exposed Wayland socket name.
+    std::string x11_display;  ///< Dynamically allocated Gamescope Xwayland display name.
+    std::string xauthority;  ///< Xauthority file, or empty for a verified auth-less SteamOS vendor Xwayland.
+    std::string pipewire_runtime_directory;  ///< Verified host PipeWire runtime directory.
+    std::string pipewire_remote;  ///< Verified host PipeWire remote socket name.
+    std::string pulse_runtime_path;  ///< Host PulseAudio compatibility runtime path.
+    std::string dbus_session_bus_address;  ///< Verified resident session bus address, when available.
+    std::string xdg_session_type;  ///< Verified display protocol classification for application launches.
+    std::string xdg_current_desktop;  ///< Verified desktop identity for application launches.
+    int producer_pid {-1};  ///< Gamescope producer PID bound to the snapshot.
+    uint64_t producer_start_time {0};  ///< Producer start time used to reject PID reuse.
+    int environment_source_pid {-1};  ///< Bootstrap or resident Steam PID supplying the environment.
+    uint64_t environment_source_start_time {0};  ///< Environment source start time used to reject PID reuse.
+    uint64_t generation {0};  ///< Monotonic session generation invalidating older snapshots.
+    display_verification_e verification {display_verification_e::unavailable};  ///< Endpoint verification result.
+    std::string error;  ///< Stable rejection reason without credentials.
+  };
+
+  /**
    * @brief States owned by the SteamOS virtual-session manager.
    */
   enum class state_e {
@@ -49,6 +83,7 @@ namespace steamos_virtual_session {
     bool migration_required {false};  ///< Whether an explicitly confirmed Desktop Steam migration is required.
     std::string app_launch_rejected_reason;  ///< Stable machine-readable reason for the latest rejected application launch.
     std::string app_launch_rejected_message;  ///< Safe operator-facing detail for the latest rejected application launch.
+    session_display_endpoint_t display_endpoint;  ///< Active verified application display endpoint.
     std::string selection_reason;  ///< Stable reason for selecting Desktop capture or a Gamescope source.
     presentation_e presentation {presentation_e::remote_only};  ///< Desired remote/local presentation paths.
     bool local_presenter_active {false};  ///< Whether a local presenter has attached successfully.
@@ -161,7 +196,7 @@ namespace steamos_virtual_session {
   void mark_encoded_packet(size_t bytes, bool idr);
 
   /**
-   * @brief Record one successfully acquired Wayland DMA-BUF frame.
+   * @brief Record one successfully acquired verified-session frame.
    *
    * This lock-free counter is maintained only while the owned session is
    * streaming. It supplies final acceptance evidence without file I/O on the
@@ -170,19 +205,31 @@ namespace steamos_virtual_session {
   void mark_captured_frame();
 
   /**
-   * @brief Return the owned Wayland environment for the application launcher.
+   * @brief Return one verified display endpoint snapshot for application launch.
    *
-   * The values are available only after Gamescope has passed readiness. Callers
-   * must not retain them after the associated launch session ends.
+   * The snapshot is available only while its producer PID, start time, and
+   * session generation remain current. Physical Desktop sessions return no
+   * endpoint so the launcher's inherited host environment remains unchanged.
    *
-   * @param runtime_directory Receives the session-owned XDG runtime directory.
-   * @param wayland_display Receives the session-owned Wayland display name.
-   * @param pipewire_runtime Receives the host PipeWire runtime directory.
-   * @param pipewire_remote Receives the host PipeWire remote name.
-   * @param pulse_runtime Receives the host PulseAudio compatibility runtime directory.
-   * @return True when an application may safely connect to the virtual display.
+   * @return Verified immutable endpoint, or std::nullopt when none is active.
    */
-  bool application_environment(std::string &runtime_directory, std::string &wayland_display, std::string &pipewire_runtime, std::string &pipewire_remote, std::string &pulse_runtime);
+  std::optional<session_display_endpoint_t> application_environment();
+
+  /**
+   * @brief Persist the environment inherited by a Gamescope bootstrap child.
+   *
+   * This internal command writes one owner-only atomic endpoint report and then
+   * watches the exact owning daemon identity. If that daemon exits or is
+   * replaced, the bootstrap exits so Gamescope's reaper closes the entire owned
+   * session. It performs no capture, rendering, or GPU work.
+   *
+   * @param report_directory Owned session runtime directory.
+   * @param generation Session generation supplied by the owning daemon.
+   * @param owner_pid Process identifier of the owning SteamShine daemon.
+   * @param owner_start_time Linux process start time of the owning daemon.
+   * @return Zero after normal termination, or a nonzero validation/write error.
+   */
+  int run_display_endpoint_bootstrap(std::string_view report_directory, uint64_t generation, int owner_pid, uint64_t owner_start_time);
 
   /**
    * @brief Check whether a configured command may start or address Steam.
@@ -247,17 +294,35 @@ namespace steamos_virtual_session {
   bool gamescope_input_required();
 
   /**
-   * @brief Resolve the EIS input socket owned by the selected verified Gamescope process.
+   * @brief Return the identity generation of the active Gamescope input source.
    *
-   * The socket is accepted only when its inode is held by the selected PID,
-   * its path remains inside the selected runtime, and it is a current-user
-   * UNIX-domain socket.
+   * The selected producer PID and start time are revalidated before returning.
+   * An established libei connection may be reused only while this generation
+   * remains unchanged.
+   *
+   * @param generation Receives the active display-endpoint generation.
+   * @param error Receives a stable failure reason without credentials.
+   * @return True while the selected Gamescope identity remains current.
+   */
+  bool gamescope_input_generation(std::uint64_t &generation, std::string &error);
+
+  /**
+   * @brief Open the EIS input socket owned by the selected verified Gamescope process.
+   *
+   * The socket is accepted only when its path remains inside the selected
+   * runtime, it is a current-user UNIX-domain socket, and the kernel-reported
+   * `SO_PEERCRED` PID matches the selected Gamescope identity.
+   *
+   * The returned descriptor is the exact kernel-authenticated connection and
+   * must be closed by the caller or transferred to libei.
    *
    * @param socket_path Receives the absolute EIS socket path.
+   * @param descriptor Receives a connected close-on-exec descriptor.
+   * @param generation Receives the generation verified with the connection.
    * @param error Receives a stable failure reason without credentials.
    * @return True when input can be bound to the selected Gamescope session.
    */
-  bool gamescope_input_endpoint(std::string &socket_path, std::string &error);
+  bool open_verified_gamescope_input(std::string &socket_path, int &descriptor, std::uint64_t &generation, std::string &error);
 
   /**
    * @brief Open one dedicated PipeWire connection for the verified source.
@@ -296,6 +361,17 @@ namespace steamos_virtual_session {
    * treating a socket's existence as proof that frames can be captured.
    */
   void mark_capture_ready();
+
+  /**
+   * @brief Prepare an active verified capture source for backend reinitialization.
+   *
+   * PipeWire may pause a Gamescope stream while renegotiating its frame size.
+   * Reinitialization is permitted only while the selected compositor process
+   * still has the original PID start-time identity.
+   *
+   * @return True when capture may be rebuilt against the same verified source.
+   */
+  bool mark_capture_reinitializing();
 
   /**
    * @brief Record an owned virtual-display capture failure without blocking capture.

@@ -62,6 +62,39 @@ class MigrateSteamOSAppsTests(unittest.TestCase):
         self.assertFalse(MIGRATION.migrate(self.apps_path))
         self.assertEqual(self.apps_path.read_bytes(), first)
 
+    def test_removes_fixed_display_only_from_legacy_steam_command(self) -> None:
+        """Replace known legacy defaults without changing custom commands."""
+        payload = {
+            "apps": [
+                {
+                    "name": "Steam Big Picture",
+                    "detached": [
+                        "setsid env DISPLAY=:1 steam steam://open/bigpicture",
+                        "setsid env DISPLAY=:0 steam steam://open/bigpicture",
+                        "custom-steam-command",
+                    ],
+                },
+                {
+                    "name": "Custom Game",
+                    "detached": ["setsid env DISPLAY=:1 steam steam://open/bigpicture"],
+                },
+            ]
+        }
+        self.apps_path.write_text(json.dumps(payload), encoding="utf-8")
+
+        self.assertTrue(MIGRATION.migrate(self.apps_path))
+
+        migrated = json.loads(self.apps_path.read_text(encoding="utf-8"))
+        self.assertEqual(
+            migrated["apps"][0]["detached"],
+            [
+                MIGRATION.STEAM_BIG_PICTURE_COMMAND,
+                MIGRATION.STEAM_BIG_PICTURE_COMMAND,
+                "custom-steam-command",
+            ],
+        )
+        self.assertEqual(migrated["apps"][1]["detached"], payload["apps"][1]["detached"])
+
     def test_missing_file_is_ignored(self) -> None:
         """Allow Sunshine to create its packaged defaults when no file exists."""
         self.apps_path.unlink()
@@ -78,6 +111,17 @@ class MigrateSteamOSAppsTests(unittest.TestCase):
     def test_rejects_invalid_target_commands_without_rewriting(self) -> None:
         """Reject a non-list target preparation value before creating a backup."""
         invalid = b'{"apps":[{"name":"Desktop","prep-cmd":"invalid"}]}\n'
+        self.apps_path.write_bytes(invalid)
+
+        with self.assertRaises(ValueError):
+            MIGRATION.migrate(self.apps_path)
+
+        self.assertEqual(self.apps_path.read_bytes(), invalid)
+        self.assertFalse(Path(str(self.apps_path) + ".steamshine-backup").exists())
+
+    def test_rejects_invalid_detached_commands_without_rewriting(self) -> None:
+        """Reject malformed Steam commands before creating a backup."""
+        invalid = b'{"apps":[{"name":"Steam Big Picture","detached":"invalid"}]}\n'
         self.apps_path.write_bytes(invalid)
 
         with self.assertRaises(ValueError):

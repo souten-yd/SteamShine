@@ -2302,7 +2302,7 @@ with a stable @code{} input_route_error @endcode.
 
 ### steamos_virtual_desktop_command
 
-<table><tr><td>Description</td><td colspan="2">Non-singleton desktop surface launched when Moonlight selects the commandless Desktop app and automatic policy has created a SteamShine-owned private session. The command is not launched when a physical Desktop is selected or when SteamShine attaches to existing Game Mode.</td></tr><tr><td>Default</td><td colspan="2">@code{} plasmawindowed org.kde.plasma.folder @endcode</td></tr><tr><td>Example</td><td colspan="2">@code{} steamos_virtual_desktop_command = plasmawindowed org.kde.plasma.folder @endcode</td></tr></table>
+<table><tr><td>Description</td><td colspan="2">Non-singleton desktop surface launched when Moonlight selects the commandless Desktop app and automatic policy has created a SteamShine-owned private session. The command is not launched when a physical Desktop is selected or when SteamShine attaches to existing Game Mode. The packaged KDE command is launched with @code{} QT_QPA_PLATFORM=xcb @endcode so Gamescope uses its cursor-capable XWayland path; custom commands are unchanged.</td></tr><tr><td>Default</td><td colspan="2">@code{} plasmawindowed org.kde.plasma.folder @endcode</td></tr><tr><td>Example</td><td colspan="2">@code{} steamos_virtual_desktop_command = plasmawindowed org.kde.plasma.folder @endcode</td></tr></table>
 
 ### steamos_runtime_directory
 

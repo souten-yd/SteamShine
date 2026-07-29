@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <string>
 
 #if defined(__linux__)
@@ -105,6 +106,28 @@ std::map<std::string_view, std::function<int(const char *name, int argc, char **
      return args::version();
    }},
 #if defined(__linux__)
+  {"steamshine-session-bootstrap"sv, [](const char *, int argc, char **argv) {
+     if (argc != 4) {
+       return 2;
+     }
+     try {
+       size_t generation_consumed {};
+       size_t owner_pid_consumed {};
+       size_t owner_start_time_consumed {};
+       const auto generation {std::stoull(argv[1], &generation_consumed)};
+       const auto owner_pid_value {std::stoll(argv[2], &owner_pid_consumed)};
+       const auto owner_start_time {std::stoull(argv[3], &owner_start_time_consumed)};
+       if (generation_consumed != std::string_view {argv[1]}.size() ||
+           owner_pid_consumed != std::string_view {argv[2]}.size() ||
+           owner_start_time_consumed != std::string_view {argv[3]}.size() ||
+           owner_pid_value <= 0 || owner_pid_value > std::numeric_limits<int>::max() || owner_start_time == 0) {
+         return 2;
+       }
+       return steamos_virtual_session::run_display_endpoint_bootstrap(argv[0], generation, static_cast<int>(owner_pid_value), owner_start_time);
+     } catch (const std::exception &) {
+       return 2;
+     }
+   }},
   {"vulkan-video-probe"sv, [](const char *, int, char **) {
      std::string probe_error;
      if (!vk::probe_h264(probe_error)) {
@@ -183,7 +206,7 @@ void mainThreadLoop(const std::shared_ptr<safe::event_t<bool>> &shutdown_event) 
 
   // Conditions that would require the main thread event loop
 #ifndef _WIN32
-  run_loop = tray_is_enabled && config::sunshine.system_tray;  // On Windows, tray runs in separate thread, so no main loop needed for tray
+  run_loop = main_loop_uses_system_tray(tray_is_enabled && config::sunshine.system_tray, config::steamos_virtual_display.enabled);  // On Windows, tray runs in separate thread, so no main loop needed for tray
 #endif
 
   if (!run_loop) {
@@ -198,7 +221,11 @@ void mainThreadLoop(const std::shared_ptr<safe::event_t<bool>> &shutdown_event) 
 #if defined SUNSHINE_TRAY && SUNSHINE_TRAY >= 1
   while (system_tray::process_tray_events() == 0);
 #endif
-  BOOST_LOG(info) << "Main loop has exited"sv;
+  if (main_loop_requires_shutdown_wait(shutdown_event->peek())) {
+    BOOST_LOG(warning) << "Platform event loop ended without a shutdown request; keeping the server resident"sv;
+    shutdown_event->view();
+  }
+  BOOST_LOG(info) << "Main loop has exited after a shutdown request"sv;
 }
 
 /**
@@ -501,7 +528,11 @@ int main(int argc, char *argv[]) {
   }
 #endif
 
-  if (tray_is_enabled && config::sunshine.system_tray) {
+  const bool start_system_tray {main_loop_uses_system_tray(tray_is_enabled && config::sunshine.system_tray, config::steamos_virtual_display.enabled)};
+  if (tray_is_enabled && config::sunshine.system_tray && !start_system_tray) {
+    BOOST_LOG(warning) << "System tray disabled while SteamOS virtual display transitions are enabled"sv;
+  }
+  if (start_system_tray) {
     BOOST_LOG(info) << "Starting system tray"sv;
 #ifdef _WIN32
     // TODO: Windows has a weird bug where when running as a service and on the first Windows boot,

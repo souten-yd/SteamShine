@@ -25,13 +25,68 @@ redact_config() {
   sed -E '/^[[:space:]]*(credentials_file|password|pkey|cert|pin)[[:space:]]*=/Id' "$1"
 }
 
+# @brief Stop marker-verified Gamescope groups created below the test runtime.
+stop_owned_test_sessions() {
+  [[ -n "${temporary_runtime}" && -d "${temporary_runtime}" && ! -L "${temporary_runtime}" ]] || return 0
+  local harness_session session marker pid_file pid process_group process_session command start_time current_start
+  harness_session="$(ps -o sid= -p "$$" | tr -d ' ')"
+  for session in "${temporary_runtime}"/session-*; do
+    [[ -d "${session}" && ! -L "${session}" ]] || continue
+    marker="${session}/steamshine-owner"
+    pid_file="${session}/gamescope.pid"
+    [[ -f "${marker}" && ! -L "${marker}" && "$(<"${marker}")" == 'steamshine-steamos-virtual-session-v1' ]] || continue
+    [[ -f "${pid_file}" && ! -L "${pid_file}" ]] || continue
+    pid="$(<"${pid_file}")"
+    [[ "${pid}" =~ ^[1-9][0-9]*$ && -r "/proc/${pid}/stat" ]] || continue
+    process_group="$(ps -o pgid= -p "${pid}" | tr -d ' ')"
+    process_session="$(ps -o sid= -p "${pid}" | tr -d ' ')"
+    command="$(tr '\0' ' ' <"/proc/${pid}/cmdline" 2>/dev/null || true)"
+    start_time="$(awk '{print $22}' "/proc/${pid}/stat" 2>/dev/null || true)"
+    [[ "${process_group}" == "${pid}" && "${process_session}" == "${harness_session}" && "${command}" == gamescope\ * && "${start_time}" =~ ^[1-9][0-9]*$ ]] || continue
+    current_start="$(awk '{print $22}' "/proc/${pid}/stat" 2>/dev/null || true)"
+    [[ "${current_start}" == "${start_time}" ]] || continue
+    kill -TERM -- "-${process_group}" 2>/dev/null || true
+    for _ in $(seq 1 50); do
+      kill -0 "${pid}" 2>/dev/null || break
+      sleep 0.1
+    done
+    if kill -0 "${pid}" 2>/dev/null && [[ "$(awk '{print $22}' "/proc/${pid}/stat" 2>/dev/null || true)" == "${start_time}" ]]; then
+      kill -KILL -- "-${process_group}" 2>/dev/null || true
+    fi
+  done
+}
+
+# @brief Stop test-owned KDE surfaces that outlived a crashed daemon.
+stop_owned_test_surfaces() {
+  [[ -n "${temporary_runtime}" && -d "${temporary_runtime}" && ! -L "${temporary_runtime}" ]] || return 0
+  local process_directory pid environment executable
+  for process_directory in /proc/[0-9]*; do
+    pid="${process_directory##*/}"
+    environment="$({ tr '\0' '\n' <"${process_directory}/environ"; } 2>/dev/null || true)"
+    [[ "${environment}" == *"XDG_RUNTIME_DIR=${temporary_runtime}/session-"* ]] || continue
+    executable="$(readlink "${process_directory}/exe" 2>/dev/null || true)"
+    case "${executable}" in
+      /usr/bin/plasmawindowed|/usr/lib/kf6/kioworker) kill -TERM "${pid}" 2>/dev/null || true ;;
+    esac
+  done
+}
+
 cleanup() {
   local status="$?"
   trap - EXIT INT TERM
   if [[ -n "${test_pid}" ]] && kill -0 "${test_pid}" 2>/dev/null; then
     kill "${test_pid}" 2>/dev/null || true
+    for _ in $(seq 1 50); do
+      kill -0 "${test_pid}" 2>/dev/null || break
+      sleep 0.1
+    done
+    if kill -0 "${test_pid}" 2>/dev/null; then
+      kill -KILL "${test_pid}" 2>/dev/null || true
+    fi
     wait "${test_pid}" 2>/dev/null || true
   fi
+  stop_owned_test_sessions
+  stop_owned_test_surfaces
   if "${service_was_active}"; then
     systemctl --user start steamshine.service || true
   fi
@@ -47,18 +102,21 @@ command -v curl >/dev/null || die 'curl is required.'
 [[ -x "${binary}" ]] || die "SteamShine binary is not executable: ${binary}"
 umask 077
 mkdir -p "${report_dir}"
-temporary_root="$(mktemp -d "${runtime_root}/steamshine-force-hardware.XXXXXX")"
+# Keep the runtime short enough for Qt/KIO to append its worker socket name
+# without exceeding Linux's UNIX-domain socket path limit.
+temporary_root="$(mktemp -d "${runtime_root}/ss-fh.XXXXXX")"
 temporary_config="${temporary_root}/sunshine.conf"
 temporary_runtime="${temporary_root}/runtime"
 mkdir -p "${temporary_runtime}"
 trap cleanup EXIT INT TERM
 
 # Do not modify the original file. Drop only this test's keys, then append the
-# force policy and a session-owned runtime base.
-sed -E '/^[[:space:]]*steamos_(virtual_display_enabled|virtual_display_mode|runtime_directory)[[:space:]]*=/d' "${config_file}" >"${temporary_config}"
+# force policy, non-persistent lifecycle, and a session-owned runtime base.
+sed -E '/^[[:space:]]*steamos_(virtual_display_enabled|virtual_display_mode|keep_session_alive|runtime_directory)[[:space:]]*=/d' "${config_file}" >"${temporary_config}"
 cat >>"${temporary_config}" <<EOF
 steamos_virtual_display_enabled = true
 steamos_virtual_display_mode = force
+steamos_keep_session_alive = false
 steamos_runtime_directory = ${temporary_runtime}
 EOF
 redact_config "${temporary_config}" >"${report_dir}/config-redacted.txt"

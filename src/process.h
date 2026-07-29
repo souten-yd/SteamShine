@@ -13,6 +13,7 @@
 #endif
 
 // standard includes
+#include <cstddef>
 #include <optional>
 #include <string_view>
 #include <unordered_map>
@@ -24,6 +25,7 @@
 #include "config.h"
 #include "platform/common.h"
 #include "rtsp.h"
+#include "steamos_virtual_session.h"
 #include "utility.h"
 
 /**
@@ -34,11 +36,32 @@
 
 namespace proc {
   /**
+   * @brief Decide whether an application needs the owned private Desktop surface.
+   *
+   * @param app_command Configured primary application command.
+   * @param detached_command_count Number of configured detached launch commands.
+   * @param owned_virtual_display Whether the selected display is SteamShine-owned.
+   * @return True only for a capture-only application inside an owned display.
+   */
+  bool should_launch_owned_virtual_desktop(std::string_view app_command, std::size_t detached_command_count, bool owned_virtual_display);
+
+  /**
+   * @brief Restore the immutable application environment before a new launch.
+   *
+   * @param environment Mutable child-process environment from a preceding launch.
+   * @param baseline Parsed host and application environment to restore.
+   */
+  void reset_launch_environment(boost::process::v1::environment &environment, const boost::process::v1::environment &baseline);
+
+  /**
    * @brief Select the command that represents a configured application launch.
    *
    * A commandless Desktop entry remains a capture-only placebo on the physical
    * Desktop and attached Game Mode. Inside an owned private display it launches
-   * a non-singleton desktop surface so a monitorless stream is usable.
+   * a non-singleton desktop surface so a monitorless stream is usable. The
+   * packaged KDE folder-view command is constrained to XWayland because
+   * Gamescope does not compose a cursor for native XDG surfaces. Other
+   * configured commands remain unchanged.
    *
    * @param app_command Configured application command.
    * @param owned_virtual_display Whether the selected display is SteamShine-owned.
@@ -46,6 +69,26 @@ namespace proc {
    * @return Application command to execute, or an empty string for a capture-only Desktop.
    */
   std::string select_effective_command(std::string_view app_command, bool owned_virtual_display, std::string_view virtual_desktop_command);
+
+  /**
+   * @brief Decide whether teardown must preserve the resident Game Mode Steam shell.
+   *
+   * @param preserve_attached_steam Whether the application used a non-owned attached Game Mode session.
+   * @param undo_command Configured teardown command.
+   * @return True only for a Big Picture close request in an attached Game Mode session.
+   */
+  bool should_skip_undo_command(bool preserve_attached_steam, std::string_view undo_command);
+
+  /**
+   * @brief Apply one verified Gamescope endpoint to a child environment.
+   *
+   * A missing endpoint performs no writes, preserving every inherited physical
+   * Desktop display variable. Session cookies are never read or copied here.
+   *
+   * @param environment Child environment to update.
+   * @param endpoint Verified session endpoint, or no value for physical Desktop.
+   */
+  void apply_session_display_environment(boost::process::v1::environment &environment, const std::optional<steamos_virtual_session::session_display_endpoint_t> &endpoint);
 
   /**
    * @brief Boost.Process pipe stream used for child-process I/O.
@@ -116,6 +159,7 @@ namespace proc {
       std::vector<ctx_t> &&apps
     ):
         _app_id(0),
+        _base_env(env),
         _env(std::move(env)),
         _apps(std::move(apps)) {
     }
@@ -169,6 +213,7 @@ namespace proc {
   private:
     int _app_id;
 
+    boost::process::v1::environment _base_env;
     boost::process::v1::environment _env;
     std::vector<ctx_t> _apps;
     ctx_t _app;
@@ -176,6 +221,7 @@ namespace proc {
 
     // If no command associated with _app_id, yet it's still running
     bool placebo {};
+    bool preserve_attached_steam_ {};  ///< Whether teardown must leave the non-owned Game Mode Steam shell open.
 
     boost::process::v1::child _process;
     boost::process::v1::group _process_group;

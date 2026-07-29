@@ -50,6 +50,13 @@ vaapi_output="$(STEAMSHINE_DRI_ROOTS="${fake_dri}" "${root_dir}/steamshine.sh" v
 grep -Fq 'VAAPI_AMD_DRIVER_AVAILABLE' <<<"${vaapi_output}"
 
 "${root_dir}/steamshine.sh" --help >/dev/null
+grep -Fq 'Environment=XDG_RUNTIME_DIR=%t' "${root_dir}/packaging/linux/steamshine.service.in"
+grep -Fq 'ExecStart=%h/.local/bin/steamshine %h/.config/steamshine/sunshine.conf' "${root_dir}/packaging/linux/steamshine.service.in"
+grep -Fq 'WantedBy=default.target' "${root_dir}/packaging/linux/steamshine.service.in"
+if grep -Eq 'graphical-session.target|User=deck|WAYLAND_DISPLAY=wayland-0|DISPLAY=:0' "${root_dir}/packaging/linux/steamshine.service.in"; then
+  echo 'The packaged SteamShine user unit template is not Game Mode safe.' >&2
+  exit 1
+fi
 if "${root_dir}/steamshine.sh" </dev/null >/dev/null 2>&1; then
   echo 'Expected non-TTY invocation without a command to fail.' >&2
   exit 1
@@ -66,12 +73,53 @@ install -m 755 /bin/true "${test_root}/stage/bin/steamshine"
 install -m 755 /bin/true "${test_root}/stage/bin/steamshine-input-visualizer"
 install -m 755 "${root_dir}/scripts/migrate-steamos-apps.py" "${test_root}/stage/scripts/migrate-steamos-apps.py"
 cat >"${test_root}/home/.config/sunshine/apps.json" <<'EOF'
-{"env":{"CUSTOM":"preserved"},"apps":[{"name":"Desktop","image-path":"custom.png"},{"name":"Custom Game","cmd":"custom-game"}]}
+{"env":{"CUSTOM":"preserved"},"apps":[{"name":"Desktop","image-path":"custom.png"},{"name":"Steam Big Picture","detached":["setsid env DISPLAY=:1 steam steam://open/bigpicture"]},{"name":"Custom Game","cmd":"custom-game"}]}
 EOF
 printf '{"target_architecture":"x86_64"}\n' >"${test_root}/stage/BUILD_INFO.json"
 printf '{}\n' >"${test_root}/stage/STEAMOS_BASELINE.json"
 tar --zstd -C "${test_root}/stage" -cf "${test_root}/steamshine-steamos-x86_64-test.tar.zst" .
 (cd "${test_root}" && sha256sum steamshine-steamos-x86_64-test.tar.zst >steamshine-steamos-x86_64-test.tar.zst.sha256)
+
+# Plain `install` resolves the newest published GitHub Release, downloads its
+# archive and detached checksum, and then enters the normal validated install.
+release_commit='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+release_archive="steamshine-steamos-x86_64-${release_commit}.tar.zst"
+mkdir -p "${test_root}/release-assets" "${test_root}/release-bin" "${test_root}/release-home/run"
+cp "${test_root}/steamshine-steamos-x86_64-test.tar.zst" "${test_root}/release-assets/${release_archive}"
+(cd "${test_root}/release-assets" && sha256sum "${release_archive}" >"${release_archive}.sha256")
+cat >"${test_root}/release-assets/latest.json" <<EOF
+{"tag_name":"steamos-test","assets":[{"name":"${release_archive}","browser_download_url":"https://github.com/souten-yd/SteamShine/releases/download/steamos-test/${release_archive}"},{"name":"${release_archive}.sha256","browser_download_url":"https://github.com/souten-yd/SteamShine/releases/download/steamos-test/${release_archive}.sha256"}]}
+EOF
+cat >"${test_root}/release-bin/curl" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+output='' url=''
+while (($#)); do
+  case "$1" in
+    --output) output="$2"; shift 2;;
+    --proto|--tlsv1.2) [[ "$1" == --proto ]] && shift 2 || shift;;
+    --fail|--location|--silent|--show-error) shift;;
+    *) url="$1"; shift;;
+  esac
+done
+case "${url}" in
+  */releases/latest) cp "${RELEASE_METADATA}" "${output}";;
+  *.tar.zst.sha256) cp "${RELEASE_CHECKSUM}" "${output}";;
+  *.tar.zst) cp "${RELEASE_ARTIFACT}" "${output}";;
+  *) exit 22;;
+esac
+EOF
+chmod 755 "${test_root}/release-bin/curl"
+RELEASE_METADATA="${test_root}/release-assets/latest.json" \
+  RELEASE_ARTIFACT="${test_root}/release-assets/${release_archive}" \
+  RELEASE_CHECKSUM="${test_root}/release-assets/${release_archive}.sha256" \
+  STEAMSHINE_RELEASE_API_URL='https://api.github.test/repos/souten-yd/SteamShine/releases/latest' \
+  HOME="${test_root}/release-home" XDG_RUNTIME_DIR="${test_root}/release-home/run" PATH="${test_root}/release-bin:${PATH}" \
+  "${root_dir}/steamshine.sh" install --no-service --non-interactive --yes
+test -x "${test_root}/release-home/.local/bin/steamshine"
+test -f "${test_root}/release-home/.cache/steamshine/releases/${release_archive}"
+grep -Fxq 'steamos_virtual_display_enabled = true' "${test_root}/release-home/.config/steamshine/sunshine.conf"
+
 HOME="${test_root}/home" XDG_RUNTIME_DIR="${test_root}/home/run" \
   "${root_dir}/steamshine.sh" install --artifact "${test_root}/steamshine-steamos-x86_64-test.tar.zst" --no-service --non-interactive --yes
 python3 - "${test_root}/home/.config/sunshine/apps.json" <<'PY'
@@ -82,6 +130,7 @@ payload = json.load(open(sys.argv[1], encoding="utf-8"))
 assert payload["env"]["CUSTOM"] == "preserved"
 applications = {application["name"]: application for application in payload["apps"]}
 assert "configure-steamos-client-display.py apply" in applications["Desktop"]["prep-cmd"][0]["do"]
+assert applications["Steam Big Picture"]["detached"] == ["setsid steam steam://open/bigpicture"]
 assert applications["Custom Game"]["cmd"] == "custom-game"
 PY
 test -f "${test_root}/home/.config/sunshine/apps.json.steamshine-backup"
@@ -152,17 +201,102 @@ test -f "${test_root}/pr-home/.cache/steamshine/artifacts/800/steamshine-steamos
 mkdir -p "${test_root}/mock-bin"
 cat >"${test_root}/mock-bin/systemctl" <<'EOF'
 #!/usr/bin/env bash
+set -euo pipefail
+state="${SYSTEMCTL_STATE_DIR:?}"
+mkdir -p "${state}"
 [[ -n "${SYSTEMCTL_LOG:-}" ]] && printf '%q ' "$@" >>"${SYSTEMCTL_LOG}"
 [[ -n "${SYSTEMCTL_LOG:-}" ]] && printf '\n' >>"${SYSTEMCTL_LOG}"
-exit 0
+[[ "${1:-}" == --user ]] && shift
+command_name="${1:-}"
+shift || true
+unit_file="${HOME}/.config/systemd/user/steamshine.service"
+wants="${HOME}/.config/systemd/user/default.target.wants/steamshine.service"
+case "${command_name}" in
+  show-environment|daemon-reload|reset-failed)
+    exit 0
+    ;;
+  enable)
+    touch "${state}/enabled"
+    mkdir -p "$(dirname -- "${wants}")"
+    ln -sfn ../steamshine.service "${wants}"
+    ;;
+  disable)
+    rm -f "${state}/enabled" "${wants}"
+    [[ " $* " == *' --now '* ]] && rm -f "${state}/active"
+    ;;
+  start|restart)
+    [[ "${SYSTEMCTL_FAIL_START:-0}" == 1 ]] && exit 1
+    touch "${state}/active"
+    mkdir -p "${STEAMSHINE_PROC_ROOT:?}/4242"
+    ln -sfn "$(readlink -f -- "${HOME}/.local/bin/steamshine")" "${STEAMSHINE_PROC_ROOT}/4242/exe"
+    ;;
+  stop)
+    rm -f "${state}/active"
+    ;;
+  is-enabled)
+    [[ -f "${state}/enabled" ]] || exit 1
+    [[ " $* " == *' --quiet '* ]] || printf 'enabled\n'
+    ;;
+  is-active)
+    [[ -f "${state}/active" ]] || exit 1
+    [[ " $* " == *' --quiet '* ]] || printf 'active\n'
+    ;;
+  show)
+    property=''
+    for argument in "$@"; do
+      case "${argument}" in
+        --property=*) property="${argument#--property=}";;
+      esac
+    done
+    case "${property}" in
+      LoadState) [[ -f "${unit_file}" ]] && printf 'loaded\n' || printf 'not-found\n';;
+      ActiveState) [[ -f "${state}/active" ]] && printf 'active\n' || printf 'inactive\n';;
+      SubState) [[ -f "${state}/active" ]] && printf 'running\n' || printf 'dead\n';;
+      MainPID) [[ -f "${state}/active" ]] && printf '4242\n' || printf '0\n';;
+      ExecStart) printf '{ path=%s/.local/bin/steamshine ; argv[]=%s/.local/bin/steamshine %s/.config/steamshine/sunshine.conf ; }\n' "${HOME}" "${HOME}" "${HOME}";;
+      Environment) printf 'XDG_RUNTIME_DIR=/run/user/1000 STEAMSHINE_LAUNCH_MODE=systemd_user_service\n';;
+    esac
+    ;;
+esac
 EOF
 chmod 755 "${test_root}/mock-bin/systemctl"
+cat >"${test_root}/mock-bin/loginctl" <<'EOF'
+#!/usr/bin/env bash
+case "$*" in
+  *--property=State*) printf 'active\n';;
+  *--property=Linger*) printf 'no\n';;
+esac
+EOF
+cat >"${test_root}/mock-bin/journalctl" <<'EOF'
+#!/usr/bin/env bash
+printf 'Started SteamShine game streaming host\n'
+EOF
+cat >"${test_root}/mock-bin/pgrep" <<'EOF'
+#!/usr/bin/env bash
+[[ -n "${MANUAL_STEAMSHINE_PID:-}" ]] && printf '%s\n' "${MANUAL_STEAMSHINE_PID}"
+exit 0
+EOF
+chmod 755 "${test_root}/mock-bin/loginctl" "${test_root}/mock-bin/journalctl" "${test_root}/mock-bin/pgrep"
+systemctl_state="${test_root}/systemctl-state"
+mock_proc="${test_root}/mock-proc"
+mkdir -p "${systemctl_state}" "${mock_proc}"
 HOME="${test_root}/home" XDG_RUNTIME_DIR="${test_root}/home/run" PATH="${test_root}/mock-bin:${PATH}" \
+  SYSTEMCTL_STATE_DIR="${systemctl_state}" STEAMSHINE_PROC_ROOT="${mock_proc}" \
   "${root_dir}/steamshine.sh" install --artifact "${test_root}/steamshine-steamos-x86_64-test.tar.zst" --non-interactive --yes
 service_unit="${test_root}/home/.config/systemd/user/steamshine.service"
-grep -Fq "ExecStart=${test_root}/home/.local/bin/steamshine ${test_root}/home/.config/steamshine/sunshine.conf" "${service_unit}"
-grep -Fq 'PassEnvironment=XDG_RUNTIME_DIR WAYLAND_DISPLAY DISPLAY DBUS_SESSION_BUS_ADDRESS PIPEWIRE_REMOTE' "${service_unit}"
+grep -Fq 'ExecStart=%h/.local/bin/steamshine %h/.config/steamshine/sunshine.conf' "${service_unit}"
+grep -Fq 'Environment=XDG_RUNTIME_DIR=%t' "${service_unit}"
+grep -Fq 'Environment=PIPEWIRE_RUNTIME_DIR=%t' "${service_unit}"
+grep -Fq 'Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=%t/bus' "${service_unit}"
 grep -Fq 'Environment=STEAMSHINE_LAUNCH_MODE=systemd_user_service' "${service_unit}"
+grep -Fq 'WantedBy=default.target' "${service_unit}"
+if grep -Eq 'User=deck|PartOf=graphical-session.target|WAYLAND_DISPLAY=wayland-0|DISPLAY=:0' "${service_unit}"; then
+  echo 'The user unit contains a forbidden Game Mode dependency or hard-coded session value.' >&2
+  exit 1
+fi
+test -L "${test_root}/home/.config/systemd/user/default.target.wants/steamshine.service"
+test -f "${systemctl_state}/enabled"
+test -f "${systemctl_state}/active"
 if grep -Fq -- '--config' "${service_unit}"; then
   echo 'The generated service must not pass an unsupported --config option.' >&2
   exit 1
@@ -170,10 +304,105 @@ fi
 test -x "${test_root}/home/.local/bin/steamshine"
 test -x "${test_root}/home/.local/bin/steamshine-input-visualizer"
 grep -Fq 'steamos_virtual_desktop_command = plasmawindowed org.kde.plasma.folder' "${test_root}/home/.config/steamshine/sunshine.conf"
+
+# `--no-start` still establishes default.target autostart, while
+# `--no-service` must leave the user manager and unit directory untouched.
+no_start_home="${test_root}/no-start-home"
+no_start_state="${test_root}/no-start-state"
+no_start_proc="${test_root}/no-start-proc"
+no_start_log="${test_root}/no-start-systemctl.log"
+mkdir -p "${no_start_home}/run" "${no_start_state}" "${no_start_proc}"
+HOME="${no_start_home}" XDG_RUNTIME_DIR="${no_start_home}/run" PATH="${test_root}/mock-bin:${PATH}" \
+  SYSTEMCTL_STATE_DIR="${no_start_state}" STEAMSHINE_PROC_ROOT="${no_start_proc}" SYSTEMCTL_LOG="${no_start_log}" \
+  "${root_dir}/steamshine.sh" install --artifact "${test_root}/steamshine-steamos-x86_64-test.tar.zst" --no-start --non-interactive --yes
+test -f "${no_start_state}/enabled"
+test ! -f "${no_start_state}/active"
+test -L "${no_start_home}/.config/systemd/user/default.target.wants/steamshine.service"
+if grep -Eq -- '--user (start|restart) ' "${no_start_log}"; then
+  echo '--no-start must not start or restart SteamShine.' >&2
+  exit 1
+fi
+test ! -e "${test_root}/release-home/.config/systemd/user/steamshine.service"
+
+# Repeated installation is safe, and an active service is restarted so it
+# cannot continue running an older immutable Artifact after the version switch.
+service_unit_checksum="$(sha256sum "${service_unit}")"
+systemctl_log="${test_root}/systemctl.log"
+: >"${systemctl_log}"
+HOME="${test_root}/home" XDG_RUNTIME_DIR="${test_root}/home/run" PATH="${test_root}/mock-bin:${PATH}" \
+  SYSTEMCTL_STATE_DIR="${systemctl_state}" STEAMSHINE_PROC_ROOT="${mock_proc}" SYSTEMCTL_LOG="${systemctl_log}" \
+  "${root_dir}/steamshine.sh" install --artifact "${test_root}/steamshine-steamos-x86_64-test.tar.zst" --non-interactive --yes
+test "$(sha256sum "${service_unit}")" = "${service_unit_checksum}"
+grep -Fq -- '--user restart steamshine.service' "${systemctl_log}"
+
+# Repair recreates a missing default.target link without needlessly restarting
+# an already-active process that resolves to the current installed binary.
+rm "${test_root}/home/.config/systemd/user/default.target.wants/steamshine.service"
+: >"${systemctl_log}"
+HOME="${test_root}/home" XDG_RUNTIME_DIR="${test_root}/home/run" PATH="${test_root}/mock-bin:${PATH}" \
+  SYSTEMCTL_STATE_DIR="${systemctl_state}" STEAMSHINE_PROC_ROOT="${mock_proc}" SYSTEMCTL_LOG="${systemctl_log}" \
+  "${root_dir}/steamshine.sh" repair --non-interactive --yes
+test -L "${test_root}/home/.config/systemd/user/default.target.wants/steamshine.service"
+if grep -Eq -- '--user (start|restart) ' "${systemctl_log}"; then
+  echo 'Repair restarted a healthy active service.' >&2
+  exit 1
+fi
+
+# An update of an enabled but inactive service preserves inactivity. A fake git
+# confines this lifecycle check to update's service-state behavior.
+cat >"${test_root}/mock-bin/git" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+chmod 755 "${test_root}/mock-bin/git"
+: >"${no_start_log}"
+HOME="${no_start_home}" XDG_RUNTIME_DIR="${no_start_home}/run" PATH="${test_root}/mock-bin:${PATH}" \
+  SYSTEMCTL_STATE_DIR="${no_start_state}" STEAMSHINE_PROC_ROOT="${no_start_proc}" SYSTEMCTL_LOG="${no_start_log}" \
+  "${root_dir}/steamshine.sh" update --artifact "${test_root}/steamshine-steamos-x86_64-test.tar.zst" --non-interactive --yes
+test -f "${no_start_state}/enabled"
+test ! -f "${no_start_state}/active"
+if grep -Eq -- '--user (start|restart) ' "${no_start_log}"; then
+  echo 'Update started an enabled service that was inactive before the update.' >&2
+  exit 1
+fi
+
+# Diagnostics report the installed identity and flag a separately launched
+# SteamShine process without terminating it.
+autostart_output="$(HOME="${test_root}/home" XDG_RUNTIME_DIR="${test_root}/home/run" PATH="${test_root}/mock-bin:${PATH}" \
+  SYSTEMCTL_STATE_DIR="${systemctl_state}" STEAMSHINE_PROC_ROOT="${mock_proc}" \
+  "${root_dir}/steamshine.sh" autostart-status)"
+grep -Fq 'autostart_health=healthy' <<<"${autostart_output}"
+grep -Fq 'MainPID=4242' <<<"${autostart_output}"
+if manual_output="$(HOME="${test_root}/home" XDG_RUNTIME_DIR="${test_root}/home/run" PATH="${test_root}/mock-bin:${PATH}" \
+  SYSTEMCTL_STATE_DIR="${systemctl_state}" STEAMSHINE_PROC_ROOT="${mock_proc}" MANUAL_STEAMSHINE_PID=999 \
+  "${root_dir}/steamshine.sh" autostart-status 2>&1)"; then
+  echo 'A manual SteamShine process conflict was not reported as unhealthy.' >&2
+  exit 1
+fi
+grep -Fq 'manual_process_conflict' <<<"${manual_output}"
+
+# A failed start must propagate a nonzero installer result and must not print a
+# misleading installation-success message.
+failed_home="${test_root}/failed-home"
+failed_state="${test_root}/failed-state"
+failed_proc="${test_root}/failed-proc"
+mkdir -p "${failed_home}/run" "${failed_state}" "${failed_proc}"
+if failed_output="$(HOME="${failed_home}" XDG_RUNTIME_DIR="${failed_home}/run" PATH="${test_root}/mock-bin:${PATH}" \
+  SYSTEMCTL_STATE_DIR="${failed_state}" STEAMSHINE_PROC_ROOT="${failed_proc}" SYSTEMCTL_FAIL_START=1 \
+  "${root_dir}/steamshine.sh" install --artifact "${test_root}/steamshine-steamos-x86_64-test.tar.zst" --non-interactive --yes 2>&1)"; then
+  echo 'Expected a failed systemd start to fail installation.' >&2
+  exit 1
+fi
+if grep -Fq 'installed and will start automatically' <<<"${failed_output}"; then
+  echo 'Failed installation printed a success message.' >&2
+  exit 1
+fi
+
 # A graphical launcher imports only non-empty desktop values before service
 # activation, preserving an existing manager environment when a value is absent.
-systemctl_log="${test_root}/systemctl.log"
+sed -i 's/^steamos_virtual_display_enabled = true$/steamos_virtual_display_enabled = false/' "${test_root}/home/.config/steamshine/sunshine.conf"
 env -u DISPLAY -u DBUS_SESSION_BUS_ADDRESS -u PIPEWIRE_REMOTE HOME="${test_root}/home" XDG_RUNTIME_DIR="${test_root}/home/run" WAYLAND_DISPLAY="wayland-0" PATH="${test_root}/mock-bin:${PATH}" SYSTEMCTL_LOG="${systemctl_log}" \
+  SYSTEMCTL_STATE_DIR="${systemctl_state}" STEAMSHINE_PROC_ROOT="${mock_proc}" \
   "${root_dir}/steamshine.sh" start --non-interactive --yes
 grep -Fq -- '--user import-environment XDG_RUNTIME_DIR WAYLAND_DISPLAY' "${systemctl_log}"
 if grep -Eq '(^|[[:space:]])DISPLAY([[:space:]]|$)' "${systemctl_log}"; then
@@ -239,12 +468,17 @@ test "$(readlink -f "${test_root}/home/.local/share/steamshine/current")" = "${t
 mkdir -p "${test_root}/home/.config/steamshine" "${test_root}/home/.local/state/steamshine"
 printf 'keep\n' >"${test_root}/home/.config/steamshine/sunshine.conf"
 printf 'keep\n' >"${test_root}/home/.local/state/steamshine/diagnostics.log"
-HOME="${test_root}/home" XDG_RUNTIME_DIR="${test_root}/home/run" \
-  "${root_dir}/steamshine.sh" uninstall --build-dir "${test_root}/cmake-build-steamos" --no-service --non-interactive --yes
+HOME="${test_root}/home" XDG_RUNTIME_DIR="${test_root}/home/run" PATH="${test_root}/mock-bin:${PATH}" \
+  SYSTEMCTL_STATE_DIR="${systemctl_state}" STEAMSHINE_PROC_ROOT="${mock_proc}" \
+  "${root_dir}/steamshine.sh" uninstall --build-dir "${test_root}/cmake-build-steamos" --non-interactive --yes
 test ! -e "${test_root}/home/.local/bin/steamshine"
 test ! -e "${test_root}/home/.local/bin/steamshine-input-visualizer"
 test ! -e "${test_root}/home/.local/share/steamshine/current"
 test ! -d "${test_root}/home/.cache/steamshine"
+test ! -e "${test_root}/home/.config/systemd/user/steamshine.service"
+test ! -e "${test_root}/home/.config/systemd/user/default.target.wants/steamshine.service"
+test ! -f "${systemctl_state}/enabled"
+test ! -f "${systemctl_state}/active"
 test -f "${test_root}/home/.config/steamshine/sunshine.conf"
 test -f "${test_root}/home/.local/state/steamshine/diagnostics.log"
 

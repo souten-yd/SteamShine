@@ -254,7 +254,7 @@ jobs:
           cd "${GITHUB_WORKSPACE}"
           clang-format --dry-run --Werror src/config.cpp src/config.h src/process.cpp src/process.h src/input.cpp src/input.h src/video.cpp src/video.h src/stream.cpp src/thread_safe.h src/platform/common.h src/platform/linux/misc.cpp src/platform/linux/portalgrab.cpp src/platform/linux/vulkan_encode.cpp src/platform/linux/host_desktop_endpoint.cpp src/platform/linux/host_desktop_endpoint.h src/platform/linux/input/gamescope_eis_input.cpp src/platform/linux/input/gamescope_eis_input.h src/platform/linux/input/gamescope_pointer_state.h src/platform/linux/input/input_key_mapping.h src/steamos_virtual_session.cpp src/steamos_virtual_session.h src/steamos_virtual_session_core.cpp src/steamos_virtual_session_core.h tests/unit/platform/test_common.cpp tests/unit/test_input_queue.cpp tests/unit/test_mouse.cpp tests/unit/test_process.cpp tests/unit/test_video.cpp tests/unit/test_steamos_virtual_session.cpp tests/unit/test_steamos_virtual_session_core.cpp tests/steamos_lifecycle/stubs.cpp src/confighttp.cpp src/web_services.cpp src/web_services.h tests/unit/test_web_services.cpp tools/steamshine_input_visualizer.cpp
           shellcheck steamshine.sh scripts/*.sh tests/fixtures/steamos/fixture.sh tests/integration/test_steamshine_script.sh tests/integration/test_steamos_force_hardware_script.sh tests/integration/test_web_asset_validation.sh
-          python3 -m py_compile scripts/build-steamshine-web-assets.py scripts/validate-web-assets.py
+          python3 -m py_compile scripts/build-steamshine-web-assets.py scripts/configure-steamos-client-display.py scripts/validate-web-assets.py tests/integration/test_steamos_client_display.py
           node --check tests/web/upstream-browser-e2e.mjs
           actionlint .github/workflows/build-steamos.yml .github/workflows/build-ci-image.yml
           if grep -nE '[[:blank:]]+$|^(<<<<<<<|=======|>>>>>>>)' src/config.cpp src/config.h src/process.cpp src/platform/linux/misc.cpp src/platform/linux/portalgrab.cpp src/platform/linux/vulkan_encode.cpp src/steamos_virtual_session.cpp src/steamos_virtual_session.h src/steamos_virtual_session_core.cpp src/steamos_virtual_session_core.h tests/unit/test_steamos_virtual_session.cpp tests/unit/test_steamos_virtual_session_core.cpp tests/steamos_lifecycle/stubs.cpp steamshine.sh scripts/*.sh tests/fixtures/steamos/fixture.sh tests/integration/test_steamshine_script.sh tests/integration/test_steamos_force_hardware_script.sh tests/integration/test_web_asset_validation.sh .github/workflows/build-steamos.yml .github/workflows/build-ci-image.yml; then exit 1; fi
@@ -276,7 +276,8 @@ jobs:
           cmake --build cmake-build-steamos-lifecycle --target test_steamos_virtual_session_lifecycle --parallel 2
           cmake-build-steamos-lifecycle/test_steamos_virtual_session_lifecycle --gtest_color=yes
           cmake --build cmake-build-steamos --target test_sunshine --parallel 2
-          cmake-build-steamos/tests/test_sunshine --gtest_filter='WebServicesTest.*:ImageFallbackTests.*:InputPacketQueue.*:GamescopeInputMappingTest.*:ProcessCommandSelectionTest.*:VideoPipelineDiagnostics.*:VideoPipelineBackpressure.*' --gtest_color=yes
+          cmake-build-steamos/tests/test_sunshine --gtest_filter='WebServicesTest.*:ImageFallbackTests.*:InputPacketQueue.*:GamescopeInputMappingTest.*:ProcessCommandSelectionTest.*:ProcessDisplayEnvironmentTest.*:ProcessEnvironmentTest.*:VideoPipelineDiagnostics.*:VideoPipelineBackpressure.*' --gtest_color=yes
+          python3 -m unittest -v tests.integration.test_steamos_client_display
           tests/integration/test_steamshine_script.sh
           tests/integration/test_steamos_force_hardware_script.sh
           tests/integration/test_web_asset_validation.sh

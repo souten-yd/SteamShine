@@ -74,6 +74,14 @@ namespace nvenc {
 }
 
 namespace platf {
+  /**
+   * @brief Refresh capture endpoints after a graphical-session transition.
+   *
+   * Linux uses this before an idle stream launch to recover when the service
+   * started before the desktop compositor. Other platforms do nothing.
+   */
+  void refresh_capture_environment();
+
   // Limited by bits in activeGamepadMask
   constexpr auto MAX_GAMEPADS = 16;  ///< Maximum number of simultaneously tracked gamepads.
 
@@ -516,6 +524,7 @@ namespace platf {
     std::int32_t row_pitch {};  ///< Bytes between consecutive image rows.
 
     std::optional<std::chrono::steady_clock::time_point> frame_timestamp;  ///< Capture timestamp associated with the frame.
+    std::uint64_t source_generation {0};  ///< Monotonic unique-source generation assigned by capture.
 
     /**
      * @brief Destroy the image.

@@ -4,15 +4,53 @@
  */
 #include "pipewire_capture.h"
 
+#include <algorithm>
+#include <cctype>
+#include <filesystem>
+
 namespace pipewire_capture {
-  max_framerate_range_t max_framerate_range(const uint32_t requested_fps) {
-    if (requested_fps == 0) {
+  dmabuf_device_t desktop_dmabuf_device() {
+    return {};
+  }
+
+  std::optional<dmabuf_device_t> verified_render_node_dmabuf_device(const std::string_view render_node) {
+    const std::filesystem::path path {render_node};
+    const auto filename {path.filename().string()};
+    if (!path.is_absolute() || path.parent_path() != "/dev/dri" || !filename.starts_with("renderD") || filename.size() == 7 || !std::all_of(filename.begin() + 7, filename.end(), [](const unsigned char character) {
+          return std::isdigit(character) != 0;
+        })) {
+      return std::nullopt;
+    }
+    return dmabuf_device_t {
+      .origin = dmabuf_device_origin_e::verified_render_node,
+      .render_node = path.string(),
+    };
+  }
+
+  frame_classification_t classify_frame(
+    const std::optional<std::uint64_t> &previous_pts,
+    const std::optional<std::uint64_t> &current_pts,
+    const std::optional<bool> &damage,
+    const bool corrupted
+  ) {
+    const bool redundant_pts {previous_pts && current_pts && *previous_pts == *current_pts};
+    const bool no_damage {damage && !*damage};
+    return {
+      .redundant_pts = redundant_pts,
+      .no_damage = no_damage,
+      .corrupted = corrupted,
+      .unique = !corrupted && !no_damage,
+    };
+  }
+
+  max_framerate_range_t max_framerate_range(const uint32_t numerator, const uint32_t denominator) {
+    if (numerator == 0 || denominator == 0) {
       return {};
     }
     return {
-      .preferred = requested_fps,
-      .minimum = 1,
-      .maximum = requested_fps,
+      .preferred = {numerator, denominator},
+      .minimum = {1, 1},
+      .maximum = {numerator, denominator},
     };
   }
 
@@ -24,6 +62,19 @@ namespace pipewire_capture {
       return negotiation_state_e::complete;
     }
     return negotiation_state_e::pending;
+  }
+
+  bool should_start_stream_during_initialization(const bool encoder_probe, const bool live_stream_required_for_probe) {
+    return !encoder_probe || live_stream_required_for_probe;
+  }
+
+  bool retained_first_frame_timeout_expired(
+    const bool source_was_productive,
+    const bool frame_received,
+    const std::chrono::milliseconds elapsed,
+    const std::chrono::milliseconds grace
+  ) {
+    return source_was_productive && !frame_received && elapsed >= grace;
   }
 
   bool has_verified_source_identity(const stream_descriptor_t &descriptor) {

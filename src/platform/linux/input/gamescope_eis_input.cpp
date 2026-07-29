@@ -15,6 +15,7 @@
 #include <mutex>
 #include <poll.h>
 #include <string_view>
+#include <unistd.h>
 #include <unordered_set>
 
 using namespace std::chrono_literals;
@@ -77,7 +78,7 @@ namespace platf {
       ei *(*new_sender)(void *);  ///< Create a sender context.
       ei *(*unref)(ei *);  ///< Release a sender context.
       void (*configure_name)(ei *, const char *);  ///< Set the sender application name.
-      int (*setup_backend_socket)(ei *, const char *);  ///< Connect to an EIS socket.
+      int (*setup_backend_fd)(ei *, int);  ///< Adopt a verified EIS connection.
       int (*get_fd)(ei *);  ///< Return the event-loop file descriptor.
       void (*dispatch)(ei *);  ///< Dispatch pending protocol input.
       ei_event *(*get_event)(ei *);  ///< Remove the next pending event.
@@ -210,7 +211,7 @@ namespace platf {
       LOAD_EI(new_sender, "ei_new_sender");
       LOAD_EI(unref, "ei_unref");
       LOAD_EI(configure_name, "ei_configure_name");
-      LOAD_EI(setup_backend_socket, "ei_setup_backend_socket");
+      LOAD_EI(setup_backend_fd, "ei_setup_backend_fd");
       LOAD_EI(get_fd, "ei_get_fd");
       LOAD_EI(dispatch, "ei_dispatch");
       LOAD_EI(get_event, "ei_get_event");
@@ -236,7 +237,7 @@ namespace platf {
       return api_.new_sender &&
              api_.unref &&
              api_.configure_name &&
-             api_.setup_backend_socket &&
+             api_.setup_backend_fd &&
              api_.get_fd &&
              api_.dispatch &&
              api_.get_event &&
@@ -272,13 +273,13 @@ namespace platf {
         return gamescope_input_result_e::blocked;
       }
 
-      std::string socket_path;
-      if (!steamos_virtual_session::gamescope_input_endpoint(socket_path, error_)) {
-        disconnect_locked(false);
-        retry_after_ = std::chrono::steady_clock::now() + 1s;
-        return gamescope_input_result_e::blocked;
+      if (context_) {
+        std::uint64_t active_generation {};
+        if (!steamos_virtual_session::gamescope_input_generation(active_generation, error_) || active_generation != generation_) {
+          disconnect_locked(false);
+        }
       }
-      if (context_ && socket_path == socket_path_) {
+      if (context_) {
         if (!pump_locked()) {
           disconnect_locked(false);
           retry_after_ = std::chrono::steady_clock::now() + 1s;
@@ -293,20 +294,27 @@ namespace platf {
           return gamescope_input_result_e::blocked;
         }
       }
-      if (context_ && socket_path != socket_path_) {
-        disconnect_locked();
-      }
-
       if (!context_) {
         disconnect_locked();
+        std::string socket_path;
+        int input_descriptor {-1};
+        std::uint64_t generation {};
+        if (!steamos_virtual_session::open_verified_gamescope_input(socket_path, input_descriptor, generation, error_)) {
+          disconnect_locked(false);
+          retry_after_ = std::chrono::steady_clock::now() + 1s;
+          return gamescope_input_result_e::blocked;
+        }
         socket_path_ = std::move(socket_path);
+        generation_ = generation;
         library_ = ::dlopen("libei.so.1", RTLD_NOW | RTLD_LOCAL);
         if (!library_) {
+          ::close(input_descriptor);
           error_ = "gamescope_input_libei_unavailable";
           retry_after_ = std::chrono::steady_clock::now() + 1s;
           return gamescope_input_result_e::blocked;
         }
         if (!load_api_locked()) {
+          ::close(input_descriptor);
           error_ = "gamescope_input_libei_abi_incomplete";
           disconnect_locked(false);
           retry_after_ = std::chrono::steady_clock::now() + 1s;
@@ -314,13 +322,14 @@ namespace platf {
         }
         context_ = api_.new_sender(nullptr);
         if (!context_) {
+          ::close(input_descriptor);
           error_ = "gamescope_input_libei_context_failed";
           disconnect_locked(false);
           retry_after_ = std::chrono::steady_clock::now() + 1s;
           return gamescope_input_result_e::blocked;
         }
         api_.configure_name(context_, "SteamShine");
-        if (api_.setup_backend_socket(context_, socket_path_.c_str()) < 0) {
+        if (api_.setup_backend_fd(context_, input_descriptor) < 0) {
           error_ = "gamescope_input_eis_connect_failed";
           disconnect_locked(false);
           retry_after_ = std::chrono::steady_clock::now() + 1s;
@@ -504,6 +513,7 @@ namespace platf {
         library_ = nullptr;
       }
       socket_path_.clear();
+      generation_ = 0;
       if (clear_error) {
         error_.clear();
       }
@@ -521,6 +531,7 @@ namespace platf {
     std::unordered_set<ei_device *> resumed_;  ///< Devices currently allowed to emit.
     std::uint32_t sequence_ {};  ///< Monotonic emulation transaction sequence.
     std::string socket_path_;  ///< Verified endpoint used by this connection.
+    std::uint64_t generation_ {};  ///< Session identity bound to this connection.
     std::string error_;  ///< Stable failure reason.
     std::chrono::steady_clock::time_point retry_after_ {};  ///< Earliest reconnect retry.
   };

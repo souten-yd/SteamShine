@@ -27,6 +27,7 @@
 #include "display_device.h"
 #include "logging.h"
 #include "platform/common.h"
+#include "platform/linux/steam_session.h"
 #include "process.h"
 #include "steamos_virtual_session.h"
 #include "system_tray.h"
@@ -44,7 +45,27 @@ namespace proc {
   using namespace std::literals;
   namespace pt = boost::property_tree;
 
+  namespace {
+    constexpr std::string_view default_virtual_desktop_command {"plasmawindowed org.kde.plasma.folder"};  ///< Packaged KDE folder-view surface command.
+    constexpr std::string_view xwayland_virtual_desktop_command {"env QT_QPA_PLATFORM=xcb plasmawindowed org.kde.plasma.folder"};  ///< KDE folder-view surface constrained to Gamescope's cursor-capable XWayland path.
+  }  // namespace
+
   proc_t proc;  ///< Global process registry used to track and terminate child processes.
+
+  bool should_launch_owned_virtual_desktop(
+    const std::string_view app_command,
+    const std::size_t detached_command_count,
+    const bool owned_virtual_display
+  ) {
+    return owned_virtual_display && app_command.empty() && detached_command_count == 0;
+  }
+
+  void reset_launch_environment(
+    boost::process::v1::environment &environment,
+    const boost::process::v1::environment &baseline
+  ) {
+    environment = baseline;
+  }
 
   std::string select_effective_command(
     const std::string_view app_command,
@@ -55,9 +76,53 @@ namespace proc {
       return std::string {app_command};
     }
     if (!virtual_desktop_command.empty()) {
+      if (virtual_desktop_command == default_virtual_desktop_command) {
+        return std::string {xwayland_virtual_desktop_command};
+      }
       return std::string {virtual_desktop_command};
     }
-    return "plasmawindowed org.kde.plasma.folder";
+    return std::string {xwayland_virtual_desktop_command};
+  }
+
+  bool should_skip_undo_command(const bool preserve_attached_steam, const std::string_view undo_command) {
+    return preserve_attached_steam && steam_session::command_closes_big_picture(undo_command);
+  }
+
+  void apply_session_display_environment(boost::process::v1::environment &environment, const std::optional<steamos_virtual_session::session_display_endpoint_t> &endpoint) {
+    if (!endpoint || endpoint->verification != steamos_virtual_session::display_verification_e::verified) {
+      return;
+    }
+    environment["XDG_RUNTIME_DIR"] = endpoint->xdg_runtime_directory;
+    if (!endpoint->wayland_display.empty()) {
+      environment["WAYLAND_DISPLAY"] = endpoint->wayland_display;
+    } else {
+      environment.erase("WAYLAND_DISPLAY");
+    }
+    environment["GAMESCOPE_WAYLAND_DISPLAY"] = endpoint->gamescope_wayland_display;
+    environment["DISPLAY"] = endpoint->x11_display;
+    if (!endpoint->xauthority.empty()) {
+      environment["XAUTHORITY"] = endpoint->xauthority;
+    } else {
+      environment.erase("XAUTHORITY");
+    }
+    environment["PIPEWIRE_RUNTIME_DIR"] = endpoint->pipewire_runtime_directory;
+    environment["PIPEWIRE_REMOTE"] = endpoint->pipewire_remote;
+    environment["PULSE_RUNTIME_PATH"] = endpoint->pulse_runtime_path;
+    if (!endpoint->dbus_session_bus_address.empty()) {
+      environment["DBUS_SESSION_BUS_ADDRESS"] = endpoint->dbus_session_bus_address;
+    } else {
+      environment.erase("DBUS_SESSION_BUS_ADDRESS");
+    }
+    if (!endpoint->xdg_session_type.empty()) {
+      environment["XDG_SESSION_TYPE"] = endpoint->xdg_session_type;
+    } else {
+      environment.erase("XDG_SESSION_TYPE");
+    }
+    if (!endpoint->xdg_current_desktop.empty()) {
+      environment["XDG_CURRENT_DESKTOP"] = endpoint->xdg_current_desktop;
+    } else {
+      environment.erase("XDG_CURRENT_DESKTOP");
+    }
   }
 
   /**
@@ -166,6 +231,7 @@ namespace proc {
   int proc_t::execute(int app_id, std::shared_ptr<rtsp_stream::launch_session_t> launch_session) {
     // Ensure starting from a clean slate
     terminate();
+    reset_launch_environment(_env, _base_env);
 
     auto iter = std::find_if(_apps.begin(), _apps.end(), [&app_id](const auto app) {
       return app.id == std::to_string(app_id);
@@ -182,10 +248,12 @@ namespace proc {
     _app_prep_it = _app_prep_begin;
 
     const auto virtual_status {steamos_virtual_session::status_snapshot()};
-    const bool launch_owned_virtual_desktop {
-      _app.cmd.empty() &&
+    preserve_attached_steam_ = virtual_status.origin == steamos_virtual_session::session_origin_e::attached_existing;
+    const bool launch_owned_virtual_desktop {should_launch_owned_virtual_desktop(
+      _app.cmd,
+      _app.detached.size(),
       virtual_status.origin == steamos_virtual_session::session_origin_e::owned_private
-    };
+    )};
     const std::string effective_command {
       select_effective_command(_app.cmd, launch_owned_virtual_desktop, config::steamos_virtual_display.virtual_desktop_command)
     };
@@ -232,18 +300,7 @@ namespace proc {
     }
     _env["SUNSHINE_CLIENT_AUDIO_SURROUND_PARAMS"] = launch_session->surround_params;
 
-    std::string virtual_runtime_directory;
-    std::string virtual_wayland_display;
-    std::string virtual_pipewire_runtime;
-    std::string virtual_pipewire_remote;
-    std::string virtual_pulse_runtime;
-    if (steamos_virtual_session::application_environment(virtual_runtime_directory, virtual_wayland_display, virtual_pipewire_runtime, virtual_pipewire_remote, virtual_pulse_runtime)) {
-      _env["XDG_RUNTIME_DIR"] = virtual_runtime_directory;
-      _env["WAYLAND_DISPLAY"] = virtual_wayland_display;
-      _env["PIPEWIRE_RUNTIME_DIR"] = virtual_pipewire_runtime;
-      _env["PIPEWIRE_REMOTE"] = virtual_pipewire_remote;
-      _env["PULSE_RUNTIME_PATH"] = virtual_pulse_runtime;
-    }
+    apply_session_display_environment(_env, steamos_virtual_session::application_environment());
 
     if (!_app.output.empty() && _app.output != "null"sv) {
 #ifdef _WIN32
@@ -389,6 +446,10 @@ namespace proc {
       if (cmd.undo_cmd.empty()) {
         continue;
       }
+      if (should_skip_undo_command(preserve_attached_steam_, cmd.undo_cmd)) {
+        BOOST_LOG(info) << "Skipping Undo Cmd for attached Game Mode Steam: ["sv << cmd.undo_cmd << ']';
+        continue;
+      }
 
       boost::filesystem::path working_dir = _app.working_dir.empty() ?
                                               find_working_directory(cmd.undo_cmd, _env) :
@@ -423,6 +484,7 @@ namespace proc {
     }
 
     _app_id = -1;
+    preserve_attached_steam_ = false;
   }
 
   const std::vector<ctx_t> &proc_t::get_apps() const {

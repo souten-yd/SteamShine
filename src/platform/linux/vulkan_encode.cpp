@@ -497,8 +497,11 @@ namespace vk {
       VkCommandBufferAllocateInfo alloc_ci = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
       alloc_ci.commandPool = cmd.pool;
       alloc_ci.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-      alloc_ci.commandBufferCount = CMD_RING_SIZE;
-      VK_CHECK_BOOL(vkAllocateCommandBuffers(vk_dev.dev, &alloc_ci, cmd.ring.data()));
+      alloc_ci.commandBufferCount = 1;
+      VK_CHECK_BOOL(vkAllocateCommandBuffers(vk_dev.dev, &alloc_ci, &cmd.buffer));
+
+      VkFenceCreateInfo fence_ci = {VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+      VK_CHECK_BOOL(vkCreateFence(vk_dev.dev, &fence_ci, nullptr, &cmd.completion_fence));
 
       return true;
     }
@@ -878,6 +881,10 @@ namespace vk {
     /**
      * @brief Submit the RGB-to-YUV compute pass for a captured or black source.
      *
+     * The caller owns the captured DMA-BUF lease only until this method
+     * returns. Waiting for the completion fence prevents PipeWire from
+     * recycling external storage while the compute shader still reads it.
+     *
      * @param use_black_source Whether to sample the dedicated one-pixel black source.
      * @return Zero on success; negative one when command recording or submission fails.
      */
@@ -888,16 +895,14 @@ namespace vk {
         num_imgs++;
       }
 
-      // Rotate to next command buffer. With CMD_RING_SIZE slots, the buffer
-      // we're about to reuse was submitted CMD_RING_SIZE frames ago.
-      // At 60fps that's ~50ms for a <1ms compute dispatch — always complete.
-      // No fences, no semaphore waits, no CPU blocking.
-      auto cmd_buf = cmd.ring[cmd.ring_idx];
-      cmd.ring_idx = (cmd.ring_idx + 1) % CMD_RING_SIZE;
+      if (cmd.submitted) {
+        VK_CHECK(vkResetCommandBuffer(cmd.buffer, 0));
+      }
+      VK_CHECK(vkResetFences(vk_dev.dev, 1, &cmd.completion_fence));
 
       VkCommandBufferBeginInfo begin_ci = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
       begin_ci.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-      VK_CHECK(vkBeginCommandBuffer(cmd_buf, &begin_ci));
+      VK_CHECK(vkBeginCommandBuffer(cmd.buffer, &begin_ci));
 
       // A real capture imports an external image for each new sequence. The
       // black source shares the cursor allocation and its transition below.
@@ -912,16 +917,16 @@ namespace vk {
         src_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_EXTERNAL;
         src_barrier.dstQueueFamilyIndex = vk_dev.compute_qf;
 
-        vkCmdPipelineBarrier(cmd_buf, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &src_barrier);
+        vkCmdPipelineBarrier(cmd.buffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &src_barrier);
       }
 
       if (use_black_source && black.needs_transition) {
-        transition_sample_image(cmd_buf, black);
+        transition_sample_image(cmd.buffer, black);
       }
 
       // Transition cursor image if needed
       if (cursor.needs_transition) {
-        transition_sample_image(cmd_buf, cursor);
+        transition_sample_image(cmd.buffer, cursor);
       }
 
       // Transition target planes to GENERAL for storage writes
@@ -939,18 +944,18 @@ namespace vk {
         dst_barriers[i].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
       }
 
-      vkCmdPipelineBarrier(cmd_buf, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr, num_dst_barriers, dst_barriers.data());
+      vkCmdPipelineBarrier(cmd.buffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr, num_dst_barriers, dst_barriers.data());
 
       // Bind pipeline and dispatch
-      vkCmdBindPipeline(cmd_buf, VK_PIPELINE_BIND_POINT_COMPUTE, compute.pipeline);
-      vkCmdBindDescriptorSets(cmd_buf, VK_PIPELINE_BIND_POINT_COMPUTE, compute.pipeline_layout, 0, 1, &compute.desc_set, 0, nullptr);
-      vkCmdPushConstants(cmd_buf, compute.pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(PushConstants), &push);
+      vkCmdBindPipeline(cmd.buffer, VK_PIPELINE_BIND_POINT_COMPUTE, compute.pipeline);
+      vkCmdBindDescriptorSets(cmd.buffer, VK_PIPELINE_BIND_POINT_COMPUTE, compute.pipeline_layout, 0, 1, &compute.desc_set, 0, nullptr);
+      vkCmdPushConstants(cmd.buffer, compute.pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(PushConstants), &push);
 
       uint32_t gx = (frame->width + 15) / 16;
       uint32_t gy = (frame->height + 15) / 16;
-      vkCmdDispatch(cmd_buf, gx, gy, 1);
+      vkCmdDispatch(cmd.buffer, gx, gy, 1);
 
-      VK_CHECK(vkEndCommandBuffer(cmd_buf));
+      VK_CHECK(vkEndCommandBuffer(cmd.buffer));
 
       // Submit with timeline semaphore signaling for FFmpeg
       VkTimelineSemaphoreSubmitInfo timeline_info = {VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO};
@@ -983,14 +988,20 @@ namespace vk {
       submit.pWaitSemaphores = wait_sems.data();
       submit.pWaitDstStageMask = wait_stages.data();
       submit.commandBufferCount = 1;
-      submit.pCommandBuffers = &cmd_buf;
+      submit.pCommandBuffers = &cmd.buffer;
       submit.signalSemaphoreCount = sem_count;
       submit.pSignalSemaphores = signal_sems.data();
 
-      auto res = vkQueueSubmit(vk_dev.compute_queue, 1, &submit, VK_NULL_HANDLE);
+      auto res = vkQueueSubmit(vk_dev.compute_queue, 1, &submit, cmd.completion_fence);
 
       if (res != VK_SUCCESS) {
         BOOST_LOG(error) << "vkQueueSubmit failed: " << res;
+        return -1;
+      }
+      cmd.submitted = true;
+      res = vkWaitForFences(vk_dev.dev, 1, &cmd.completion_fence, VK_TRUE, UINT64_MAX);
+      if (res != VK_SUCCESS) {
+        BOOST_LOG(error) << "vkWaitForFences failed: " << res;
         return -1;
       }
 
@@ -1025,20 +1036,9 @@ namespace vk {
 
     void destroy_src_image() {
       if (src.image) {
-        // Defer destruction — the GPU may still be using this image.
-        // By the time we wrap around (4 frames later), it's guaranteed done.
-        auto &slot = defer_ring[defer_idx];
-        if (slot.view) {
-          vkDestroyImageView(vk_dev.dev, slot.view, nullptr);
-        }
-        if (slot.image) {
-          vkDestroyImage(vk_dev.dev, slot.image, nullptr);
-        }
-        if (slot.mem) {
-          vkFreeMemory(vk_dev.dev, slot.mem, nullptr);
-        }
-        slot = src;
-        defer_idx = (defer_idx + 1) % DEFER_RING_SIZE;
+        vkDestroyImageView(vk_dev.dev, src.view, nullptr);
+        vkDestroyImage(vk_dev.dev, src.image, nullptr);
+        vkFreeMemory(vk_dev.dev, src.mem, nullptr);
       }
       src = {};
     }
@@ -1049,19 +1049,6 @@ namespace vk {
       }
       vkDeviceWaitIdle(vk_dev.dev);
       destroy_src_image();
-      // Flush deferred destroys
-      for (auto &slot : defer_ring) {
-        if (slot.view) {
-          vkDestroyImageView(vk_dev.dev, slot.view, nullptr);
-        }
-        if (slot.image) {
-          vkDestroyImage(vk_dev.dev, slot.image, nullptr);
-        }
-        if (slot.mem) {
-          vkFreeMemory(vk_dev.dev, slot.mem, nullptr);
-        }
-        slot = {};
-      }
       if (target.y_view) {
         vkDestroyImageView(vk_dev.dev, target.y_view, nullptr);
       }
@@ -1070,6 +1057,9 @@ namespace vk {
       }
       destroy_sample_image(cursor);
       destroy_sample_image(black);
+      if (cmd.completion_fence) {
+        vkDestroyFence(vk_dev.dev, cmd.completion_fence, nullptr);
+      }
       if (cmd.pool) {
         vkDestroyCommandPool(vk_dev.dev, cmd.pool, nullptr);
       }
@@ -1132,19 +1122,17 @@ namespace vk {
 
     compute_pipeline_t compute = {};
 
-    // Command submission — ring of buffers to avoid reuse while in-flight.
-    // No CPU waits: by the time we wrap around, the old submission is long done.
-    static constexpr int CMD_RING_SIZE = 3;
-
+    // Command submission synchronized with the borrowed PipeWire DMA-BUF lease.
     struct cmd_submission_t {
       VkCommandPool pool = VK_NULL_HANDLE;
-      std::array<VkCommandBuffer, CMD_RING_SIZE> ring = {};
-      int ring_idx = 0;
+      VkCommandBuffer buffer = VK_NULL_HANDLE;  ///< Reset only after the preceding fence completes.
+      VkFence completion_fence = VK_NULL_HANDLE;  ///< Signals that external source reads have completed.
+      bool submitted = false;  ///< Whether the command buffer must be reset before recording.
     };
 
     cmd_submission_t cmd = {};
 
-    // Source DMA-BUF image with deferred destruction
+    // Source DMA-BUF image released only after the completion fence signals.
     struct src_image_t {
       VkImage image = VK_NULL_HANDLE;
       VkDeviceMemory mem = VK_NULL_HANDLE;
@@ -1152,9 +1140,6 @@ namespace vk {
     };
 
     src_image_t src = {};
-    static constexpr int DEFER_RING_SIZE = 4;
-    std::array<src_image_t, DEFER_RING_SIZE> defer_ring = {};
-    int defer_idx = 0;
 
     // Target NV12 plane views
     struct target_state_t {

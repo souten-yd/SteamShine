@@ -6,7 +6,6 @@
 
 #include <algorithm>
 #include <array>
-#include <charconv>
 #include <sstream>
 #include <string_view>
 
@@ -130,32 +129,69 @@ namespace steamos_virtual_session {
     return "auto";
   }
 
-  virtual_display_decision_t decide_virtual_display(const virtual_display_decision_input_t &input) {
+  std::string_view to_string(const session_route_e route) {
+    switch (route) {
+      case session_route_e::physical_desktop:
+        return "physical_desktop";
+      case session_route_e::attached_existing:
+        return "attached_existing";
+      case session_route_e::retained_owned_private:
+        return "retained_owned_private";
+      case session_route_e::new_owned_private:
+        return "new_owned_private";
+      case session_route_e::reject:
+        return "reject";
+    }
+    return "reject";
+  }
+
+  session_route_decision_t select_session_route(const session_route_input_t &input) {
     if (!input.feature_enabled) {
-      return {false, "feature_disabled"};
+      return {session_route_e::physical_desktop, "feature_disabled"};
     }
     if (input.mode == virtual_display_mode_e::off) {
-      return {false, "mode_off"};
+      return {session_route_e::physical_desktop, "mode_off"};
     }
     if (input.mode == virtual_display_mode_e::force) {
-      if (input.existing_owned_session) {
-        return {true, "owned_session_active"};
+      if (input.retained_owned_session) {
+        return {session_route_e::retained_owned_private, "retained_owned_private"};
       }
-      return {true, input.host_supported ? "config_force" : "config_force_host_unsupported"};
+      return {
+        input.host_supported ? session_route_e::new_owned_private : session_route_e::reject,
+        input.host_supported ? "config_force" : "config_force_host_unsupported"
+      };
     }
+
+    if (input.source_policy == session_source_policy_e::owned_private) {
+      if (input.retained_owned_session) {
+        return {session_route_e::retained_owned_private, "retained_owned_private"};
+      }
+      return {
+        input.host_supported ? session_route_e::new_owned_private : session_route_e::reject,
+        input.host_supported ? "owned_private_required" : "owned_private_host_unsupported"
+      };
+    }
+
     if (input.verified_existing_gamescope_present) {
-      return {true, "verified_existing_gamescope"};
+      return {session_route_e::attached_existing, "verified_existing_gamescope"};
     }
-    if (input.existing_gamescope_required) {
-      return {true, "existing_gamescope_required"};
+    if (input.source_policy == session_source_policy_e::existing_gamescope) {
+      return {session_route_e::reject, "existing_gamescope_unavailable"};
     }
     if (input.capturable_output_present) {
-      return {false, "capturable_output_present"};
+      return {session_route_e::physical_desktop, "capturable_output_present"};
     }
-    if (input.existing_owned_session) {
-      return {true, "owned_session_active"};
+    if (input.retained_owned_session) {
+      return {session_route_e::retained_owned_private, "retained_owned_private"};
     }
-    return {true, input.host_supported ? "no_capturable_output" : "no_capturable_output_host_unsupported"};
+    return {
+      input.host_supported ? session_route_e::new_owned_private : session_route_e::reject,
+      input.host_supported ? "no_capturable_output" : "no_capturable_output_host_unsupported"
+    };
+  }
+
+  bool route_uses_gamescope_capture(const session_route_e route) {
+    return route != session_route_e::physical_desktop;
   }
 
   bool physical_desktop_capturable(
@@ -186,49 +222,16 @@ namespace steamos_virtual_session {
            (automatic_capture && physical_output_connected && !higher_priority_available);
   }
 
-  std::optional<std::filesystem::path> select_gamescope_eis_socket(
+  std::optional<std::filesystem::path> gamescope_eis_socket_path(
     const std::filesystem::path &runtime_directory,
-    const std::string_view unix_socket_table,
-    const std::span<const std::uint64_t> producer_socket_inodes
+    const std::string_view gamescope_wayland_display
   ) {
-    if (runtime_directory.empty() || !runtime_directory.is_absolute() || producer_socket_inodes.empty()) {
+    if (runtime_directory.empty() || !runtime_directory.is_absolute() ||
+        gamescope_wayland_display.empty() || gamescope_wayland_display == "." || gamescope_wayland_display == ".." ||
+        gamescope_wayland_display.find('/') != std::string_view::npos || gamescope_wayland_display.find('\0') != std::string_view::npos) {
       return std::nullopt;
     }
-    std::vector<std::filesystem::path> matches;
-    std::istringstream lines {std::string {unix_socket_table}};
-    std::string line;
-    while (std::getline(lines, line)) {
-      std::istringstream fields {line};
-      std::array<std::string, 8> values;
-      bool complete {true};
-      for (auto &value : values) {
-        if (!(fields >> value)) {
-          complete = false;
-          break;
-        }
-      }
-      if (!complete) {
-        continue;
-      }
-      std::uint64_t inode {};
-      const auto conversion {std::from_chars(values[6].data(), values[6].data() + values[6].size(), inode)};
-      if (conversion.ec != std::errc {} || conversion.ptr != values[6].data() + values[6].size() ||
-          std::ranges::find(producer_socket_inodes, inode) == producer_socket_inodes.end()) {
-        continue;
-      }
-      const std::filesystem::path candidate {values[7]};
-      const auto filename {candidate.filename().string()};
-      if (!candidate.is_absolute() ||
-          candidate.lexically_normal().parent_path() != runtime_directory.lexically_normal() ||
-          !filename.starts_with("gamescope-") ||
-          !filename.ends_with("-ei")) {
-        continue;
-      }
-      matches.emplace_back(candidate.lexically_normal());
-    }
-    std::ranges::sort(matches);
-    matches.erase(std::unique(matches.begin(), matches.end()), matches.end());
-    return matches.size() == 1 ? std::optional<std::filesystem::path> {matches.front()} : std::nullopt;
+    return runtime_directory.lexically_normal() / (std::string {gamescope_wayland_display} + "-ei");
   }
 
   display_request_t normalize_display_request(const int requested_width, const int requested_height, const int requested_fps, const int default_width, const int default_height, const int default_fps) {

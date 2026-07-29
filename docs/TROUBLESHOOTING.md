@@ -1,9 +1,17 @@
 # Troubleshooting
 
+If SteamShine does not appear after booting directly into Game Mode, run
+`./steamshine.sh autostart-status`. Healthy installation evidence includes `unit_load_state=loaded`,
+`unit_file_state=enabled`, `active_state=active`, a nonzero `MainPID`, a live executable matching the
+current immutable version, and a present `default.target.wants` link. Run `./steamshine.sh repair` to
+recreate, reload, and re-enable a missing or stale user unit. Do not use `sudo systemctl --user`, add a
+Desktop Autostart entry, or launch the daemon as a non-Steam game. The installer does not enable
+linger; Game Mode login normally starts the user manager and `default.target`.
+
 Run `./steamshine.sh diagnose` and `scripts/diagnose-steamos-virtual-display.sh`. Confirm that `XDG_RUNTIME_DIR` exists, `/dev/dri` is accessible, PipeWire is reachable, and Gamescope advertises `--backend` with `headless` (or the legacy `--headless`) plus the nested display options. ROCm is diagnostic-only and optional: `rocminfo` or `rocm-smi` output is collected when installed, but streaming continues to use the AMD VA-API/Vulkan paths. `pidstat`, `vainfo`, and `pw-dump` are also optional: a skipped probe identifies missing observability, not a streaming failure. For headless validation run `./steamshine.sh hardware-test --interactive`; inspect only marker-verified `$XDG_RUNTIME_DIR/steamshine/session-*` leftovers and the generated `~/.local/state/steamshine/hardware-tests/<timestamp>/hardware-report.json` report.
 
 If Moonlight receives audio and input but displays only black, inspect the service journal for a PipeWire `no more input formats` error and the session diagnostics for a zero `frame_age_at_capture_ms.count`. This combination means the compositor rejected video-format negotiation before delivering the first real frame. SteamShine advertises variable-rate capture with a positive `maxFramerate` range compatible with KWin; it also rejects a failed negotiation instead of continuing with dummy-only frames.
 
 On KDE, the packaged Desktop and Steam Big Picture applications temporarily select the connected primary output mode matching Moonlight's requested width, height, and nearest refresh rate. The original KScreen mode and scale are stored below the user runtime directory and restored when the application exits. When no capturable physical display exists, SteamShine instead creates an owned virtual display at the normalized Moonlight request and the KScreen helper explicitly leaves the host display configuration untouched. If a connected physical display does not advertise the requested pixel dimensions, the helper fails without substituting a different aspect ratio; select a supported Moonlight resolution or force a private virtual session.
 
-Installing an updated SteamShine Artifact adds this display helper to existing `Desktop` and `Steam Big Picture` entries. Other applications and existing preparation commands are preserved. The first changed file is retained beside the configured applications file with the `.steamshine-backup` suffix; repeated installations are idempotent.
+Installing an updated SteamShine Artifact adds this display helper to existing `Desktop` and `Steam Big Picture` entries. It also replaces the former packaged `setsid env DISPLAY=:N steam steam://open/bigpicture` command in the standard Steam Big Picture entry with its endpoint-neutral form. Other applications and custom commands are preserved. The first changed file is retained beside the configured applications file with the `.steamshine-backup` suffix; repeated installations are idempotent.

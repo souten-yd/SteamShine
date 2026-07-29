@@ -47,6 +47,45 @@ namespace steam_session {
     }
 
     /**
+     * @brief Check for one exact systemd unit component in a cgroup record.
+     *
+     * @param cgroup Raw cgroup membership text.
+     * @param unit_name Exact systemd unit filename to find.
+     * @return True when one slash-delimited component equals the unit name.
+     */
+    bool has_cgroup_unit_component(const std::string_view cgroup, const std::string_view unit_name) {
+      size_t component_start {};
+      while (component_start < cgroup.size()) {
+        const auto separator {cgroup.find('/', component_start)};
+        component_start = separator == std::string_view::npos ? cgroup.size() : separator + 1;
+        if (separator == std::string_view::npos) {
+          break;
+        }
+        const auto component_end {cgroup.find_first_of("/\n", component_start)};
+        if (cgroup.substr(component_start, component_end - component_start) == unit_name) {
+          return true;
+        }
+        component_start = component_end == std::string_view::npos ? cgroup.size() : component_end;
+      }
+      return false;
+    }
+
+    /**
+     * @brief Match SteamOS vendor Gamescope and Steam launcher sibling units.
+     *
+     * Stock SteamOS starts Gamescope and Steam in separate services which are
+     * both bound to the graphical session. Exact unit components distinguish
+     * that vendor topology from similarly named user scopes.
+     *
+     * @param record Steam-family process metadata.
+     * @param target Target Gamescope identity.
+     * @return True when the target and process occupy the vendor unit pair.
+     */
+    bool belongs_to_vendor_game_mode(const process_record_t &record, const target_session_t &target) {
+      return has_cgroup_unit_component(target.cgroup, "gamescope-session.service") && has_cgroup_unit_component(record.cgroup, "steam-launcher.service");
+    }
+
+    /**
      * @brief Check whether a process reaches the target Gamescope through parent links.
      *
      * @param record Process to inspect.
@@ -80,7 +119,7 @@ namespace steam_session {
     bool belongs_to_target(const process_record_t &record, const target_session_t &target, const std::unordered_map<int, const process_record_t *> &by_pid) {
       const bool runtime_match {!target.runtime_directory.empty() && record.xdg_runtime_directory == target.runtime_directory && !target.wayland_display.empty() && record.wayland_display == target.wayland_display};
       const bool cgroup_match {!target.cgroup.empty() && record.cgroup == target.cgroup && is_gamescope_specific_cgroup(target.cgroup)};
-      return runtime_match || cgroup_match || has_target_parent(record, by_pid, target.gamescope_pid);
+      return runtime_match || cgroup_match || belongs_to_vendor_game_mode(record, target) || has_target_parent(record, by_pid, target.gamescope_pid);
     }
 
     /**
@@ -125,6 +164,33 @@ namespace steam_session {
       return fields >> state >> parent_pid ? parent_pid : -1;
     }
 
+    /**
+     * @brief Read the process start time from a Linux stat record.
+     *
+     * @param contents Complete `/proc/<pid>/stat` contents.
+     * @return Field 22, or zero for malformed input.
+     */
+    uint64_t start_time_from_stat(const std::string &contents) {
+      const auto command_end {contents.rfind(')')};
+      if (command_end == std::string::npos || command_end + 2 >= contents.size()) {
+        return 0;
+      }
+      std::istringstream fields {contents.substr(command_end + 2)};
+      std::string field;
+      for (int index {}; index < 20; ++index) {
+        if (!(fields >> field)) {
+          return 0;
+        }
+      }
+      try {
+        size_t consumed {};
+        const auto value {std::stoull(field, &consumed)};
+        return consumed == field.size() ? value : 0;
+      } catch (const std::exception &) {
+        return 0;
+      }
+    }
+
 #if defined(__linux__)
     /**
      * @brief Read one current-user process record from `/proc`.
@@ -144,7 +210,7 @@ namespace steam_session {
       } catch (const std::exception &) {
         return std::nullopt;
       }
-      process_record_t record {.pid = pid};
+      process_record_t record {.pid = pid, .uid = static_cast<int>(process_stat.st_uid)};
       std::error_code error;
       const auto executable {std::filesystem::canonical(process_directory / "exe", error)};
       if (error || executable.empty()) {
@@ -155,16 +221,22 @@ namespace steam_session {
       std::ifstream stat_file {process_directory / "stat"};
       const std::string stat_contents {std::istreambuf_iterator<char> {stat_file}, {}};
       record.parent_pid = parent_pid_from_stat(stat_contents);
+      record.start_time = start_time_from_stat(stat_contents);
       std::ifstream environment_file {process_directory / "environ", std::ios::binary};
       const bool environment_readable {static_cast<bool>(environment_file)};
       const std::string environment_contents {std::istreambuf_iterator<char> {environment_file}, {}};
       std::ifstream cgroup_file {process_directory / "cgroup"};
       const bool cgroup_readable {static_cast<bool>(cgroup_file)};
       record.cgroup.assign(std::istreambuf_iterator<char> {cgroup_file}, {});
-      record.metadata_readable = record.parent_pid > 0 && environment_readable && cgroup_readable;
+      record.metadata_readable = record.parent_pid > 0 && record.start_time != 0 && environment_readable && cgroup_readable;
       record.xdg_runtime_directory = environment_value(environment_contents, "XDG_RUNTIME_DIR");
       record.wayland_display = environment_value(environment_contents, "WAYLAND_DISPLAY");
       record.x11_display = environment_value(environment_contents, "DISPLAY");
+      record.xauthority = environment_value(environment_contents, "XAUTHORITY");
+      record.gamescope_wayland_display = environment_value(environment_contents, "GAMESCOPE_WAYLAND_DISPLAY");
+      record.dbus_session_bus_address = environment_value(environment_contents, "DBUS_SESSION_BUS_ADDRESS");
+      record.xdg_session_type = environment_value(environment_contents, "XDG_SESSION_TYPE");
+      record.xdg_current_desktop = environment_value(environment_contents, "XDG_CURRENT_DESKTOP");
       return record;
     }
 #endif
@@ -229,6 +301,67 @@ namespace steam_session {
 #endif
   }
 
+  std::optional<resident_environment_t> verified_resident_environment(const target_session_t &target) {
+#if defined(__linux__)
+    std::error_code error;
+    std::vector<process_record_t> records;
+    for (const auto &entry : std::filesystem::directory_iterator {"/proc", error}) {
+      if (error || !entry.is_directory(error)) {
+        continue;
+      }
+      const auto name {entry.path().filename().string()};
+      if (name.empty() || !std::ranges::all_of(name, [](const unsigned char character) {
+            return std::isdigit(character);
+          })) {
+        continue;
+      }
+      if (const auto record {read_process_record(entry.path())}) {
+        records.emplace_back(*record);
+      }
+    }
+    return select_resident_environment(records, target, static_cast<int>(::getuid()));
+#else
+    (void) target;
+    return std::nullopt;
+#endif
+  }
+
+  std::optional<resident_environment_t> select_resident_environment(const std::vector<process_record_t> &records, const target_session_t &target, const int current_uid) {
+    if (target.gamescope_pid <= 0) {
+      return std::nullopt;
+    }
+    std::unordered_map<int, const process_record_t *> by_pid;
+    for (const auto &record : records) {
+      by_pid.emplace(record.pid, &record);
+    }
+    const process_record_t *resident {};
+    for (const auto &record : records) {
+      if (record.executable_name != "steam" || record.uid != current_uid) {
+        continue;
+      }
+      if (record.start_time == 0 || !record.metadata_readable || !belongs_to_target(record, target, by_pid) || resident) {
+        return std::nullopt;
+      }
+      resident = &record;
+    }
+    if (!resident) {
+      return std::nullopt;
+    }
+    return resident_environment_t {
+      .steam_pid = resident->pid,
+      .steam_start_time = resident->start_time,
+      .xdg_runtime_directory = resident->xdg_runtime_directory,
+      .wayland_display = resident->wayland_display,
+      .gamescope_wayland_display = resident->gamescope_wayland_display,
+      .x11_display = resident->x11_display,
+      .xauthority = resident->xauthority,
+      .dbus_session_bus_address = resident->dbus_session_bus_address,
+      .xdg_session_type = resident->xdg_session_type,
+      .xdg_current_desktop = resident->xdg_current_desktop,
+      .allows_authless_xwayland = belongs_to_vendor_game_mode(*resident, target),
+    };
+  }
+
   bool command_references_steam(const std::string_view command) {
     constexpr std::string_view steam {"steam"};
     size_t offset {};
@@ -246,6 +379,10 @@ namespace steam_session {
       offset = after;
     }
     return false;
+  }
+
+  bool command_closes_big_picture(const std::string_view command) {
+    return command.find("steam://close/bigpicture") != std::string_view::npos;
   }
 
   std::string cgroup_for_process(const int pid) {

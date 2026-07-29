@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -25,13 +26,37 @@ namespace steam_session {
    */
   struct process_record_t {
     int pid {-1};  ///< Process ID.
+    int uid {-1};  ///< Process owner UID.
     int parent_pid {-1};  ///< Parent process ID.
+    uint64_t start_time {0};  ///< Kernel process start time used to reject PID reuse.
     std::string executable_name;  ///< Basename of `/proc/<pid>/exe`.
     std::string xdg_runtime_directory;  ///< `XDG_RUNTIME_DIR` environment value.
     std::string wayland_display;  ///< `WAYLAND_DISPLAY` environment value.
     std::string x11_display;  ///< `DISPLAY` environment value.
+    std::string xauthority;  ///< `XAUTHORITY` environment value.
+    std::string gamescope_wayland_display;  ///< `GAMESCOPE_WAYLAND_DISPLAY` environment value.
+    std::string dbus_session_bus_address;  ///< `DBUS_SESSION_BUS_ADDRESS` environment value.
+    std::string xdg_session_type;  ///< `XDG_SESSION_TYPE` environment value.
+    std::string xdg_current_desktop;  ///< `XDG_CURRENT_DESKTOP` environment value.
     std::string cgroup;  ///< Process cgroup membership.
     bool metadata_readable {true};  ///< Whether required process metadata was read safely.
+  };
+
+  /**
+   * @brief Allow-listed environment inherited from one verified resident Steam process.
+   */
+  struct resident_environment_t {
+    int steam_pid {-1};  ///< Resident Steam process supplying the environment.
+    uint64_t steam_start_time {0};  ///< Start time binding the snapshot to that process.
+    std::string xdg_runtime_directory;  ///< `XDG_RUNTIME_DIR` value.
+    std::string wayland_display;  ///< `WAYLAND_DISPLAY` value.
+    std::string gamescope_wayland_display;  ///< `GAMESCOPE_WAYLAND_DISPLAY` value.
+    std::string x11_display;  ///< Dynamic Gamescope `DISPLAY` value.
+    std::string xauthority;  ///< Xwayland authorization file path.
+    std::string dbus_session_bus_address;  ///< Resident session bus address.
+    std::string xdg_session_type;  ///< Resident display protocol classification.
+    std::string xdg_current_desktop;  ///< Resident desktop identity.
+    bool allows_authless_xwayland {false};  ///< Whether the exact SteamOS vendor unit pair permits an omitted `XAUTHORITY`.
   };
 
   /**
@@ -62,6 +87,32 @@ namespace steam_session {
   instance_location_e classify_current_user_instance(const target_session_t &target);
 
   /**
+   * @brief Read an allow-listed endpoint from the unique verified resident Steam process.
+   *
+   * UID, executable, start time, cgroup, and Gamescope parent membership are
+   * re-read from procfs. Ambiguous, outside, or unreadable instances fail closed.
+   *
+   * @param target Verified Gamescope target used for membership validation.
+   * @return Resident endpoint environment, or no value when it is unavailable.
+   */
+  std::optional<resident_environment_t> verified_resident_environment(const target_session_t &target);
+
+  /**
+   * @brief Select one resident Steam environment from an immutable process snapshot.
+   *
+   * Selection validates the unique current-user `steam` executable itself.
+   * Steam-family game children outside the target do not invalidate a vendor
+   * Game Mode endpoint; singleton placement checks remain the responsibility
+   * of `classify_instance_location()`.
+   *
+   * @param records Process metadata snapshot, including parent-chain records.
+   * @param target Verified Gamescope target.
+   * @param current_uid UID which every accepted record must match.
+   * @return Unique allow-listed resident environment, or no value on ambiguity or failed identity.
+   */
+  std::optional<resident_environment_t> select_resident_environment(const std::vector<process_record_t> &records, const target_session_t &target, int current_uid);
+
+  /**
    * @brief Determine whether a shell command can start or address Steam.
    *
    * The check is intentionally conservative: a Steam executable path and a
@@ -73,6 +124,14 @@ namespace steam_session {
    * @return True when the command contains a standalone Steam reference.
    */
   bool command_references_steam(std::string_view command);
+
+  /**
+   * @brief Determine whether a command asks Steam to leave Big Picture mode.
+   *
+   * @param command Configured application or undo command.
+   * @return True when the command contains the canonical Big Picture close URI.
+   */
+  bool command_closes_big_picture(std::string_view command);
 
   /**
    * @brief Read the cgroup membership of one process without invoking external tools.

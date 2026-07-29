@@ -1,0 +1,366 @@
+# Stock Gamescope PipeWire patch handoff
+
+## Purpose
+
+This file is the durable resume point for the stock Game Mode Gamescope
+producer investigation. Update it before every reboot, transition into Game
+Mode, installation, or other action that can interrupt the working session.
+The full design and acceptance gates are in
+`docs/STEAMOS_GAMESCOPE_PIPEWIRE_CAPTURE_PLAN.md`.
+
+## Resume protocol
+
+After a conversation or machine restart:
+
+1. Read this file and the stock producer remediation section of the plan.
+2. Run `git status -sb` and verify the expected branch and commit.
+3. Read the current checkpoint below. Do not repeat a completed destructive or
+   state-changing action.
+4. Verify the recorded artifact digest, active override, rollback state,
+   Gamescope executable, service status and current SteamOS mode.
+5. If actual state differs from this file, collect evidence and update this
+   file before continuing.
+
+Never overwrite `/usr/bin/gamescope`, edit the stock SteamOS launcher, signal a
+stock Gamescope on SteamShine teardown, or enter Game Mode with an unarmed test
+override.
+
+## Current checkpoint
+
+Updated: 2026-07-29 12:47 JST
+
+Repository:
+
+```text
+path: /home/deck/SteamShine
+branch: fix/steamos-session-display-endpoint
+functional baseline commit: 1b0ec872ac9000bc686c53676579856fd0adba4b
+current documentation commit before this checkpoint: 34d930e2
+PR: https://github.com/souten-yd/SteamShine/pull/11
+PR state: open draft
+```
+
+State:
+
+- The detailed implementation plan is recorded and Stage 0 evidence is saved
+  at `/home/deck/.local/state/steamshine/stock-gamescope-investigation/20260729-095521-stage0`.
+- Valve tag `3.16.23.4`, peeled commit
+  `2b79e07b3da1723c7e5c5f44f18de36c6cb78b9e`, and all recorded
+  submodules have been fetched to
+  `/home/deck/.local/src/steamshine-gamescope/gamescope-3.16.23.4`.
+- An unmodified optimized/LTO build completed in `build-unpatched` using GCC
+  15.1.1, glibc 2.41+r65, PipeWire 1.6.4 and the current SteamOS 3.8 package
+  repository dependencies. Gamescope and subproject tests passed 122/122.
+- The stripped unmodified binary is
+  `/home/deck/.local/src/steamshine-gamescope/gamescope-3.16.23.4/build-unpatched/src/gamescope.stripped`.
+  Its SHA-256 is
+  `85a6259924ccb38abe3ebc474bf7facc53d83f815548a0a2ec8677f82f57e877`
+  and its ELF build ID is `ca337d0297ab1da35b47e2771163741ae7295305`.
+- The unmodified binary and stock binary have identical required shared-library
+  names and CLI options. Both selected the RX 9070 XT, created a headless
+  compositor and PipeWire node, and exited successfully in the same smoke test.
+- The SteamOS packaging GitLab requires authentication. The official package
+  archive exposes PKGBUILD digest
+  `2230e8b0f392521ddc29ee240beaa6cfaff25ac105fe8474da9163163e06fb33`,
+  but distribution-local patch absence remains unverified. Functional parity
+  is therefore still gated on the unpatched Game Mode test.
+- No systemd override or rollback timer has been created.
+- The first non-enabled evidence collector was stopped after the failed case.
+  Its unit is `steamshine-stock-gamescope-stage1-capture.service` and its
+  incomplete report directory is
+  `/home/deck/.local/state/steamshine/stock-gamescope-investigation/20260729-103335-stage1-unpatched-vrr-on-menu`.
+  It remained at `waiting-for-stock-gamescope` because stock Gamescope changes
+  its process name to `gamescope-wl`, while the collector incorrectly required
+  `pgrep -x gamescope`. The corrected collector uses the verified systemd
+  `MainPID` and records Steam-family identities and launch rejection snapshots.
+- Game Mode ran from 10:35:39 to 10:38:46 JST. Three Moonlight launch attempts
+  were rejected before capture with `A verified resident Steam environment is
+  required for the selected Game Mode session`; no session diagnostic was
+  created, so this is not a valid Stage 1 performance result.
+- The rejection was caused by endpoint selection applying the broad Steam
+  singleton classifier to a game `reaper` retained outside the vendor launcher
+  cgroup. The source fix validates the unique current-user `steam` executable
+  for the resident endpoint, continues to reject an outside or duplicate Steam
+  executable, and leaves the independent singleton placement check unchanged.
+  Related GTest groups passed 34/34, 6/6, and 4/4; the Python integration suite
+  passed 17/17.
+- The tested fix artifact is
+  `/home/deck/SteamShine/dist/resident-steam-endpoint-fix-20260729-1047/steamshine-steamos-x86_64-1b0ec872ac9000bc686c53676579856fd0adba4b.tar.zst`,
+  SHA-256
+  `3fd459b24fd5adef345774f6bd21c6392ef9a2747f8e5266b90db207e99ed54e`.
+  The installed binary digest is
+  `7b51f316e3551cddeb7299ce7c2c1c0e0d8357a4acfd56dd85b35029523373b6`.
+  SteamShine baseline is PID `292981`, start `2026-07-29 10:47:27 JST`,
+  `NRestarts=0`, `active/running`; KWin capture and Vulkan H.264/HEVC/AV1
+  probes passed and configuration remains `auto`/`auto`.
+- The corrected menu collector timed out at 11:18:41 JST because the normal
+  Game Mode transition began later, at 11:24:42. The late session was salvaged
+  at
+  `/home/deck/.local/state/steamshine/stock-gamescope-investigation/20260729-112442-stage1-unpatched-vrr-on-menu-late`.
+  It is not the planned 60-second matrix row because it lasted 34.274 seconds
+  and has no live pre-session snapshot, but it is valid failure evidence:
+  SteamShine attached stock Gamescope PID `300883`, received 4 PipeWire
+  buffers and only 3 unique frames, and required about 12 seconds for the
+  first buffer. Input was injected 148/148, while encode age p95 was
+  `0.468 ms` and network age p95 was `3.426 ms`. The operator confirmed that
+  display, input and audio were present but display feedback remained severely
+  delayed. This is producer starvation, not an input, encoder or network queue
+  backlog.
+- A 64.600-second Moonlight session was salvaged at
+  `/home/deck/.local/state/steamshine/stock-gamescope-investigation/20260729-112824-stage1-unpatched-vrr-on-game`.
+  It attached stock Gamescope PID `314532`, but the measured game AppID
+  `1229240` started 24.259 seconds after the stream began and ran for only
+  about 25.8 seconds. It is therefore not the required 60-second continuously
+  changing-game interval and is ineligible for the producer-rate gate. It is
+  still valid failure evidence: the first buffer took about 12.9 seconds,
+  112 buffers yielded only 111 unique frames, source interarrival p95 was
+  `3081.355 ms`, and the session was classified `source_limited`; encode age
+  p95 was `0.397 ms`, network age p95 was `3.854 ms`, and input injection was
+  128/129 with no dropped motion.
+- The collector stayed at `waiting-for-stock-gamescope` during that short Game
+  Mode window, so its automatic live snapshots were not produced. The bounded
+  Gamescope, Steam launcher and SteamShine journal, exact diagnostic, binary
+  identities and post-session service state were salvaged before retry. Its
+  stale process was stopped after Desktop Mode returned. The retry collector
+  now records its last readiness predicate, verifies the running executable by
+  the fixed stock digest, and waits 30 seconds after both Game Mode services
+  become active.
+- The operator confirmed that a real game was running during the final stock
+  Game Mode check and that Moonlight remained black with no audible sound. The
+  final two diagnostics are `session-1785293277678-2.json` and
+  `session-1785293300836-3.json`. They attached verified stock Gamescope PID
+  `325712` for 20.758 and 18.271 seconds, respectively. The first received one
+  PipeWire buffer and no unique frame; the second received no PipeWire buffer
+  at all. Both encoded only synthetic black duplicates. Input still reached
+  Gamescope at 72/72 and 61/62 events. Opus initialized, but the available
+  evidence does not prove that any non-silent game samples reached the client;
+  audio is therefore also unaccepted.
+- Together with the earlier AppID `1229240` interval, which produced only 111
+  unique frames over a 64.600-second stream and source interarrival p95 of
+  `3081.355 ms`, the operator-confirmed real-game failure is sufficient to
+  close the unpatched stock baseline as failed. A longer repetition cannot
+  turn zero producer buffers into a passing rate and must not be requested.
+- The retry collector failed to recognize the short Game Mode interval and
+  remained at `waiting-for-stock-gamescope`. It was stopped at 11:54 JST with
+  result `success`; its report is
+  `/home/deck/.local/state/steamshine/stock-gamescope-investigation/20260729-114052-stage1-unpatched-vrr-on-game-retry`.
+  Do not rearm it. SteamShine remains PID `292981`, `NRestarts=0`,
+  `active/running`.
+- The operator then disabled VRR and confirmed that the same stock Game Mode
+  path worked normally. The accepted diagnostic is
+  `/home/deck/.local/state/steamshine/session-diagnostics/session-1785294580708-5.json`:
+  over 48.326 seconds it received 4,292 PipeWire buffers, produced 4,289
+  encoded unique frames, observed 90.565 source FPS, and recorded source
+  interarrival p95 `10.147 ms` and network age p95 `4.080 ms`. Input was
+  injected 96/97 with no dropped motion. The accompanying snapshot records
+  `GAMESCOPE_VRR_ENABLED=0`, stock Gamescope PID `341250`, the fixed stock
+  digest, and unchanged SteamShine PID `292981` with `NRestarts=0`. This A/B
+  result isolates the failure to the stock VRR scheduling path.
+- Valve commit `b3ecd00c035fdcd6e99ee5aaa88211bdb6d3cd3c` was applied alone
+  to tag `3.16.23.4`. It drives PipeWire paint from real vblank instead of the
+  timer that page flips perpetually re-arm under VRR. The exact upstream patch
+  reverse-applies cleanly to the working tree. The optimized build passed all
+  122 Meson tests.
+- The stripped test binary has SHA-256
+  `87b1f2fcd26e95fede002f7b73d553fe809b3da55c6db9449fa5bb32acaa3d92`
+  and ELF build ID `ef41ba231e52228a22b4949d9f8eb06d10ec131c`. It is installed
+  root-owned, mode 0755, with `cap_sys_nice=eip` at
+  `/var/lib/steamshine/gamescope-builds/ef41ba231e52228a22b4949d9f8eb06d10ec131c/bin/gamescope`.
+  `/usr/bin/gamescope` remains unchanged. At 12:19 JST the service-local
+  override, startup guard, evidence collector and rollback timer were armed.
+- The patched VRR-on attempt entered Game Mode with Gamescope PID `354365`,
+  but Moonlight never established a usable stream. Diagnostic
+  `session-1785295226359-6.json` lasted only 785 ms: PipeWire first negotiated
+  `3440x1440`, immediately renegotiated to `1920x804`, and SteamShine rejected
+  the source because format negotiation changed before the first unique
+  frame. A second connection selected the now-unavailable source. Its audio
+  teardown then hit PulseAudio broken-pipe failures and aborted SteamShine PID
+  `292981` in `pa_close_pipe()`. This run did not reach the duration or
+  producer-rate gate, so it is inconclusive for Valve `b3ecd00c`; it is a
+  separate SteamShine reconnect/teardown failure.
+- The operator chose the previously validated stock VRR-off configuration
+  instead of repeating the patched experiment. At 12:22:35 JST the test
+  override was manually rolled back and the timer, guard and collector were
+  stopped. The active drop-in is absent, its `.disabled` copy is retained,
+  and the next Game Mode session resolves stock `/usr/bin/gamescope`. Its
+  digest and capability remain unchanged. SteamShine recovered as PID
+  `357456`, `active/running`; its current invocation reports `NRestarts=0`.
+- Development now follows the VRR-off repeated-launch design in
+  `STEAMOS_CONNECTION_ROUTE_REDESIGN.md`. Source selection is represented as
+  one pure five-route decision shared by physical, attached-stock,
+  retained-owned, new-owned, and fail-closed launches. Owned Gamescope help
+  probing and private-runtime validation no longer run on physical or attached
+  routes. The four requested connection scenarios are covered by route GTests
+  and a three-cold-boot hardware matrix.
+- `/usr/bin/gamescope` remains the stock SteamOS binary.
+- Installed package observed before implementation:
+  `gamescope 3.16.23.4-1`.
+- Stock executable SHA-256 observed before implementation:
+  `7bbc654019ed17a8cf3637d221c2fd1cb59a4098198de2493337fe5629adbea2`.
+- Stock ELF build ID observed before implementation:
+  `0baea3ee9ff9f8d5df2fcbf7f8fcb7881e8eab09`.
+- Stock capability observed before implementation:
+  `cap_sys_nice=eip`.
+- The source branch contains unrelated untracked reports and build output.
+  Stage only explicit files; never use `git add -A` for this worktree.
+
+Next action:
+
+1. Keep the Gamescope override disabled and use stock `/usr/bin/gamescope`.
+2. Disable VRR in Game Mode and retain that setting. The existing 48.326-second
+   stock VRR-off control is the accepted operating baseline.
+3. Build and install the route-redesign artifact, then run the three-cold-boot
+   compact matrix in `STEAMOS_CONNECTION_ROUTE_REDESIGN.md`. Stop on the first
+   failure and collect its bundle before any retry.
+4. Do not repeat the patched VRR-on experiment unless the operator explicitly
+   reopens it. Address PipeWire renegotiation and PulseAudio teardown before
+   any future VRR-on retry.
+
+## Mandatory pre-transition handoff block
+
+Before every reboot or Game Mode transition, replace all placeholders and
+commit or otherwise persist this block:
+
+```text
+timestamp: 2026-07-29 12:25 JST
+current SteamOS mode: Desktop Mode, KDE Wayland
+current stage: patched VRR-on validation abandoned after connection failure; stock VRR-off selected for operation; all temporary test units stopped
+completed actions: Stage 0 and unpatched parity completed; stock VRR-on failure closed; stock VRR-off success confirmed; exact Valve b3ecd00c patch built and 122/122 tests passed; one patched transition attempted; unusable 785 ms renegotiation failure captured; SteamShine PulseAudio teardown abort captured; override manually rolled back at 12:22:35 JST
+evidence directory: Stage 0 /home/deck/.local/state/steamshine/stock-gamescope-investigation/20260729-095521-stage0; stock VRR-on evidence /home/deck/.local/state/steamshine/stock-gamescope-investigation/20260729-112442-stage1-unpatched-vrr-on-menu-late, /home/deck/.local/state/steamshine/stock-gamescope-investigation/20260729-112824-stage1-unpatched-vrr-on-game, and session-1785293277678-2.json/session-1785293300836-3.json; stock VRR-off report /home/deck/.local/state/steamshine/stock-gamescope-investigation/20260729-120512-stage1-unpatched-vrr-off-game; accepted VRR-off diagnostic /home/deck/.local/state/steamshine/session-diagnostics/session-1785294580708-5.json; inconclusive patched report /home/deck/.local/state/steamshine/stock-gamescope-investigation/20260729-121918-stage4-vblank-patched-vrr-on-game; failed patched diagnostic /home/deck/.local/state/steamshine/session-diagnostics/session-1785295226359-6.json
+SteamShine commit and binary digest: source 1b0ec872; installed 7b51f316e3551cddeb7299ce7c2c1c0e0d8357a4acfd56dd85b35029523373b6; previous PID 292981 aborted in PulseAudio teardown; recovered service PID 357456, start 2026-07-29 12:21:07 JST, current invocation NRestarts=0
+Gamescope package/path/digest/build ID/capability: 3.16.23.4-1; /usr/bin/gamescope; 7bbc654019ed17a8cf3637d221c2fd1cb59a4098198de2493337fe5629adbea2; 0baea3ee9ff9f8d5df2fcbf7f8fcb7881e8eab09; cap_sys_nice=eip
+test artifact path and digest, or NONE: /var/lib/steamshine/gamescope-builds/ef41ba231e52228a22b4949d9f8eb06d10ec131c/bin/gamescope; 87b1f2fcd26e95fede002f7b73d553fe809b3da55c6db9449fa5bb32acaa3d92; build ID ef41ba231e52228a22b4949d9f8eb06d10ec131c; cap_sys_nice=eip
+active gamescope-session override, or NONE: NONE; active file absent; disabled copy retained at /home/deck/.config/systemd/user/gamescope-session.service.d/90-steamshine-vblank-test.conf.disabled
+rollback mechanism and armed state: COMPLETED manually at 2026-07-29 12:22:35 JST; rollback timer, startup guard and collector inactive
+expected next boot/session path: normal SteamOS Game Mode using stock /usr/bin/gamescope with VRR disabled by the operator
+first verification commands after resume: verify active override remains absent; verify stock digest/capability; verify SteamShine active state and inspect any new coredump before changing the operating baseline
+single operator action required: disable VRR in Game Mode and keep it disabled
+success evidence: stock executable identity; VRR disabled; Moonlight Desktop uses the previously accepted continuous producer path without another SteamShine abort
+failure evidence to collect before retry: first session diagnostic and SteamShine journal/coredump; do not re-enable the patched override
+rollback steps: already complete; no running patched Gamescope exists
+```
+
+## Test-artifact ledger
+
+| Purpose | Source revision | Patch set | Path | SHA-256 | Build ID | Capability | Result |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Stock reference | SteamOS package 3.16.23.4-1 | distribution | `/usr/bin/gamescope` | `7bbc654019ed17a8cf3637d221c2fd1cb59a4098198de2493337fe5629adbea2` | `0baea3ee9ff9f8d5df2fcbf7f8fcb7881e8eab09` | `cap_sys_nice=eip` | Baseline |
+| VRR vblank test | `2b79e07b3da1723c7e5c5f44f18de36c6cb78b9e` | Valve `b3ecd00c035fdcd6e99ee5aaa88211bdb6d3cd3c` only | `/var/lib/steamshine/gamescope-builds/ef41ba231e52228a22b4949d9f8eb06d10ec131c/bin/gamescope` | `87b1f2fcd26e95fede002f7b73d553fe809b3da55c6db9449fa5bb32acaa3d92` | `ef41ba231e52228a22b4949d9f8eb06d10ec131c` | `cap_sys_nice=eip` | Built; 122/122 tests passed; hardware result inconclusive; override rolled back |
+
+## Chronological progress
+
+### 2026-07-29: plan fixed before implementation
+
+- Confirmed the direct stock Gamescope PipeWire DMA-BUF architecture.
+- Confirmed that Gamescope's requested-size property and SteamShine's
+  one-buffer latest-frame policy are already implemented on PR #11.
+- Confirmed that the stock user unit launches
+  `/usr/lib/steamos/gamescope-session`, and the launcher resolves Gamescope via
+  `exec gamescope` rather than an absolute executable path.
+- Chose a service-local, versioned, root-owned artifact injection design with
+  a one-shot rollback. The final persistent directory remains gated on mount
+  and SteamOS update-behavior verification.
+- No implementation or machine-state change had occurred when this checkpoint
+  was written.
+
+### 2026-07-29 10:07 JST: Stage 0 and unpatched build completed
+
+- Saved the non-secret Desktop baseline under the Stage 0 evidence directory.
+  SteamShine was PID 2362, active with `NRestarts=0`; stock Game Mode services
+  and Gamescope were inactive.
+- Confirmed `/var` is a writable, persistent-candidate ext4 filesystem, while
+  the SteamOS root filesystem remains read-only. No `/var/lib/steamshine`
+  directory has been created yet.
+- Downloaded the official SteamOS package archive and verified that its
+  `usr/bin/gamescope` digest exactly matches the installed stock executable.
+- Built the exact Valve `3.16.23.4` tag in a disposable SteamOS-compatible
+  container. The container uses current SteamOS repository packages but a
+  dedicated build-only pacman configuration with signature enforcement
+  disabled because the rootless container cannot read the host's mode-700
+  pacman keyring. Repository transport is HTTPS; source and output revisions
+  and digests are recorded. Do not treat this container as a package trust
+  boundary.
+- The unpatched build passed 122 tests, matched stock CLI and dynamic-library
+  requirements, and passed a side-by-side owned headless smoke test. It is not
+  capability-enabled and must not be injected in its current source-tree path.
+- Next is the unmodified stock Game Mode A/B baseline. No vblank patch has been
+  applied yet.
+
+### 2026-07-29 10:34 JST: console-free case-1 capture armed
+
+- Corrected the transition procedure because the local development console is
+  unavailable in Game Mode.
+- Installed and manually started a user-level evidence collector before the
+  transition. It waits for the exact stock `/usr/bin/gamescope` and both vendor
+  Game Mode services, waits another ten seconds for settlement, captures the
+  pre-Moonlight snapshot, then waits for exactly the first new SteamShine
+  session diagnostic and captures the post-disconnect state.
+- The collector is not enabled at login, does not restart either service, does
+  not consume the Gamescope stats FIFO, and makes no launcher, override, stock
+  binary, configuration, or VRR change.
+- The operator no longer needs a Game Mode terminal. The only Game Mode work is
+  the normal transition, confirming VRR is on, waiting 30 seconds, and running
+  one 60-second continuously navigated Steam-menu stream.
+
+### 2026-07-29 11:28 JST: late menu failure salvaged; game case armed
+
+- The menu collector expired six minutes before the delayed Game Mode
+  transition, so it did not take its automatic live snapshots. The bounded
+  service journal and the first later session diagnostic were preserved in a
+  separate report with that limitation stated explicitly.
+- The 34.274-second session attached the verified existing stock Gamescope and
+  carried display, audio and all 148 input events, but only 3 unique frames
+  reached SteamShine. The first producer buffer arrived about 12 seconds after
+  client connection. The operator observed severe display latency. Fast
+  per-frame encode/network ages show the late producer frames were processed
+  promptly once they arrived.
+- This confirms the prior stock menu starvation symptom but does not replace a
+  60-second continuously changing-game rate measurement. A new static,
+  non-mutating collector is armed for the VRR-on game case, with a four-hour
+  transition wait to tolerate delayed operator action.
+
+### 2026-07-29 11:41 JST: first game attempt incomplete; retry armed
+
+- The stream itself exceeded 60 seconds, but the Steam app scope for AppID
+  `1229240` did not start until 24.259 seconds after streaming began and exited
+  about 25.8 seconds later. The run cannot establish a continuously changing
+  60-second producer rate and does not advance the Stage 1 matrix.
+- During the 64.600-second session, stock Gamescope needed about 12.9 seconds
+  to deliver the first buffer. SteamShine received 112 buffers and 111 unique
+  frames, with source interarrival p95 `3081.355 ms`. The received frames still
+  had encode age p95 `0.397 ms` and network age p95 `3.854 ms`, so the partial
+  run remains consistent with producer starvation rather than downstream
+  queue buildup.
+- The original collector did not recognize the brief Game Mode interval. Its
+  exact diagnostic, bounded journal, binary identities and post-session state
+  were salvaged, and the stale collector was stopped in Desktop Mode. The
+  retry collector records the readiness predicate, verifies the executable by
+  the immutable stock digest, and uses a 30-second settlement interval.
+- The retry must begin Moonlight only after the game has finished loading and
+  normal continuously changing gameplay is visible. The game must remain
+  active for the entire measured interval.
+
+### 2026-07-29 12:16 JST: VRR-off control passed; isolated fix ready
+
+- The stock VRR-off control worked normally and delivered 4,292 PipeWire
+  buffers during a 48.326-second session. Its accepted diagnostic and live
+  snapshot isolate the earlier starvation to VRR scheduling.
+- Applied only Valve `b3ecd00c`, verified the upstream patch exactly, rebuilt
+  in the SteamOS-compatible container and passed all 122 tests.
+- Installed the immutable test binary below `/var/lib/steamshine` with stock
+  capability parity. The stock binary is unchanged. A service-local pending
+  override, startup health guard, evidence collector and unconditional
+  20-minute rollback are ready to arm for one VRR-on validation.
+
+### 2026-07-29 12:25 JST: patched attempt abandoned; VRR-off selected
+
+- The patched session started, but Moonlight did not establish a usable
+  stream. PipeWire changed format before the first unique frame and the first
+  785 ms attempt was rejected; the immediate reconnect found no usable source.
+- SteamShine PID `292981` then aborted in PulseAudio teardown after repeated
+  broken-pipe errors. The recovered service is PID `357456`. This prevents a
+  valid producer-rate judgment for the Gamescope vblank patch.
+- At the operator's direction, the patched experiment was abandoned in favor
+  of the already accepted stock VRR-off baseline. The service-local override
+  was rolled back at 12:22:35 JST, and its timer, guard and collector were
+  stopped. Future Game Mode sessions use stock `/usr/bin/gamescope`.

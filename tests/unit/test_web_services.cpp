@@ -235,8 +235,27 @@ TEST(WebServicesTest, StatusSnapshotIncludesPipeWireDiagnostics) {
   EXPECT_TRUE(snapshot.at("input_queue_age_ms").contains("max"));
   EXPECT_TRUE(snapshot.contains("capture_queue_current"));
   EXPECT_TRUE(snapshot.contains("capture_queue_max"));
+  EXPECT_TRUE(snapshot.contains("pipewire_buffers_received"));
+  EXPECT_TRUE(snapshot.contains("pipewire_buffers_replaced"));
   EXPECT_TRUE(snapshot.contains("encoder_queue_current"));
   EXPECT_TRUE(snapshot.contains("encoder_queue_max"));
+  EXPECT_TRUE(snapshot.contains("capture_deadline_misses"));
+  EXPECT_TRUE(snapshot.contains("encoded_unique_frames"));
+  EXPECT_TRUE(snapshot.contains("encoded_duplicate_frames"));
+  EXPECT_TRUE(snapshot.contains("duplicate_run_max"));
+  EXPECT_TRUE(snapshot.contains("pipewire_buffers_received"));
+  EXPECT_TRUE(snapshot.contains("pipewire_unique_frames"));
+  EXPECT_TRUE(snapshot.contains("pipewire_redundant_pts"));
+  EXPECT_TRUE(snapshot.contains("pipewire_no_damage_frames"));
+  EXPECT_TRUE(snapshot.contains("pipewire_queue_overflows"));
+  EXPECT_TRUE(snapshot.at("requested_fps").contains("numerator"));
+  EXPECT_TRUE(snapshot.at("negotiated_fps").contains("denominator"));
+  EXPECT_TRUE(snapshot.at("negotiated_max_fps").contains("numerator"));
+  EXPECT_TRUE(snapshot.contains("observed_source_fps"));
+  EXPECT_TRUE(snapshot.contains("observed_encode_fps"));
+  EXPECT_TRUE(snapshot.contains("output_status_reason"));
+  EXPECT_TRUE(snapshot.at("source_interarrival_ms").contains("p99"));
+  EXPECT_TRUE(snapshot.at("encode_interarrival_ms").contains("p99"));
   EXPECT_TRUE(snapshot.contains("network_queue_bytes"));
   EXPECT_TRUE(snapshot.contains("network_queue_frames"));
   EXPECT_TRUE(snapshot.contains("socket_outq_bytes"));
@@ -258,6 +277,12 @@ TEST(WebServicesTest, StatusSnapshotIncludesPipeWireDiagnostics) {
   EXPECT_EQ(snapshot.at("pipewire_node_id"), 0);
   EXPECT_EQ(snapshot.at("pipewire_object_serial"), 0);
   EXPECT_EQ(snapshot.at("pipewire_producer_pid"), -1);
+  EXPECT_TRUE(snapshot.contains("requested_display_endpoint"));
+  EXPECT_EQ(snapshot.at("active_display_endpoint_origin"), "none");
+  EXPECT_FALSE(snapshot.at("active_display_endpoint_verified"));
+  EXPECT_TRUE(snapshot.contains("active_display_endpoint_generation"));
+  EXPECT_FALSE(snapshot.contains("active_display_endpoint_xauthority"));
+  EXPECT_FALSE(snapshot.contains("active_display_endpoint_dbus_session_bus_address"));
 }
 
 /**

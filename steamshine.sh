@@ -4,12 +4,13 @@
 set -Eeuo pipefail
 
 readonly EXIT_USAGE=2 EXIT_UNSUPPORTED=3 EXIT_DEPENDENCY=4 EXIT_BUILD=6 EXIT_TEST=7 EXIT_SERVICE=8 EXIT_CONFIG=9 EXIT_UNINSTALL=10
+readonly SERVICE_UNIT=steamshine.service
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 PREFIX="${HOME}/.local"
 BUILD_DIR="${ROOT_DIR}/cmake-build-steamos"
 CONFIG_FILE="${HOME}/.config/steamshine/sunshine.conf"
 STATE_DIR="${HOME}/.local/state/steamshine"
-DRY_RUN=false NON_INTERACTIVE=false ASSUME_YES=false VERBOSE=false QUIET=false FORCE=false NO_START=false NO_BUILD=false NO_PACKAGES=false NO_SERVICE=false PURGE=false REMOVE_DEPENDENCIES=false CLEAN=false HARDWARE_INTERACTIVE=false BUILD_TYPE=Release
+DRY_RUN=false NON_INTERACTIVE=false ASSUME_YES=false VERBOSE=false QUIET=false FORCE=false NO_START=false NO_BUILD=false NO_PACKAGES=false NO_SERVICE=false PURGE=false REMOVE_DEPENDENCIES=false CLEAN=false HARDWARE_INTERACTIVE=false AUTO_RELEASE=false BUILD_TYPE=Release
 GAME_GPU="" CAPTURE_GPU="" ENCODER_GPU="" GAMESCOPE_PATH="gamescope" DEFAULT_WIDTH=1920 DEFAULT_HEIGHT=1080 DEFAULT_FPS=60
 CHANNEL="stable" PR_NUMBER="" RELEASE_TAG="" ARTIFACT_PATH=""
 
@@ -21,8 +22,8 @@ version_at_least() { [[ "$(printf '%s\n%s\n' "$2" "$1" | sort -V | head -n1)" ==
 path_within() { local candidate="$1" parent="$2" canonical_candidate canonical_parent; canonical_candidate="$(realpath -m -- "${candidate}")"; canonical_parent="$(realpath -m -- "${parent}")"; [[ "${canonical_candidate}" == "${canonical_parent}" || "${canonical_candidate}" == "${canonical_parent}/"* ]]; }
 usage() { cat <<'EOF'
 Usage: ./steamshine.sh <command> [options]
-Commands: menu check compatibility-check vaapi-driver-status install build configure start stop restart status logs diagnose update repair uninstall bootstrap rollback hardware-test
-Options: --non-interactive --yes --dry-run --verbose --quiet --force --no-start --no-build --no-packages --no-service --config PATH --prefix PATH --build-dir PATH --channel stable|nightly|pr --pr NUMBER --release TAG --artifact PATH --game-gpu ID --capture-gpu ID --encoder-gpu ID --gamescope-path PATH --default-width PX --default-height PX --default-fps FPS --log-file PATH --purge --remove-dependencies --clean --debug --release
+Commands: menu check compatibility-check vaapi-driver-status install build configure start stop restart status logs diagnose autostart-status update repair uninstall bootstrap rollback hardware-test
+Options: -a, --latest-release --non-interactive --yes --dry-run --verbose --quiet --force --no-start --no-build --no-packages --no-service --config PATH --prefix PATH --build-dir PATH --channel stable|nightly|pr --pr NUMBER --release TAG --artifact PATH --game-gpu ID --capture-gpu ID --encoder-gpu ID --gamescope-path PATH --default-width PX --default-height PX --default-fps FPS --log-file PATH --purge --remove-dependencies --clean --debug --release
 EOF
 }
 require_bash() { [[ -n "${BASH_VERSION:-}" ]] || die 'Run this script with bash.' "$EXIT_USAGE"; }
@@ -30,9 +31,12 @@ parse() {
   COMMAND="${1:-}"; [[ $# -gt 0 ]] && shift || true
   if [[ "${COMMAND}" == "-h" || "${COMMAND}" == "--help" ]]; then usage; exit 0; fi
   while [[ $# -gt 0 ]]; do case "$1" in
-    --non-interactive) NON_INTERACTIVE=true;; --interactive) HARDWARE_INTERACTIVE=true;; --yes) ASSUME_YES=true;; --dry-run) DRY_RUN=true;; --verbose) VERBOSE=true;; --quiet) QUIET=true;; --force) FORCE=true;; --no-start) NO_START=true;; --no-build) NO_BUILD=true;; --no-packages) NO_PACKAGES=true;; --no-service) NO_SERVICE=true;; --purge) PURGE=true;; --remove-dependencies) REMOVE_DEPENDENCIES=true;; --clean) CLEAN=true;; --debug) BUILD_TYPE=Debug;; --release) BUILD_TYPE=Release;;
+    -a|--latest-release) AUTO_RELEASE=true;; --non-interactive) NON_INTERACTIVE=true;; --interactive) HARDWARE_INTERACTIVE=true;; --yes) ASSUME_YES=true;; --dry-run) DRY_RUN=true;; --verbose) VERBOSE=true;; --quiet) QUIET=true;; --force) FORCE=true;; --no-start) NO_START=true;; --no-build) NO_BUILD=true;; --no-packages) NO_PACKAGES=true;; --no-service) NO_SERVICE=true;; --purge) PURGE=true;; --remove-dependencies) REMOVE_DEPENDENCIES=true;; --clean) CLEAN=true;; --debug) BUILD_TYPE=Debug;; --release) BUILD_TYPE=Release;;
     --config|--prefix|--build-dir|--log-file|--channel|--pr|--artifact|--game-gpu|--capture-gpu|--encoder-gpu|--gamescope-path|--default-width|--default-height|--default-fps) [[ $# -ge 2 ]] || die "Missing value for $1" "$EXIT_USAGE"; case "$1" in --config) CONFIG_FILE="$2";; --prefix) PREFIX="$2";; --build-dir) BUILD_DIR="$2";; --channel) CHANNEL="$2";; --pr) PR_NUMBER="$2";; --artifact) ARTIFACT_PATH="$2";; --game-gpu) GAME_GPU="$2";; --capture-gpu) CAPTURE_GPU="$2";; --encoder-gpu) ENCODER_GPU="$2";; --gamescope-path) GAMESCOPE_PATH="$2";; --default-width) DEFAULT_WIDTH="$2";; --default-height) DEFAULT_HEIGHT="$2";; --default-fps) DEFAULT_FPS="$2";; esac; shift;;
     -h|--help) usage; exit 0;; *) die "Unknown option: $1" "$EXIT_USAGE";; esac; shift; done
+  if "${AUTO_RELEASE}" && { [[ -n "${ARTIFACT_PATH}" ]] || [[ -n "${PR_NUMBER}" ]]; }; then
+    die '-a/--latest-release cannot be combined with --artifact or --pr.' "$EXIT_USAGE"
+  fi
 }
 load_os_release() { [[ -r /etc/os-release ]] || die '/etc/os-release is required.' "$EXIT_UNSUPPORTED"; . /etc/os-release; }
 package_manager() { load_os_release; case "${ID}:${ID_LIKE:-}" in steamos:*|arch:*) printf 'pacman\n';; ubuntu:*|debian:*|*:*debian*) printf 'apt\n';; fedora:*|*:*fedora*) printf 'dnf\n';; *) die "Unsupported Linux distribution: ${ID}" "$EXIT_UNSUPPORTED";; esac; }
@@ -82,9 +86,10 @@ configure() {
   if [[ -e "${CONFIG_FILE}" ]]; then say 'Already configured; preserving existing configuration.'; return; fi
   if "${DRY_RUN}"; then say "[dry-run] create ${CONFIG_FILE}"; return; fi
   cat >"${CONFIG_FILE}" <<EOF
-# SteamShine SteamOS settings. Virtual display is opt-in.
-steamos_virtual_display_enabled = false
+# SteamShine recommended SteamOS settings.
+steamos_virtual_display_enabled = true
 steamos_virtual_display_mode = auto
+steamos_session_source = auto
 steamos_gamescope_path = ${GAMESCOPE_PATH}
 steamos_virtual_desktop_command = plasmawindowed org.kde.plasma.folder
 steamos_runtime_directory = ${XDG_RUNTIME_DIR}/steamshine
@@ -99,34 +104,159 @@ steamos_default_fps = ${DEFAULT_FPS}
 steamos_cleanup_orphan_sessions = true
 EOF
 }
-service_file() { printf '%s\n' "${HOME}/.config/systemd/user/steamshine.service"; }
+# Apply the recommended Game Mode capture policy without replacing unrelated
+# Sunshine settings. Duplicate keys are collapsed so the result is unambiguous.
+configure_recommended() {
+  [[ -e "${CONFIG_FILE}" ]] || configure
+  if "${DRY_RUN}"; then
+    say "[dry-run] set recommended SteamOS settings in ${CONFIG_FILE}"
+    return
+  fi
+  local temporary backup_directory
+  temporary="$(mktemp "${CONFIG_FILE}.XXXXXX")"
+  backup_directory="$(dirname -- "${CONFIG_FILE}")/backups"
+  if ! awk '
+    BEGIN {
+      recommended["steamos_virtual_display_enabled"] = "true"
+      recommended["steamos_virtual_display_mode"] = "auto"
+      recommended["steamos_session_source"] = "auto"
+    }
+    {
+      matched = ""
+      for (key in recommended) {
+        if ($0 ~ "^[[:space:]]*" key "[[:space:]]*=") {
+          matched = key
+          break
+        }
+      }
+      if (matched != "") {
+        if (!written[matched]++) {
+          print matched " = " recommended[matched]
+        }
+        next
+      }
+      print
+    }
+    END {
+      for (key in recommended) {
+        if (!written[key]) {
+          print key " = " recommended[key]
+        }
+      }
+    }
+  ' "${CONFIG_FILE}" >"${temporary}"; then
+    rm -f -- "${temporary}"
+    die 'Recommended SteamOS settings could not be generated.' "${EXIT_CONFIG}"
+  fi
+  if cmp -s -- "${CONFIG_FILE}" "${temporary}"; then
+    rm -f -- "${temporary}"
+    say 'Recommended SteamOS settings are already configured'
+    return
+  fi
+  mkdir -p "${backup_directory}"
+  if [[ ! -f "${backup_directory}/sunshine.conf.before-recommended-settings" ]]; then
+    cp -- "${CONFIG_FILE}" "${backup_directory}/sunshine.conf.before-recommended-settings"
+  fi
+  chmod --reference="${CONFIG_FILE}" "${temporary}"
+  mv -f -- "${temporary}" "${CONFIG_FILE}"
+  say 'Recommended SteamOS settings applied'
+}
+service_file() { printf '%s\n' "${HOME}/.config/systemd/user/${SERVICE_UNIT}"; }
+service_wants_link() { printf '%s\n' "${HOME}/.config/systemd/user/default.target.wants/${SERVICE_UNIT}"; }
+systemd_user_path() {
+  local path="$1"
+  if [[ "${path}" == "${HOME}" ]]; then
+    printf '%%h\n'
+  elif [[ "${path}" == "${HOME}/"* ]]; then
+    printf '%%h/%s\n' "${path#"${HOME}/"}"
+  else
+    printf '%s\n' "${path}"
+  fi
+}
 install_service() {
-  local unit; unit="$(service_file)"; run mkdir -p "$(dirname -- "${unit}")"
+  local unit unit_directory temporary executable config
+  unit="$(service_file)"
+  unit_directory="$(dirname -- "${unit}")"
+  executable="$(systemd_user_path "${PREFIX}/bin/steamshine")"
+  config="$(systemd_user_path "${CONFIG_FILE}")"
+  run mkdir -p "${unit_directory}"
   if "${DRY_RUN}"; then say "[dry-run] create ${unit}"; return; fi
-  cat >"${unit}" <<EOF
+  temporary="$(mktemp "${unit}.XXXXXX")"
+  if ! cat >"${temporary}" <<EOF
 [Unit]
 Description=SteamShine game streaming host
-After=graphical-session.target
 StartLimitIntervalSec=60
-StartLimitBurst=3
+StartLimitBurst=5
+
 [Service]
-PassEnvironment=XDG_RUNTIME_DIR WAYLAND_DISPLAY DISPLAY DBUS_SESSION_BUS_ADDRESS PIPEWIRE_REMOTE
+Type=simple
+Environment=XDG_RUNTIME_DIR=%t
+Environment=PIPEWIRE_RUNTIME_DIR=%t
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=%t/bus
 Environment=STEAMSHINE_LAUNCH_MODE=systemd_user_service
-ExecStart=${PREFIX}/bin/steamshine ${CONFIG_FILE}
+ExecStart=${executable} ${config}
 Restart=on-failure
-RestartSec=5
+RestartSec=3
+TimeoutStopSec=10
+
 [Install]
 WantedBy=default.target
 EOF
-  systemctl --user daemon-reload
+  then
+    rm -f -- "${temporary}"
+    die 'The SteamShine user unit could not be generated.' "${EXIT_SERVICE}"
+  fi
+  chmod 0644 "${temporary}"
+  mv -f -- "${temporary}" "${unit}"
+  systemctl --user daemon-reload || die 'The systemd user manager could not reload the SteamShine unit.' "${EXIT_SERVICE}"
+}
+enable_service() {
+  run systemctl --user enable "${SERVICE_UNIT}" || die 'The SteamShine user service could not be enabled.' "${EXIT_SERVICE}"
+}
+systemctl_value() {
+  local property="$1"
+  systemctl --user show "${SERVICE_UNIT}" --property="${property}" --value 2>/dev/null || true
+}
+service_enabled() { systemctl --user is-enabled --quiet "${SERVICE_UNIT}" 2>/dev/null; }
+service_active() { systemctl --user is-active --quiet "${SERVICE_UNIT}" 2>/dev/null; }
+service_main_pid() { systemctl_value MainPID; }
+service_process_executable() {
+  local pid="$1" proc_root="${STEAMSHINE_PROC_ROOT:-/proc}"
+  [[ "${pid}" =~ ^[1-9][0-9]*$ ]] || return 1
+  readlink -f -- "${proc_root}/${pid}/exe" 2>/dev/null
+}
+verify_service() {
+  local require_active="$1" load_state main_pid process_executable expected_executable exec_start
+  "${DRY_RUN}" && return 0
+  [[ -f "$(service_file)" ]] || die 'SteamShine autostart verification failed: unit_missing.' "${EXIT_SERVICE}"
+  service_enabled || die 'SteamShine autostart verification failed: unit_not_enabled.' "${EXIT_SERVICE}"
+  [[ -L "$(service_wants_link)" ]] || die 'SteamShine autostart verification failed: wants_symlink_missing.' "${EXIT_SERVICE}"
+  [[ -x "${PREFIX}/bin/steamshine" ]] || die 'SteamShine autostart verification failed: executable_missing.' "${EXIT_SERVICE}"
+  [[ -f "${CONFIG_FILE}" ]] || die 'SteamShine autostart verification failed: config_missing.' "${EXIT_SERVICE}"
+  load_state="$(systemctl_value LoadState)"
+  [[ "${load_state}" == loaded ]] || die "SteamShine autostart verification failed: unit load state is ${load_state:-unknown}." "${EXIT_SERVICE}"
+  exec_start="$(systemctl_value ExecStart)"
+  [[ "${exec_start}" == *"${PREFIX}/bin/steamshine"* && "${exec_start}" == *"${CONFIG_FILE}"* ]] || die 'SteamShine autostart verification failed: ExecStart does not reference the installed binary and configuration.' "${EXIT_SERVICE}"
+  if "${require_active}"; then
+    service_active || die 'SteamShine autostart verification failed: service_failed.' "${EXIT_SERVICE}"
+    main_pid="$(service_main_pid)"
+    [[ "${main_pid}" =~ ^[1-9][0-9]*$ ]] || die 'SteamShine autostart verification failed: MainPID is unavailable.' "${EXIT_SERVICE}"
+    process_executable="$(service_process_executable "${main_pid}" || true)"
+    expected_executable="$(readlink -f -- "${PREFIX}/bin/steamshine")"
+    [[ "${process_executable}" == "${expected_executable}" ]] || die 'SteamShine autostart verification failed: wrong_binary.' "${EXIT_SERVICE}"
+  fi
 }
 fetch_artifact() {
   [[ -n "${ARTIFACT_PATH}" ]] && return
+  if "${AUTO_RELEASE}" || [[ "${CHANNEL}" == stable ]]; then
+    fetch_latest_release
+    return
+  fi
   command -v gh >/dev/null || die 'Install gh or download the PR artifact from Actions and pass --artifact <path>.' "$EXIT_DEPENDENCY"
   local cache="${HOME}/.cache/steamshine/artifacts" run_id="" candidate artifact_name="" artifact_names run_cache
   run mkdir -p "${cache}"
   if [[ "${CHANNEL}" != pr ]]; then
-    die 'Use --artifact for local artifacts; release/channel download is not published yet.' "$EXIT_USAGE"
+    die 'Use the stable channel, --artifact for a local artifact, or --channel pr --pr NUMBER.' "$EXIT_USAGE"
   fi
   [[ -n "${PR_NUMBER}" ]] || die '--channel pr requires --pr NUMBER.' "$EXIT_USAGE"
   # A later docs-only run can succeed without producing a delivery archive.
@@ -149,6 +279,58 @@ fetch_artifact() {
   run gh run download "${run_id}" --repo souten-yd/SteamShine --name "${artifact_name}" --dir "${run_cache}"
   ARTIFACT_PATH="$(find "${run_cache}" -type f -name 'steamshine-steamos-*.tar.zst' -print -quit)"
   [[ -n "${ARTIFACT_PATH}" ]] || die "Artifact download did not contain ${artifact_name}." "$EXIT_DEPENDENCY"
+}
+fetch_latest_release() {
+  command -v curl >/dev/null || die 'curl is required to download the latest GitHub release.' "${EXIT_DEPENDENCY}"
+  command -v python3 >/dev/null || die 'python3 is required to inspect the latest GitHub release.' "${EXIT_DEPENDENCY}"
+  local api_url="${STEAMSHINE_RELEASE_API_URL:-https://api.github.com/repos/souten-yd/SteamShine/releases/latest}"
+  local cache="${HOME}/.cache/steamshine/releases" metadata temporary_artifact temporary_checksum
+  local -a release=()
+  run mkdir -p "${cache}"
+  metadata="$(mktemp "${cache}/latest-release.XXXXXX.json")"
+  if ! curl --proto '=https' --tlsv1.2 --fail --location --silent --show-error --output "${metadata}" "${api_url}"; then
+    rm -f -- "${metadata}"
+    die 'The latest GitHub release metadata could not be downloaded.' "${EXIT_DEPENDENCY}"
+  fi
+  mapfile -t release < <(python3 - "${metadata}" <<'PY'
+import json
+import re
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as release_file:
+    payload = json.load(release_file)
+
+assets = {asset.get("name", ""): asset.get("browser_download_url", "") for asset in payload.get("assets", [])}
+archives = [name for name in assets if re.fullmatch(r"steamshine-steamos-x86_64-[0-9A-Fa-f]+\.tar\.zst", name)]
+if len(archives) != 1:
+    raise SystemExit("latest release must contain exactly one SteamOS x86_64 archive")
+archive = archives[0]
+checksum = f"{archive}.sha256"
+if checksum not in assets:
+    raise SystemExit("latest release is missing the archive checksum")
+expected_prefix = "https://github.com/souten-yd/SteamShine/releases/download/"
+if not assets[archive].startswith(expected_prefix) or not assets[checksum].startswith(expected_prefix):
+    raise SystemExit("latest release contains an unexpected download URL")
+print(payload.get("tag_name", ""))
+print(archive)
+print(assets[archive])
+print(checksum)
+print(assets[checksum])
+PY
+  )
+  rm -f -- "${metadata}"
+  [[ ${#release[@]} -eq 5 && -n "${release[0]}" ]] || die 'The latest GitHub release assets are invalid.' "${EXIT_DEPENDENCY}"
+  temporary_artifact="$(mktemp "${cache}/${release[1]}.XXXXXX")"
+  temporary_checksum="$(mktemp "${cache}/${release[3]}.XXXXXX")"
+  if ! curl --proto '=https' --tlsv1.2 --fail --location --silent --show-error --output "${temporary_artifact}" "${release[2]}" ||
+    ! curl --proto '=https' --tlsv1.2 --fail --location --silent --show-error --output "${temporary_checksum}" "${release[4]}"; then
+    rm -f -- "${temporary_artifact}" "${temporary_checksum}"
+    die "SteamShine ${release[0]} could not be downloaded." "${EXIT_DEPENDENCY}"
+  fi
+  mv -f -- "${temporary_artifact}" "${cache}/${release[1]}"
+  mv -f -- "${temporary_checksum}" "${cache}/${release[3]}"
+  ARTIFACT_PATH="${cache}/${release[1]}"
+  say "Downloaded SteamShine ${release[0]}"
 }
 validate_artifact() {
   local artifact="$1" entry
@@ -216,20 +398,139 @@ migrate_existing_apps() {
   [[ -x "${helper}" ]] || return 0
   "${helper}" "${apps_file}" || die 'Existing Sunshine applications could not be migrated safely.' "${EXIT_CONFIG}"
 }
-install() { install_artifact; configure; migrate_existing_apps; "${NO_SERVICE}" || install_service; }
+install() {
+  install_artifact
+  configure
+  configure_recommended
+  migrate_existing_apps
+  if "${NO_SERVICE}"; then
+    say 'SteamShine is installed; the systemd user service was not changed'
+    return
+  fi
+  install_service
+  enable_service
+  if "${NO_START}"; then
+    verify_service false
+    say "SteamShine autostart: enabled; active=$(service_active && printf true || printf false)"
+    say 'SteamShine is installed; it will start at the next user-manager default.target activation'
+    return
+  fi
+  import_desktop_environment
+  if service_active; then
+    run systemctl --user restart "${SERVICE_UNIT}" || die 'The active SteamShine user service could not be restarted.' "${EXIT_SERVICE}"
+  else
+    run systemctl --user start "${SERVICE_UNIT}" || die 'The SteamShine user service could not be started.' "${EXIT_SERVICE}"
+  fi
+  verify_service true
+  say "SteamShine autostart: enabled; active=true; MainPID=$(service_main_pid)"
+  say 'SteamShine is installed and will start automatically in Game Mode'
+}
 virtual_display_enabled() { [[ -r "${CONFIG_FILE}" ]] && grep -Eq '^steamos_virtual_display_enabled[[:space:]]*=[[:space:]]*true[[:space:]]*$' "${CONFIG_FILE}"; }
 import_desktop_environment() {
-  local -a names=(XDG_RUNTIME_DIR WAYLAND_DISPLAY DISPLAY DBUS_SESSION_BUS_ADDRESS PIPEWIRE_REMOTE) values=() name
+  local -a names=(XDG_RUNTIME_DIR WAYLAND_DISPLAY DISPLAY GAMESCOPE_WAYLAND_DISPLAY DBUS_SESSION_BUS_ADDRESS PIPEWIRE_REMOTE) values=() name
   for name in "${names[@]}"; do
     [[ -n "${!name:-}" ]] && values+=("${name}")
   done
   ((${#values[@]})) || return 0
   run systemctl --user import-environment "${values[@]}"
 }
-start() { "${NO_SERVICE}" && die 'start requires the user service.' "$EXIT_SERVICE"; if virtual_display_enabled; then compatibility_check; fi; import_desktop_environment; systemctl --user is-active --quiet steamshine && { say 'Already running'; return; }; run systemctl --user enable --now steamshine || die 'Service failed to start.' "$EXIT_SERVICE"; }
-stop() { run systemctl --user stop steamshine; }
-status() { systemctl --user status steamshine --no-pager; }
-logs() { journalctl --user -u steamshine --no-pager -n 200; }
+start() {
+  "${NO_SERVICE}" && die 'start requires the user service.' "${EXIT_SERVICE}"
+  if virtual_display_enabled; then compatibility_check; fi
+  import_desktop_environment
+  enable_service
+  if service_active; then
+    verify_service true
+    say 'Already running; autostart is enabled'
+    return
+  fi
+  run systemctl --user start "${SERVICE_UNIT}" || die 'Service failed to start.' "${EXIT_SERVICE}"
+  verify_service true
+  say 'SteamShine started; autostart is enabled'
+}
+stop() { run systemctl --user stop "${SERVICE_UNIT}"; }
+restart() {
+  "${NO_SERVICE}" && die 'restart requires the user service.' "${EXIT_SERVICE}"
+  if virtual_display_enabled; then compatibility_check; fi
+  import_desktop_environment
+  enable_service
+  run systemctl --user restart "${SERVICE_UNIT}" || die 'Service failed to restart.' "${EXIT_SERVICE}"
+  verify_service true
+  say 'SteamShine restarted; autostart is enabled'
+}
+status() { systemctl --user status "${SERVICE_UNIT}" --no-pager; }
+logs() { journalctl --user -u "${SERVICE_UNIT}" --no-pager -n 200; }
+autostart_status() {
+  local unit wants runtime load_state unit_file_state active_state sub_state main_pid exec_start executable_realpath build_commit
+  local login_state linger_state journal_result service_environment launch_mode=unknown pid
+  local -a reasons=() manual_pids=()
+  unit="$(service_file)"
+  wants="$(service_wants_link)"
+  runtime="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+  if ! systemctl --user show-environment >/dev/null 2>&1; then
+    reasons+=(user_manager_unavailable)
+  fi
+  load_state="$(systemctl_value LoadState)"
+  unit_file_state="$(systemctl --user is-enabled "${SERVICE_UNIT}" 2>/dev/null || true)"
+  active_state="$(systemctl_value ActiveState)"
+  sub_state="$(systemctl_value SubState)"
+  main_pid="$(service_main_pid)"
+  exec_start="$(systemctl_value ExecStart)"
+  service_environment="$(systemctl_value Environment)"
+  if [[ "${service_environment}" =~ (^|[[:space:]])STEAMSHINE_LAUNCH_MODE=([^[:space:]]+) ]]; then
+    launch_mode="${BASH_REMATCH[2]}"
+  fi
+  executable_realpath="$(service_process_executable "${main_pid}" || true)"
+  build_commit="$(json_value commit "${PREFIX}/share/steamshine/current/BUILD_INFO.json" 2>/dev/null || true)"
+  login_state="$(loginctl show-user "$(id -u)" --property=State --value 2>/dev/null || true)"
+  linger_state="$(loginctl show-user "$(id -u)" --property=Linger --value 2>/dev/null || true)"
+  journal_result="$(journalctl --user --boot -u "${SERVICE_UNIT}" --no-pager -n 1 -o cat 2>/dev/null | tail -n 1 || true)"
+  [[ -f "${unit}" ]] || reasons+=(unit_missing)
+  [[ "${unit_file_state}" == enabled ]] || reasons+=(unit_not_enabled)
+  [[ -L "${wants}" ]] || reasons+=(wants_symlink_missing)
+  [[ -x "${PREFIX}/bin/steamshine" ]] || reasons+=(executable_missing)
+  [[ -f "${CONFIG_FILE}" ]] || reasons+=(config_missing)
+  [[ "${active_state}" != failed ]] || reasons+=(service_failed)
+  if [[ "${journal_result}" == *'start-limit-hit'* || "${journal_result}" == *'Start request repeated too quickly'* ]]; then
+    reasons+=(service_start_limited)
+  fi
+  if [[ "${main_pid}" =~ ^[1-9][0-9]*$ && -x "${PREFIX}/bin/steamshine" ]]; then
+    [[ -n "${executable_realpath}" && "${executable_realpath}" == "$(readlink -f -- "${PREFIX}/bin/steamshine")" ]] || reasons+=(wrong_binary)
+  fi
+  [[ -z "${exec_start}" || "${exec_start}" == *"${PREFIX}/bin/steamshine"* && "${exec_start}" == *"${CONFIG_FILE}"* ]] || reasons+=(wrong_binary)
+  if command -v pgrep >/dev/null; then
+    while IFS= read -r pid; do
+      [[ "${pid}" =~ ^[1-9][0-9]*$ ]] || continue
+      [[ "${pid}" == "${main_pid}" ]] || manual_pids+=("${pid}")
+    done < <(pgrep -x steamshine 2>/dev/null || true)
+  fi
+  ((${#manual_pids[@]} == 0)) || reasons+=(manual_process_conflict)
+  printf 'service_file=%s\n' "${unit}"
+  printf 'unit_load_state=%s\n' "${load_state:-unknown}"
+  printf 'unit_file_state=%s\n' "${unit_file_state:-unknown}"
+  printf 'active_state=%s\n' "${active_state:-unknown}"
+  printf 'sub_state=%s\n' "${sub_state:-unknown}"
+  printf 'MainPID=%s\n' "${main_pid:-0}"
+  printf 'ExecStart=%s\n' "${exec_start:-unknown}"
+  printf 'executable_realpath=%s\n' "${executable_realpath:-unknown}"
+  printf 'config_path=%s\n' "${CONFIG_FILE}"
+  printf 'BUILD_INFO_commit=%s\n' "${build_commit:-unknown}"
+  printf 'default_target_wants_symlink=%s\n' "${wants}"
+  printf 'default_target_wants_symlink_state=%s\n' "$([[ -L "${wants}" ]] && printf present || printf missing)"
+  printf 'XDG_RUNTIME_DIR=%s\n' "${runtime}"
+  printf 'launch_mode=%s\n' "${launch_mode}"
+  printf 'loginctl_user_state=%s\n' "${login_state:-unknown}"
+  printf 'linger_state=%s\n' "${linger_state:-unknown}"
+  printf 'latest_boot_journal_result=%s\n' "${journal_result:-none}"
+  printf 'manual_process_pids=%s\n' "${manual_pids[*]:-none}"
+  if ((${#reasons[@]})); then
+    printf 'autostart_health=failed\n'
+    printf 'failure_reasons=%s\n' "${reasons[*]}"
+    return 1
+  fi
+  printf 'autostart_health=healthy\n'
+  printf 'failure_reasons=none\n'
+}
 diagnose() { check; command -v gamescope >/dev/null && gamescope --version || true; pw-cli info 0 >/dev/null 2>&1 && say 'PipeWire reachable' || say 'PipeWire is not reachable'; }
 vaapi_amd_driver_status() {
   local vaapi_path
@@ -277,15 +578,74 @@ compatibility_check() {
   vaapi_amd_driver_status
   "${collector}"
 }
-bootstrap() { install; "${NO_START}" || "${NO_SERVICE}" || start; "${DRY_RUN}" || diagnose; say 'SteamShine is ready'; }
-update() { git -C "${ROOT_DIR}" diff --quiet || die 'Uncommitted changes detected; update refused.'; run git -C "${ROOT_DIR}" fetch --all --prune; run git -C "${ROOT_DIR}" pull --ff-only; install; "${NO_START}" || start; }
-repair() { configure; "${NO_SERVICE}" || install_service; [[ -x "${PREFIX}/bin/steamshine" ]] || install; }
+bootstrap() { install; "${DRY_RUN}" || diagnose; say 'SteamShine is ready'; }
+update() {
+  local was_active=false
+  git -C "${ROOT_DIR}" diff --quiet || die 'Uncommitted changes detected; update refused.'
+  "${NO_SERVICE}" || { service_active && was_active=true || true; }
+  run git -C "${ROOT_DIR}" fetch --all --prune
+  run git -C "${ROOT_DIR}" pull --ff-only
+  install_artifact
+  configure
+  configure_recommended
+  migrate_existing_apps
+  if "${NO_SERVICE}"; then
+    say 'SteamShine was updated; the systemd user service was not changed'
+    return
+  fi
+  install_service
+  enable_service
+  if "${was_active}" && ! "${NO_START}"; then
+    run systemctl --user restart "${SERVICE_UNIT}" || die 'SteamShine was updated but its active service could not be restarted.' "${EXIT_SERVICE}"
+    verify_service true
+    say 'SteamShine was updated and the active service was restarted'
+  else
+    verify_service false
+    say 'SteamShine was updated; its inactive/running state was preserved and autostart is enabled'
+  fi
+}
+repair() {
+  local active_before=false main_pid process_executable expected_executable restart_required=false
+  if [[ ! -x "${PREFIX}/bin/steamshine" ]]; then
+    install
+    return
+  fi
+  configure
+  configure_recommended
+  migrate_existing_apps
+  "${NO_SERVICE}" && { say 'SteamShine files were repaired; the systemd user service was not changed'; return; }
+  service_active && active_before=true || true
+  if "${active_before}"; then
+    main_pid="$(service_main_pid)"
+    process_executable="$(service_process_executable "${main_pid}" || true)"
+    expected_executable="$(readlink -f -- "${PREFIX}/bin/steamshine")"
+    [[ -n "${process_executable}" && "${process_executable}" == "${expected_executable}" ]] || restart_required=true
+  fi
+  install_service
+  enable_service
+  if "${NO_START}"; then
+    verify_service false
+  elif "${active_before}"; then
+    if "${restart_required}"; then
+      run systemctl --user restart "${SERVICE_UNIT}" || die 'SteamShine repair could not restart the stale service process.' "${EXIT_SERVICE}"
+    fi
+    verify_service true
+  else
+    run systemctl --user start "${SERVICE_UNIT}" || die 'SteamShine repair could not start the service.' "${EXIT_SERVICE}"
+    verify_service true
+  fi
+  say 'SteamShine autostart was repaired'
+}
 uninstall() {
   if "${PURGE}" && "${NON_INTERACTIVE}" && ! "${ASSUME_YES}"; then die '--purge in non-interactive mode requires --yes.' "$EXIT_USAGE"; fi
-  "${NO_SERVICE}" || stop || true
-  run rm -f "$(service_file)" "${PREFIX}/bin/steamshine" "${PREFIX}/bin/steamshine-input-visualizer"
+  if ! "${NO_SERVICE}"; then
+    run systemctl --user disable --now "${SERVICE_UNIT}" || true
+    run rm -f "$(service_file)" "$(service_wants_link)"
+    run systemctl --user daemon-reload || true
+    run systemctl --user reset-failed "${SERVICE_UNIT}" || true
+  fi
+  run rm -f "${PREFIX}/bin/steamshine" "${PREFIX}/bin/steamshine-input-visualizer"
   run rm -rf -- "${PREFIX}/share/steamshine" "${HOME}/.cache/steamshine" "${BUILD_DIR}" "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/steamshine"
-  "${NO_SERVICE}" || run systemctl --user daemon-reload || true
   if "${PURGE}"; then run rm -rf -- "${HOME}/.config/steamshine" "${STATE_DIR}"; fi
   if "${REMOVE_DEPENDENCIES}"; then say 'Dependencies are intentionally not removed automatically; inspect installed-packages.txt and remove only packages not used elsewhere.'; fi
 }
@@ -324,5 +684,5 @@ menu() { while true; do cat <<'EOF'
 6) Start  7) Stop  8) Status  9) Logs  10) Repair  11) Update  12) Uninstall  13) Purge  0) Exit
 EOF
 read -r -p '> ' choice; case "$choice" in 1) check;; 2) install_packages;; 3) build;; 4) configure;; 5) bootstrap;; 6) start;; 7) stop;; 8) status;; 9) logs;; 10) repair;; 11) update;; 12) uninstall;; 13) PURGE=true; uninstall;; 0) return;; *) say 'Invalid selection';; esac; done; }
-main() { require_bash; parse "$@"; if [[ -z "${COMMAND}" ]]; then [[ -t 0 && -t 1 ]] || { usage; exit "$EXIT_USAGE"; }; menu; return; fi; case "${COMMAND}" in menu) menu;; check) check;; compatibility-check) compatibility_check;; vaapi-driver-status) vaapi_amd_driver_status;; install) install;; build) build;; configure) configure;; start) start;; stop) stop;; restart) stop; start;; status) status;; logs) logs;; diagnose) diagnose;; update) update;; repair) repair;; uninstall) uninstall;; bootstrap) bootstrap;; rollback) rollback;; hardware-test) hardware_test;; *) usage; exit "$EXIT_USAGE";; esac; }
+main() { require_bash; parse "$@"; if [[ -z "${COMMAND}" ]]; then [[ -t 0 && -t 1 ]] || { usage; exit "$EXIT_USAGE"; }; menu; return; fi; case "${COMMAND}" in menu) menu;; check) check;; compatibility-check) compatibility_check;; vaapi-driver-status) vaapi_amd_driver_status;; install) install;; build) build;; configure) configure;; start) start;; stop) stop;; restart) restart;; status) status;; logs) logs;; diagnose) diagnose;; autostart-status) autostart_status;; update) update;; repair) repair;; uninstall) uninstall;; bootstrap) bootstrap;; rollback) rollback;; hardware-test) hardware_test;; *) usage; exit "$EXIT_USAGE";; esac; }
 main "$@"
