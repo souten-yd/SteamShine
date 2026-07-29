@@ -2,7 +2,10 @@
 
 - Status: approved detailed design
 - Parent roadmap: [`PROJECT_ROADMAP.md`](./PROJECT_ROADMAP.md)
-- Baseline: `master` after PR #8
+- Baseline `master` / PR #12 merge:
+  `8a946f1e6f3b6540b5d75bc258a2a1e7c6d1927a`.
+- PR #12 validated head: `c0d5d61657a3895b586892d10756a7d89715af23`;
+  successful SteamOS Runtime Build run `30459891199`.
 - Scope: Moonlight/Artemis request handling, display selection, HDR, codec policy, frame pacing, adaptive bitrate, and observability
 
 ## 1. Design principle
@@ -39,6 +42,28 @@ SteamShine adds a canonical policy and diagnostics layer around this pipeline. I
 | Queue/latency diagnostics | merged bounded input/video/network pipeline |
 | Web status | `/api/steamshine/v1/` facade and existing status snapshots |
 
+Current implementation classification:
+
+| Capability | Current state at the validated PR #12 head |
+| --- | --- |
+| NVHTTP width/height/integer FPS/HDR/client/app request | Implemented |
+| RTSP viewport/FPS/FPS×100/bitrate/codec/dynamic-range parsing | Implemented |
+| Physical, attached stock, retained owned, new owned route selection | Implemented; hardware acceptance differs by route |
+| Owned width/height/FPS normalization and Gamescope arguments | Implemented for integer 640–7680, 480–4320, and 30–240 |
+| Owned `--hdr-enabled` request | Implemented; end-to-end HDR acceptance pending |
+| PipeWire Gamescope `requested_size` | Implemented |
+| One-buffer latest-frame-wins DMA-BUF handoff | Implemented |
+| Same-GPU producer/capture/Vulkan validation | Implemented |
+| DMA-BUF lease and Vulkan completion-fence lifetime | Implemented |
+| Vulkan fit/letterbox and cursor composition | Implemented; canonical content rectangle and full input acceptance pending |
+| H.264/HEVC/AV1 advertisement and encoder open probe | Implemented |
+| Vulkan VBR `rc_mode=4` and `rc_min_rate=0` | Implemented as startup configuration; runtime update absent |
+| 10-bit RGB import and P010 encoder input components | Implemented; SteamOS HDR transaction acceptance pending |
+| GameStream HDR control signaling | Inherited and implemented; source-to-client consistency gate pending |
+| Web status and final session diagnostics JSON | Implemented for existing counters; canonical four-stage snapshot absent |
+| Canonical requested/selected/active/observed ownership | Not implemented |
+| Adaptive bitrate and per-client profile | Not implemented |
+
 Before introducing a new type or subsystem, search these integration points and document why they cannot be extended.
 
 ## 3. Canonical stream state
@@ -66,10 +91,15 @@ Never overwrite requested values with selected values. A fallback must remain vi
 ### 3.2 Geometry and refresh
 
 ```cpp
+struct rational_rate_t {
+  uint32_t numerator {0};
+  uint32_t denominator {1};
+};
+
 struct stream_geometry_t {
   uint32_t width {0};
   uint32_t height {0};
-  uint32_t refresh_millihz {0};
+  rational_rate_t frame_rate;
 };
 ```
 
@@ -118,7 +148,10 @@ enum class stream_codec_e {
 struct bitrate_envelope_t {
   uint64_t minimum_bps {0};
   uint64_t initial_bps {0};
+  uint64_t target_bps {0};
   uint64_t maximum_bps {0};
+  uint64_t peak_bps {0};
+  uint64_t vbv_buffer_bits {0};
 };
 
 struct encoder_selection_t {
@@ -128,6 +161,7 @@ struct encoder_selection_t {
   bitrate_envelope_t bitrate;
   std::string backend;
   std::string render_node;
+  bool runtime_rate_update_supported {false};
   std::string selection_reason;
 };
 ```
@@ -137,36 +171,29 @@ The active encoder must report the opened codec/profile/bit depth and whether ru
 ### 3.5 Full snapshot
 
 ```cpp
+struct stream_request_t {
+  stream_geometry_t geometry;
+  uint64_t client_bitrate_ceiling_bps {0};
+  uint32_t client_codec_mask {0};
+  bool hdr_requested {false};
+  std::string client_id;
+  int application_id {0};
+};
+
 struct stream_negotiation_snapshot_t {
   uint64_t generation {0};
-  std::string paired_client_id;
-  std::string capability_signature;
-
-  stream_geometry_t requested_geometry;
-  stream_geometry_t selected_canvas;
-  stream_geometry_t selected_encode;
-  stream_geometry_t active_source;
-  stream_geometry_t active_encode;
-
-  stream_color_state_t requested_color;
-  stream_color_state_t selected_color;
-  stream_color_state_t active_color;
-
-  std::vector<stream_codec_e> client_codecs;
-  encoder_selection_t selected_encoder;
-  encoder_selection_t active_encoder;
-
-  session_origin_e source_origin;
-  fit_mode_e fit_mode;
-  content_rectangle_t visible_content;
-
-  uint64_t client_bitrate_ceiling_bps {0};
-  uint64_t administrator_bitrate_ceiling_bps {0};
+  stream_request_t requested;
+  stream_selection_t selected;
+  stream_active_t active;
+  stream_observed_t observed;
   std::vector<std::string> fallback_reasons;
 };
 ```
 
-Prefer adding this snapshot to existing session/status ownership rather than creating another global manager.
+These are conceptual shapes, not an instruction to duplicate existing enums or
+session types. Add the minimum fields to existing launch/stream/status ownership.
+Prefer adding this snapshot to existing session ownership rather than creating
+another global manager.
 
 ## 4. Request ingestion
 
@@ -183,7 +210,24 @@ Codex must first trace all current launch and RTSP fields that contribute to:
 - client unique ID;
 - client display mode or SOPS flags.
 
-Record the exact parser location and units in the PR description. Do not assume that every Moonlight implementation sends identical optional fields.
+The current trace is:
+
+| Value | Current parser and units |
+| --- | --- |
+| Launch width/height/FPS | `nvhttp.cpp::make_launch_session()`, `mode=WIDTHxHEIGHTxFPS`, pixels and integer FPS |
+| HDR request | `nvhttp.cpp::make_launch_session()`, `hdrMode`, boolean intent |
+| Client ID / app ID | `nvhttp.cpp::make_launch_session()`, `uniqueid` string and integer `appid` |
+| Stream width/height | `rtsp.cpp::cmd_announce()`, `clientViewportWd/Ht`, pixels |
+| Stream FPS | `maxFPS`, integer FPS; `clientRefreshRateX100`, hundredths of Hz when within 1% |
+| Client bitrate | `bw.maximumBitrateKbps` and optional `configuredBitrateKbps`, Kbps; the latter is adjusted for FEC/audio/overhead |
+| Selected codec | RTSP `bitStreamFormat`: 0 H.264, 1 HEVC, 2 AV1 |
+| HDR/bit depth request | RTSP `dynamicRangeMode`: 0 8-bit, 1 10-bit, plus `encoderCscMode` and chroma |
+| Host codec capability | `nvhttp.cpp` advertisement from the existing encoder probe and configured HEVC/AV1 modes |
+| Reconnect/resume | `/resume` creates a new `launch_session_t`; retained owned Gamescope is reused only when the current compatibility checks pass |
+
+The first implementation PR must re-verify this trace against its current base
+and record any client-specific optional fields. Do not assume every Moonlight or
+Artemis version sends identical values.
 
 ### 4.2 Validation
 
@@ -207,7 +251,20 @@ Additional checks:
 - GPU capability;
 - configured administrator ceiling.
 
-Odd dimensions must not be silently changed without reporting the selected dimensions and reason. Prefer a codec-specific align-up/down helper shared by all paths.
+The dimensions alone never authorize an extreme combination. Validate
+`width * height * FPS` against a probed pixel-rate budget, encoder coded extent,
+GPU capability, decoder capability, Gamescope/display capability, VRAM/buffer
+budget, and administrator ceilings. For example, 7680×4320@240 is not safe merely
+because each individual value is in range.
+
+Odd-dimension policy:
+
+- `auto`: minimally adjust to the codec and 4:2:0 alignment, preserving the
+  requested value and recording the selected value and reason;
+- `require_exact`: reject when the exact request cannot be represented.
+
+Odd dimensions must not be silently changed. Prefer a codec-specific alignment
+helper shared by all paths.
 
 ## 5. Source-aware geometry resolution
 
@@ -246,7 +303,8 @@ Use the normalized request as the canvas whenever the encoder and Gamescope supp
 Retained-session compatibility key:
 
 ```text
-width + height + refresh + HDR intent + selected GPU + source identity
+width + height + rational refresh + HDR intent + selected GPU/render node
++ source identity + capture pixel-format requirements
 ```
 
 If the key changes:
@@ -286,6 +344,11 @@ If requested encode geometry differs:
 - map touch/absolute pointer coordinates to that rectangle;
 - drop input in letterbox/pillarbox margins or clamp according to a documented policy;
 - never report that the resident canvas changed.
+
+Treat resident canvas, PipeWire producer size, selected encode size, and visible
+content rectangle as separate facts. Reuse Gamescope `requested_size` for
+producer-side downscale when supported. A request larger than the source must
+follow an explicit `upscale`, `owned fallback`, or `reject` policy.
 
 Changing or replacing the resident Game Mode session requires a separate explicit migration workflow and is outside this streaming PR.
 
@@ -387,6 +450,22 @@ Before first encoded frame, assert consistency among:
 
 On mismatch, fail or fall back before sending incorrectly signaled frames.
 
+### 7.6 External Gamescope HDR dependency
+
+SteamShine cannot declare owned/attached Gamescope HDR complete until the
+Gamescope PipeWire producer provides a consistent 10-bit transaction. Track this
+dependency separately from the SteamShine runtime PR:
+
+- `xBGR_210LE` / `XBGR2101010` DMA-BUF export;
+- BT.2020 primaries;
+- SMPTE ST 2084/PQ transfer;
+- HDR LUT and paint-path PQ EOTF consistency;
+- HDR state-change renegotiation;
+- compatible modifiers and same-GPU DMA-BUF import.
+
+Do not mix an unrelated Gamescope patch or Artifact into a SteamShine runtime PR.
+Never accept a washed-out hybrid stream where pixels and signaling disagree.
+
 ## 8. Codec policy
 
 ### 8.1 Existing encoders are authoritative
@@ -420,6 +499,11 @@ H.264 > HEVC > AV1
 
 The selected order depends on the goal: quality/efficiency versus maximum compatibility.
 
+Supported policy values are `auto`, `h264`, `hevc`, and `av1`. A manual codec
+uses either strict rejection or explicitly enabled fallback; it never silently
+switches codecs. Candidate profiles are taken from the existing protocol,
+FFmpeg, and backend probe names rather than invented duplicate enums.
+
 ### 8.3 AV1
 
 AV1 is preferred for high compression only when:
@@ -445,6 +529,11 @@ This avoids decoder resets and repeated encoder recreation.
 
 ## 9. Bitrate envelope
 
+Encoder VBR and Adaptive Bitrate are distinct. VBR varies frame output according
+to scene complexity within the configured envelope. Adaptive Bitrate changes the
+target/maximum envelope based on network observations. SteamShine already has a
+Vulkan startup VBR path for `vk_rc_mode=4`; it does not yet have runtime updates.
+
 ### 9.1 Inputs
 
 ```text
@@ -460,6 +549,9 @@ historical network-class ceiling
 effective_max = min(all applicable ceilings);
 initial = clamp(profile_or_model_start, minimum, effective_max);
 ```
+
+Applicable ceilings include client request, administrator policy, encoder,
+codec/pixel-rate, profile, and learned network class.
 
 For an unknown custom request, derive the initial estimate from pixel rate, codec efficiency class, HDR/bit depth, and a conservative network class. Clamp it; never trust an unbounded client value.
 
@@ -527,6 +619,16 @@ Probe whether the active encoder can update rate control without recreation.
 - Unsupported: keep the current encoder stable and save a learned next-session start value.
 - Failed update: retain the previous target and report the failure; do not loop on recreation.
 
+The existing encoder abstraction should expose behavior equivalent to:
+
+```cpp
+bool supports_runtime_bitrate_update();
+rate_update_result_t apply_bitrate_envelope(const bitrate_envelope_t &envelope);
+```
+
+Apply supported changes at a frame boundary and record requested values, applied
+values, and the backend/driver result.
+
 ## 11. Quality and processing improvements
 
 Improvements are accepted only when they do not violate latency and stability budgets.
@@ -557,29 +659,26 @@ SteamShine is the primary UI. The upstream Sunshine UI remains the backup.
 
 Add one Stream Negotiation page or section using the existing facade.
 
-Display:
+Display four explicit sections:
 
-- client ID/name;
-- requested geometry/FPS/HDR/bitrate;
-- selected source and canvas;
-- selected encode geometry/FPS;
-- active capture/encoder state;
-- codec/profile/bit depth/chroma/color space;
-- HDR request/selection/active state;
-- bitrate envelope, current target, actual rate;
-- congestion state and last decision reason;
-- queue depths and ages;
-- p50/p95/p99 latency;
-- fallback reasons;
-- Artifact commit and service launch mode.
+- Requested: client ID/name, geometry/FPS, bitrate ceiling, codec capabilities,
+  and HDR request.
+- Selected: source origin, canvas/capture/encode sizes, fit policy, content
+  rectangle, codec/profile/bit depth, HDR selection, bitrate envelope, and
+  fallback reasons.
+- Active: actual source geometry, PipeWire format, encoder/backend,
+  codec/profile/color metadata, and runtime rate-update support.
+- Observed: source/encode FPS, duplicate/drop counters, target/actual bitrate,
+  congestion state, loss/RTT, queue age/depth, and latency percentiles.
 
 Controls:
 
-- automatic/custom geometry policy;
-- FPS ceiling;
+- geometry `exact/fit/virtual fallback`;
+- FPS ceiling `auto/custom`;
 - HDR `off/auto/require`;
 - codec `auto/H.264/HEVC/AV1` with validation;
-- administrator bitrate ceiling;
+- bitrate `automatic/custom ceiling`;
+- quality `low-latency/balanced/quality` using existing encoder settings;
 - quality/latency preset implemented as existing setting values, not a parallel encoder configuration;
 - reset learned client/network profile.
 
@@ -668,26 +767,56 @@ For every run record:
 - SSD writes;
 - reconnect and cleanup.
 
+Acceptance matrix:
+
+| Dimension | Required cases |
+| --- | --- |
+| Geometry | 1280×720, 1920×1080, 2560×1440, 2560×1600, 3040×1904, 3440×1440, 3840×2160, portrait/custom aspect |
+| FPS | 30, 59.94, 60, 90, 120, 144, 165, 240 |
+| Codec/color | H.264 SDR 8-bit, HEVC Main SDR, HEVC Main10 SDR, AV1 Main 8-bit SDR, HEVC Main10 HDR, AV1 Main10 HDR |
+| Source | `owned_private`, `attached_existing`, physical KWin |
+| Network | Ethernet, 5 GHz Wi-Fi, 6 GHz Wi-Fi where available, controlled loss/RTT/bandwidth reduction and recovery |
+
+During continuous motion, observed source FPS must be at least 90% of the lesser
+of actual presented source FPS and selected capture FPS. Observed encode FPS must
+be at least 90% of selected encode FPS. First frame must arrive within one second;
+queues must not grow long-term; deterministic input must appear within one or two
+frames; HDR signaling must not be false or washed out; no AMDGPU fault/reset or
+unexpected service restart is allowed. Every result names the matching Artifact
+and `BUILD_INFO.json`; unavailable cases are `not tested`.
+
 ## 15. Failure and rollback
 
-Feature flags must permit returning to the verified baseline:
+Rollback must first use existing configuration keys where they already express
+the required behavior:
 
 ```ini
 steamos_session_source = owned_private
 steamos_local_presentation = off
-steamshine_hdr_policy = off
-steamshine_codec_policy = auto
-steamshine_adaptive_bitrate = false
+hevc_mode = 1
+av1_mode = 1
+vk_rc_mode = 2
+max_bitrate = <verified fixed ceiling in Kbps>
 ```
 
-Exact key names may be adjusted to existing configuration conventions; do not create duplicate synonymous keys.
+`hevc_mode = 1` plus `av1_mode = 1` leaves the existing H.264 8-bit path as the
+advertised recovery codec, which also prevents a Main10/HDR selection.
+`vk_rc_mode = 2` is the existing Vulkan CBR setting. PR D and PR E must add one
+HDR policy and one Adaptive Bitrate enable/disable control only if no existing
+key can represent their semantics; their exact names must follow the current
+configuration convention and must not duplicate `dd_hdr_option`, `hevc_mode`,
+`av1_mode`, `vk_rc_mode`, or `max_bitrate`. `dd_hdr_option` is not a SteamOS
+force-SDR switch: its documented implementation is display-device preparation
+and currently applies to Windows.
 
 Fallback order:
 
 1. disable adaptive bitrate;
-2. force H.264 SDR;
-3. use the owned private session;
-4. install the last verified Artifact;
-5. use the upstream Sunshine UI backup to recover configuration.
+2. return to a fixed VBR/CBR target;
+3. force H.264 SDR;
+4. set HDR off;
+5. use owned-private fixed 1080p60;
+6. install the last verified Artifact;
+7. use the upstream Sunshine UI backup to recover configuration.
 
 Ownership and safety validation must never be weakened as a rollback mechanism.
