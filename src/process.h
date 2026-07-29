@@ -35,6 +35,24 @@
 #define DEFAULT_APP_IMAGE_PATH SUNSHINE_ASSETS_DIR "/box.png"
 
 namespace proc {
+  inline constexpr int virtual_display_fallback_exit_code {75};  ///< Prep-command protocol requesting an owned virtual-display retry.
+
+  /**
+   * @brief Decide whether a prep-command result requests an owned virtual-display retry.
+   *
+   * @param exit_code Prep-command exit code.
+   * @param feature_enabled Whether SteamOS virtual display support is enabled.
+   * @param mode Configured virtual-display mode.
+   * @param origin Display origin used for the failed preparation attempt.
+   * @return True only for the explicit physical-to-owned fallback protocol in automatic mode.
+   */
+  bool should_retry_owned_virtual_display(
+    int exit_code,
+    bool feature_enabled,
+    steamos_virtual_session::virtual_display_mode_e mode,
+    steamos_virtual_session::session_origin_e origin
+  );
+
   /**
    * @brief Decide whether an application needs the owned private Desktop surface.
    *

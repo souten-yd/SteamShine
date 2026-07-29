@@ -30,6 +30,7 @@ extern "C" {
 #include "input.h"
 #include "logging.h"
 #include "platform/common.h"
+#include "steamos_virtual_session_core.h"
 #include "thread_pool.h"
 #include "utility.h"
 
@@ -634,8 +635,24 @@ namespace input {
     auto offsetX = touch_port.client_offsetX;
     auto offsetY = touch_port.client_offsetY;
 
-    x = std::clamp(x, offsetX, (size.first * scalarX) - offsetX);
-    y = std::clamp(y, offsetY, (size.second * scalarY) - offsetY);
+    const steamos_virtual_session::content_rectangle_t content_rectangle {
+      static_cast<int>(offsetX),
+      static_cast<int>(offsetY),
+      static_cast<int>(touch_port.width - (2.0f * offsetX)),
+      static_cast<int>(touch_port.height - (2.0f * offsetY)),
+    };
+    const auto content_coordinate {steamos_virtual_session::map_content_coordinate(
+      x,
+      y,
+      content_rectangle,
+      touch_port.reject_client_margins ? steamos_virtual_session::margin_input_policy_e::reject : steamos_virtual_session::margin_input_policy_e::clamp
+    )};
+    if (!content_coordinate.accepted) {
+      BOOST_LOG(verbose) << "Ignoring absolute input in a fitted-output margin"sv;
+      return std::nullopt;
+    }
+    x = offsetX + static_cast<float>(content_coordinate.x * content_rectangle.width);
+    y = offsetY + static_cast<float>(content_coordinate.y * content_rectangle.height);
 
     /*
     x and y here below have the coordinates of the surface of the streaming resolution,

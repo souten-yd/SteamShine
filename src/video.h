@@ -9,6 +9,8 @@
 #include <string>
 
 // local includes
+#include "adaptive_bitrate.h"
+#include "codec_policy.h"
 #include "input.h"
 #include "latency_diagnostics.h"
 #include "platform/common.h"
@@ -52,7 +54,32 @@ namespace video {
     int dynamicRange;  ///< Encoding color depth: 0 = 8-bit, 1 = 10-bit.
     int chromaSamplingType;  ///< Chroma sampling type: 0 = 4:2:0, 1 = 4:4:4.
     int enableIntraRefresh;  ///< Intra refresh setting: 0 = disabled, 1 = enabled.
+    int requestedDynamicRange {0};  ///< Original client dynamic-range value retained across policy fallback.
+    bool hdrRequested {false};  ///< Original launch-session HDR intent retained separately from bit depth.
   };
+
+  /**
+   * @brief Bounded diagnostic state for the most recently negotiated HDR stream.
+   */
+  struct hdr_status_t {
+    bool requested;  ///< Whether the launch request asked for HDR.
+    bool client_capable;  ///< Whether RTSP advertised a 10-bit HDR request.
+    bool selected;  ///< Whether policy selected HDR after all known gates.
+    bool active;  ///< Whether an opened encoder is using HDR colorimetry.
+    unsigned bit_depth;  ///< Active or selected encoded bit depth.
+    std::string primaries;  ///< Active color primaries name.
+    std::string transfer;  ///< Active transfer-function name.
+    std::string matrix;  ///< Active matrix-coefficients name.
+    std::string range;  ///< Active encoded range name.
+    std::string reason;  ///< Stable selection, fallback, or rejection reason.
+  };
+
+  /**
+   * @brief Return the bounded HDR negotiation status.
+   *
+   * @return Copy of the most recently recorded HDR status.
+   */
+  hdr_status_t hdr_status_snapshot();
 
   /**
    * @brief Map an FFmpeg hardware device type to Sunshine's memory type.
@@ -146,6 +173,19 @@ namespace video {
     std::uint64_t network_queue_frames_max {0};  ///< Greatest encoded-frame queue depth.
     std::uint64_t socket_outq_bytes {0};  ///< Latest kernel video socket output-queue size.
     std::uint64_t socket_outq_bytes_max {0};  ///< Greatest kernel video socket output-queue size.
+    bool adaptive_bitrate_enabled {false};  ///< Whether bounded adaptive decisions are enabled.
+    adaptive_bitrate::bitrate_envelope_t bitrate;  ///< Negotiated and current video-only VBR envelope.
+    adaptive_bitrate::congestion_state_e congestion_state {adaptive_bitrate::congestion_state_e::unknown};  ///< Latest completed network decision state.
+    std::string bitrate_reason;  ///< Stable reason for the most recent controller or backend result.
+    std::uint32_t bitrate_active_kbps {0};  ///< Target confirmed active in the current encoder.
+    std::uint32_t bitrate_learned_next_kbps {0};  ///< Safe starting target retained for the next session.
+    double actual_video_bitrate_kbps {0.0};  ///< Average encoded video payload rate observed this session.
+    bool runtime_bitrate_update_supported {false};  ///< Whether the active encoder advertises frame-boundary updates.
+    std::uint64_t bitrate_feedback_samples {0};  ///< Client loss reports observed without unbounded history.
+    std::uint64_t bitrate_lost_packets {0};  ///< Client-reported packet loss accumulated for the final report.
+    std::uint64_t bitrate_updates_applied {0};  ///< Runtime target changes accepted by the encoder.
+    std::uint64_t bitrate_updates_unsupported {0};  ///< Target changes retained for a future session.
+    std::uint64_t bitrate_updates_failed {0};  ///< Advertised runtime updates rejected by the backend.
     std::uint64_t idr_requests {0};  ///< Accepted external and reconnect IDR requests.
     std::uint64_t idr_emitted {0};  ///< IDR frames emitted by the encoder.
     std::uint64_t idr_reason_client_request {0};  ///< Emitted IDRs attributed to a client request.
@@ -276,6 +316,26 @@ namespace video {
    * @param bytes Unsent bytes reported by the socket.
    */
   void record_socket_outq(std::uint64_t bytes);
+
+  /**
+   * @brief Initialize one bounded video bitrate envelope for a stream.
+   *
+   * @param config Negotiated client video configuration.
+   */
+  void initialize_adaptive_bitrate(const config_t &config);
+
+  /**
+   * @brief Feed one client loss-report interval into the bounded controller.
+   *
+   * Queue and socket pressure are read from the existing fixed-memory
+   * diagnostics. A changed target is consumed by the encoder at its next frame
+   * boundary.
+   *
+   * @param lost_packets Client-reported packets lost in the interval.
+   * @param elapsed_ms Duration represented by the report.
+   * @param rtt_ms Optional round-trip latency, or zero when unavailable.
+   */
+  void record_bitrate_feedback(std::uint32_t lost_packets, std::uint32_t elapsed_ms, std::uint32_t rtt_ms = 0);
 
   /**
    * @brief Record an accepted IDR request, rate-limiting duplicate client requests.
@@ -571,6 +631,21 @@ namespace video {
      * @return True when recovery forced a new IDR instead of invalidating references in place.
      */
     virtual bool invalidate_ref_frames(int64_t first_frame, int64_t last_frame) = 0;
+
+    /**
+     * @brief Report whether this encoder can change its target without recreation.
+     *
+     * @return True only when the backend advertises safe parameter changes.
+     */
+    virtual bool supports_runtime_bitrate_update() const = 0;
+
+    /**
+     * @brief Apply a bounded video target at a frame boundary.
+     *
+     * @param target_kbps Requested video bitrate in kilobits per second.
+     * @return Typed backend result; callers never recreate the encoder from it.
+     */
+    virtual adaptive_bitrate::backend_update_e apply_bitrate_target(std::uint32_t target_kbps) = 0;
   };
 
   // encoders
@@ -804,6 +879,43 @@ namespace video {
   extern int active_av1_mode;
   extern bool last_encoder_probe_supported_ref_frames_invalidation;
   extern std::array<bool, 3> last_encoder_probe_supported_yuv444_for_codec;  // 0 - H.264, 1 - HEVC, 2 - AV1
+
+  /**
+   * @brief Observable codec decision and active encoder state.
+   */
+  struct codec_status_t {
+    std::string requested {""};  ///< Codec selected by the RTSP client.
+    std::string selected {""};  ///< Codec accepted and fixed before stream startup.
+    std::string active {""};  ///< Codec whose encoder session opened successfully.
+    std::string profile {""};  ///< Existing FFmpeg/protocol profile name.
+    int bit_depth {0};  ///< Selected SDR bit depth.
+    std::string backend {""};  ///< Selected existing encoder backend name.
+    bool hardware {false};  ///< Whether the selected backend is hardware accelerated.
+    std::string reason {"codec_not_requested"};  ///< Stable selection or rejection reason.
+  };
+
+  /**
+   * @brief Apply client, host-probe, and administrator codec policy.
+   *
+   * @param config RTSP video configuration selected by the client.
+   * @return Accepted fixed codec or stable rejection reason.
+   */
+  codec_policy::result_t select_codec(const config_t &config);
+
+  /**
+   * @brief Return the policy-filtered HEVC or AV1 advertisement mode.
+   *
+   * @param codec HEVC or AV1 codec to inspect.
+   * @return Existing GameStream mode value, with one meaning disabled.
+   */
+  int advertised_codec_mode(codec_policy::codec_e codec);
+
+  /**
+   * @brief Snapshot the most recent codec decision and active encoder.
+   *
+   * @return Thread-safe bounded status value.
+   */
+  codec_status_t codec_status_snapshot();
 
   /**
    * @brief Check whether encoder capability probing is currently active.

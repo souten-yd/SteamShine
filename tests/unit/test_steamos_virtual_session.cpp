@@ -288,6 +288,77 @@ TEST_F(SteamOSVirtualSessionTest, OffModePreservesNormalLaunch) {
 }
 
 /**
+ * @brief Verify physical-mode fallback forces one owned canvas only when explicitly requested.
+ */
+TEST_F(SteamOSVirtualSessionTest, PhysicalModeFallbackCreatesOwnedCanvas) {
+  config::steamos_virtual_display.mode = steamos_virtual_session::virtual_display_mode_e::auto_detect;
+  rtsp_stream::launch_session_t launch {};
+  std::string error;
+
+  ASSERT_TRUE(steamos_virtual_session::prepare(launch, error, true)) << error;
+  const auto snapshot {steamos_virtual_session::status_snapshot()};
+  EXPECT_EQ(snapshot.origin, steamos_virtual_session::session_origin_e::owned_private);
+  EXPECT_EQ(snapshot.selection_reason, "physical_mode_virtual_fallback");
+}
+
+/**
+ * @brief Verify malformed or unsafe partial geometry fails closed with a stable reason.
+ */
+TEST_F(SteamOSVirtualSessionTest, RejectsPartialClientGeometry) {
+  rtsp_stream::launch_session_t launch {};
+  launch.width = 1920;
+  std::string error;
+
+  EXPECT_FALSE(steamos_virtual_session::prepare(launch, error));
+  EXPECT_NE(error.find("invalid_nonpositive_geometry"), std::string::npos);
+  const auto snapshot {steamos_virtual_session::status_snapshot()};
+  EXPECT_EQ(snapshot.geometry_reason, "invalid_nonpositive_geometry");
+  EXPECT_EQ(snapshot.requested_width, 1920);
+  EXPECT_EQ(snapshot.requested_height, 0);
+}
+
+/**
+ * @brief Verify automatic alignment preserves the original request in diagnostics.
+ */
+TEST_F(SteamOSVirtualSessionTest, ReportsAlignedAndRequestedGeometrySeparately) {
+  rtsp_stream::launch_session_t launch {};
+  launch.width = 1921;
+  launch.height = 1081;
+  launch.fps = 75;
+  std::string error;
+
+  ASSERT_TRUE(steamos_virtual_session::prepare(launch, error)) << error;
+  const auto snapshot {steamos_virtual_session::status_snapshot()};
+  EXPECT_EQ(snapshot.requested_width, 1921);
+  EXPECT_EQ(snapshot.requested_height, 1081);
+  EXPECT_EQ(snapshot.width, 1922);
+  EXPECT_EQ(snapshot.height, 1082);
+  EXPECT_EQ(snapshot.refresh.numerator, 75U);
+  EXPECT_EQ(snapshot.geometry_reason, "geometry_minimally_aligned");
+}
+
+/**
+ * @brief Verify producer geometry records the aspect-preserving encoded content rectangle.
+ */
+TEST_F(SteamOSVirtualSessionTest, RecordsCaptureGeometryAndContentRectangle) {
+  rtsp_stream::launch_session_t launch {};
+  launch.width = 1920;
+  launch.height = 1080;
+  launch.fps = 60;
+  std::string error;
+
+  ASSERT_TRUE(steamos_virtual_session::prepare(launch, error)) << error;
+  steamos_virtual_session::record_capture_geometry(3440, 1440);
+  const auto snapshot {steamos_virtual_session::status_snapshot()};
+  EXPECT_EQ(snapshot.capture_width, 3440);
+  EXPECT_EQ(snapshot.capture_height, 1440);
+  EXPECT_EQ(snapshot.content_rectangle.x, 0);
+  EXPECT_EQ(snapshot.content_rectangle.y, 138);
+  EXPECT_EQ(snapshot.content_rectangle.width, 1920);
+  EXPECT_EQ(snapshot.content_rectangle.height, 802);
+}
+
+/**
  * @brief Verify an explicit resident-Gamescope policy fails closed without spawning one.
  */
 TEST_F(SteamOSVirtualSessionTest, ExistingGamescopePolicyDoesNotCreateOwnedFallback) {
@@ -507,6 +578,33 @@ TEST_F(SteamOSVirtualSessionTest, ReusesCompatibleOwnedDisplayOnReconnect) {
   EXPECT_EQ(reused.selection_reason, "retained_owned_private");
   EXPECT_EQ(reused.state, steamos_virtual_session::state_e::Ready);
   EXPECT_EQ(reused.display_endpoint.generation, retained_generation);
+}
+
+/**
+ * @brief Verify a changed canvas request replaces rather than mutates a retained owned display.
+ */
+TEST_F(SteamOSVirtualSessionTest, ReplacesRetainedOwnedDisplayWhenGeometryChanges) {
+  rtsp_stream::launch_session_t launch {};
+  launch.width = 1920;
+  launch.height = 1080;
+  launch.fps = 60;
+  std::string error;
+
+  ASSERT_TRUE(steamos_virtual_session::prepare(launch, error)) << error;
+  steamos_virtual_session::mark_capture_ready();
+  steamos_virtual_session::mark_streaming();
+  steamos_virtual_session::mark_streaming_disconnected();
+  const auto retained {steamos_virtual_session::status_snapshot()};
+
+  launch.width = 2560;
+  launch.height = 1600;
+  ASSERT_TRUE(steamos_virtual_session::prepare(launch, error)) << error;
+  const auto replaced {steamos_virtual_session::status_snapshot()};
+  EXPECT_NE(replaced.gamescope_pid, retained.gamescope_pid);
+  EXPECT_GT(replaced.display_endpoint.generation, retained.display_endpoint.generation);
+  EXPECT_EQ(replaced.width, 2560);
+  EXPECT_EQ(replaced.height, 1600);
+  EXPECT_EQ(replaced.selection_reason, "new_owned_private");
 }
 
 /**

@@ -84,6 +84,7 @@ function icon(name, extraClass = '') {
 
 const NAV = [
   { id: 'monitor', label: 'Monitor', icon: 'activity' },
+  { id: 'stream', label: 'Stream', icon: 'sliders' },
   { id: 'applications', label: 'Apps', icon: 'grid' },
   { id: 'gpu', label: 'GPU', icon: 'cpu' },
   { id: 'settings', label: 'Settings', icon: 'sliders' },
@@ -215,6 +216,7 @@ async function renderAuthenticated(session) {
     config: renderVirtualDisplayConfig,
     clients: renderClients,
     monitor: renderMonitor,
+    stream: renderStreamNegotiation,
     applications: renderApplications,
     settings: renderSettings,
     gpu: renderGpu,
@@ -272,6 +274,95 @@ function formatUptime(seconds) {
   const h = Math.floor((seconds % 86400) / 3600);
   const m = Math.floor((seconds % 3600) / 60);
   return d > 0 ? `${d}d ${h}h` : h > 0 ? `${h}h ${m}m` : `${m}m`;
+}
+
+/** @brief Format a bounded negotiation value for a compact status row. */
+function streamValue(value) {
+  if (value == null || value === '') return '—';
+  if (Array.isArray(value)) return value.length ? value.join(', ') : 'None';
+  if (typeof value === 'object') return Object.entries(value).map(([key, item]) => `${key}: ${item}`).join(', ');
+  return String(value);
+}
+
+/** @brief Render one requested/selected/active/observed negotiation stage. */
+function streamStage(title, values) {
+  const rows = Object.entries(values || {}).map(([key, value]) => `<div class="row"><span class="k">${escapeHtml(key.replaceAll('_', ' '))}</span><span class="v num">${escapeHtml(streamValue(value))}</span></div>`).join('');
+  return `<div class="section stream-stage"><h3>${escapeHtml(title)}</h3><div class="rows">${rows || '<div class="empty">Unavailable</div>'}</div></div>`;
+}
+
+/** @brief Render live four-stage negotiation state and bounded client/network profiles. */
+async function renderStreamNegotiation() {
+  shell(`<div class="page-header"><div><h2>Stream negotiation</h2><p>Requested, selected, active, and observed state. Live data refreshes every 2 seconds without owning the media path.</p></div><a class="btn-ghost btn-sm" href="/sunshine/config">Sunshine fallback settings</a></div>
+    <div id="stream-state" class="grid-2"><div class="empty">Loading stream state…</div></div>
+    <div class="section stack"><div><h3>Client / network profile</h3><p class="field-hint">Profiles match the paired client ID, network class, and current capability signature exactly. A changed capability signature always wins over saved preferences.</p></div>
+      <form id="stream-profile-form" class="stack">
+        <div class="form-grid">
+          <label>Client ID<input name="client_id" maxlength="128" required placeholder="paired-client-id"></label>
+          <label>Network class<input name="network_class" maxlength="32" required placeholder="lan, wifi-5ghz, tailscale"></label>
+          <label>Capability signature<input name="capability_signature" maxlength="256" required placeholder="h264-hevc-av1-main10"></label>
+          <label>Geometry policy<select name="geometry_policy"><option value="exact">Exact</option><option value="fit" selected>Fit</option><option value="virtual_fallback">Virtual fallback</option></select></label>
+          <label>FPS policy<select name="fps_policy"><option value="auto">Automatic</option><option value="custom">Custom ceiling</option></select></label>
+          <label>FPS ceiling<input name="fps_ceiling" type="number" min="0" max="240" value="0"></label>
+          <label>Codec policy<select name="codec_policy"><option value="auto">Automatic</option><option value="h264">H.264</option><option value="hevc">HEVC</option><option value="av1">AV1</option></select></label>
+          <label>HDR policy<select name="hdr_policy"><option value="off">Off</option><option value="auto" selected>Automatic</option><option value="require">Require</option></select></label>
+          <label>Bitrate ceiling (Kbps)<input name="bitrate_ceiling_kbps" type="number" min="0" max="200000" value="0"></label>
+          <label>Quality preset<select name="quality_preset"><option value="low_latency">Low latency</option><option value="balanced" selected>Balanced</option><option value="quality">Quality</option></select></label>
+          <label>Orientation<select name="orientation"><option value="auto">Automatic</option><option value="landscape">Landscape</option><option value="portrait">Portrait</option></select></label>
+          <label>Safe area (%)<input name="safe_area_percent" type="number" min="0" max="25" value="0"></label>
+          <label><span>Use on next connection</span><input name="active" type="checkbox" checked></label>
+        </div>
+        <div class="btn-row"><button class="btn-primary">Save profile</button></div><div class="notice"></div>
+      </form>
+      <div id="stream-profiles"><div class="empty">Loading profiles…</div></div>
+    </div>`, { authenticated: true, activeId: 'stream' });
+
+  const loadProfiles = async () => {
+    const profileDocument = await json(await api('/stream/profiles'));
+    const profiles = profileDocument.profiles || [];
+    const root = document.querySelector('#stream-profiles');
+    if (!root) return;
+    root.innerHTML = profiles.length ? `<table><thead><tr><th>Client / network</th><th>Policies</th><th></th></tr></thead><tbody>${profiles.map((profile) => `<tr><td><strong>${escapeHtml(profile.client_id)}</strong><br><span class="field-hint">${escapeHtml(profile.network_class)} · ${escapeHtml(profile.capability_signature)}${profile.active ? ' · next connection' : ''}</span></td><td>${escapeHtml(profile.geometry_policy)} · ${escapeHtml(profile.codec_policy)} · HDR ${escapeHtml(profile.hdr_policy)} · ${profile.bitrate_ceiling_kbps ? `${escapeHtml(profile.bitrate_ceiling_kbps)} Kbps` : 'auto bitrate'}</td><td style="text-align:right"><button class="btn-sm btn-danger" data-reset-client="${escapeHtml(profile.client_id)}" data-reset-network="${escapeHtml(profile.network_class)}">Reset</button></td></tr>`).join('')}</tbody></table>` : '<div class="empty">No learned stream profiles.</div>';
+    root.querySelectorAll('[data-reset-client]').forEach((button) => button.onclick = async () => {
+      if (!await confirmDialog({ title: 'Reset stream profile', message: `Reset ${button.dataset.resetClient} on ${button.dataset.resetNetwork}?` })) return;
+      try {
+        const result = await json(await api('/stream/profiles/reset', { method: 'POST', body: JSON.stringify({ client_id: button.dataset.resetClient, network_class: button.dataset.resetNetwork }) }));
+        toast(result.message, 'ok');
+        await loadProfiles();
+      } catch (error) { toast(error.message, 'error'); }
+    });
+  };
+
+  document.querySelector('#stream-profile-form').onsubmit = async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const data = Object.fromEntries(new FormData(form));
+    const payload = { ...data, active: form.elements.active.checked, fps_ceiling: Number(data.fps_ceiling), bitrate_ceiling_kbps: Number(data.bitrate_ceiling_kbps), safe_area_percent: Number(data.safe_area_percent), learned_start_kbps: 0 };
+    try {
+      const result = await json(await api('/stream/profiles', { method: 'POST', body: JSON.stringify(payload) }));
+      form.querySelector('.notice').textContent = result.message;
+      form.querySelector('.notice').className = 'notice ok';
+      await loadProfiles();
+    } catch (error) {
+      form.querySelector('.notice').textContent = error.message;
+      form.querySelector('.notice').className = 'notice error';
+    }
+  };
+
+  const renderState = async () => {
+    let status;
+    try { status = await json(await api('/status')); } catch (error) { return; }
+    const state = status.stream_negotiation || {};
+    const root = document.querySelector('#stream-state');
+    if (!root) return;
+    root.innerHTML = streamStage('Requested', state.requested) + streamStage('Selected', state.selected) + streamStage('Active', state.active) + streamStage('Observed', state.observed);
+    const form = document.querySelector('#stream-profile-form');
+    if (form && state.requested?.client_id && state.requested?.capability_signature) {
+      if (!form.elements.client_id.value) form.elements.client_id.value = state.requested.client_id;
+      if (!form.elements.capability_signature.value) form.elements.capability_signature.value = state.requested.capability_signature;
+    }
+  };
+  await Promise.all([loadProfiles(), renderState()]);
+  pollTimer = setInterval(renderState, 2000);
 }
 
 /** @brief Render the applications list: card grid + add/edit form + close-running control. */

@@ -168,6 +168,7 @@ namespace platf {
       steamos_virtual_session::mark_capture_lost();
       return nullptr;
     }
+    steamos_virtual_session::record_capture_geometry(display->width, display->height);
     steamos_virtual_session::mark_capture_ready();
     return display;
   }

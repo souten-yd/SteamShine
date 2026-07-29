@@ -7,6 +7,7 @@
 #include <atomic>
 #include <bitset>
 #include <list>
+#include <mutex>
 #include <thread>
 
 // lib includes
@@ -30,6 +31,7 @@ extern "C" {
 #include "nvenc/nvenc_base.h"
 #include "platform/common.h"
 #include "steamos_virtual_session.h"
+#include "stream.h"
 #include "sync.h"
 #include "video.h"
 
@@ -76,6 +78,30 @@ namespace video {
     std::atomic_uint64_t network_queue_frames_max {0};  ///< Network queue high-water mark.
     std::atomic_uint64_t socket_outq_bytes {0};  ///< Latest kernel socket output queue.
     std::atomic_uint64_t socket_outq_bytes_max {0};  ///< Kernel socket output-queue high-water mark.
+    std::atomic_bool adaptive_bitrate_enabled {false};  ///< Enables bounded controller decisions for the active stream.
+    std::atomic_uint32_t bitrate_minimum_kbps {0};  ///< Lowest active-stream target.
+    std::atomic_uint32_t bitrate_initial_kbps {0};  ///< Negotiated stream-start target.
+    std::atomic_uint32_t bitrate_target_kbps {0};  ///< Latest bounded controller target.
+    std::atomic_uint32_t bitrate_maximum_kbps {0};  ///< Effective client and administrator ceiling.
+    std::atomic_uint32_t bitrate_peak_kbps {0};  ///< Current peak-rate ceiling.
+    std::atomic_uint32_t bitrate_vbv_kbits {0};  ///< Current video buffering verifier capacity.
+    std::atomic_uint32_t bitrate_active_kbps {0};  ///< Target confirmed active in the encoder.
+    std::atomic_uint32_t bitrate_learned_next_kbps {0};  ///< Target retained for a later session.
+    std::atomic_int congestion_state {static_cast<int>(adaptive_bitrate::congestion_state_e::unknown)};  ///< Latest controller state.
+    std::atomic_bool runtime_bitrate_update_supported {false};  ///< Active encoder runtime-update capability.
+    std::atomic_uint64_t bitrate_feedback_samples {0};  ///< Loss reports supplied to the controller.
+    std::atomic_uint64_t bitrate_lost_packets {0};  ///< Total packets reported lost by the client.
+    std::atomic_uint64_t bitrate_updates_applied {0};  ///< Successful frame-boundary updates.
+    std::atomic_uint64_t bitrate_updates_unsupported {0};  ///< Updates deferred to a later session.
+    std::atomic_uint64_t bitrate_updates_failed {0};  ///< Runtime updates rejected by the backend.
+    std::atomic_uint32_t last_bitrate_update_attempt_kbps {0};  ///< Prevents per-frame retry loops.
+    std::atomic_bool bitrate_burst_event {false};  ///< Applies controller growth cooldown after IDR/reconnect.
+    std::atomic_uint64_t encoded_video_bytes {0};  ///< Encoded payload bytes used for the observed rate.
+    std::atomic_int64_t first_encoded_packet_microseconds {0};  ///< First encoded-payload enqueue time.
+    std::atomic_int64_t last_encoded_packet_microseconds {0};  ///< Latest encoded-payload enqueue time.
+    std::mutex bitrate_controller_mutex;  ///< Serializes controller state and its diagnostic reason.
+    std::unique_ptr<adaptive_bitrate::controller_t> bitrate_controller;  ///< Fixed-memory active-stream controller.
+    std::string bitrate_reason {"disabled"};  ///< Stable most-recent controller/backend reason.
     std::atomic_uint64_t idr_requests {0};  ///< Accepted IDR requests.
     std::atomic_uint64_t idr_emitted {0};  ///< Encoded IDR frames.
     std::atomic_uint64_t idr_reason_client_request {0};  ///< IDRs emitted for client requests.
@@ -89,6 +115,73 @@ namespace video {
     latency_diagnostics::fixed_ring_t<> frame_age_at_network;  ///< Fixed-memory network-age samples.
     latency_diagnostics::fixed_ring_t<> source_interarrival;  ///< Unique source-frame interarrival samples.
     latency_diagnostics::fixed_ring_t<> encode_interarrival;  ///< Encoder-submission interarrival samples.
+    std::mutex hdr_status_mutex;  ///< Protects the bounded HDR status snapshot.
+    hdr_status_t hdr_status {false, false, false, false, 8, "bt709", "bt709", "bt709", "limited", "not_negotiated"};  ///< Latest HDR selection and activation state.
+
+    /**
+     * @brief Record an HDR policy decision before encoder startup.
+     *
+     * @param config Client configuration retaining original HDR intent.
+     * @param result Deterministic policy result.
+     */
+    void record_hdr_selection(const config_t &config, const hdr_policy::result_t &result) {
+      std::lock_guard lock {hdr_status_mutex};
+      hdr_status.requested = config.hdrRequested;
+      hdr_status.client_capable = config.requestedDynamicRange == 1;
+      hdr_status.selected = result.selected;
+      hdr_status.active = false;
+      hdr_status.bit_depth = result.bit_depth;
+      hdr_status.primaries = result.selected ? "bt2020" : "bt709";
+      hdr_status.transfer = result.selected ? "smpte2084" : "bt709";
+      hdr_status.matrix = result.selected ? "bt2020_ncl" : "bt709";
+      hdr_status.range = "limited";
+      hdr_status.reason = result.reason;
+    }
+
+    /**
+     * @brief Record colorimetry from an encoder that opened successfully.
+     *
+     * @param colorspace Color state applied to the opened encoder.
+     */
+    void record_hdr_active(const sunshine_colorspace_t &colorspace) {
+      std::lock_guard lock {hdr_status_mutex};
+      hdr_status.active = colorspace_is_hdr(colorspace);
+      hdr_status.bit_depth = colorspace.bit_depth;
+      hdr_status.range = colorspace.full_range ? "full" : "limited";
+      switch (colorspace.colorspace) {
+        case colorspace_e::rec601:
+          hdr_status.primaries = "smpte170m";
+          hdr_status.transfer = "smpte170m";
+          hdr_status.matrix = "smpte170m";
+          break;
+        case colorspace_e::rec709:
+          hdr_status.primaries = "bt709";
+          hdr_status.transfer = "bt709";
+          hdr_status.matrix = "bt709";
+          break;
+        case colorspace_e::bt2020sdr:
+          hdr_status.primaries = "bt2020";
+          hdr_status.transfer = "bt2020_10";
+          hdr_status.matrix = "bt2020_ncl";
+          break;
+        case colorspace_e::bt2020:
+          hdr_status.primaries = "bt2020";
+          hdr_status.transfer = "smpte2084";
+          hdr_status.matrix = "bt2020_ncl";
+          break;
+      }
+    }
+
+    /**
+     * @brief Mark a post-open HDR consistency failure before any frame is sent.
+     *
+     * @param reason Stable runtime failure reason.
+     */
+    void record_hdr_runtime_failure(const std::string_view reason) {
+      std::lock_guard lock {hdr_status_mutex};
+      hdr_status.active = false;
+      hdr_status.reason = reason;
+    }
 
     /**
      * @brief Atomically update an unsigned high-water mark.
@@ -148,6 +241,47 @@ namespace video {
     }
 
     /**
+     * @brief Apply a pending controller target once at an encoder frame boundary.
+     *
+     * Unsupported and failed targets are consumed without retrying or recreating
+     * the encoder. Unsupported targets remain available only as a learned
+     * next-session value.
+     *
+     * @param session Active encoder session.
+     */
+    void apply_pending_bitrate_target(encode_session_t &session) {
+      if (!adaptive_bitrate_enabled.load(std::memory_order_relaxed)) {
+        return;
+      }
+      runtime_bitrate_update_supported.store(session.supports_runtime_bitrate_update(), std::memory_order_relaxed);
+      const auto requested {bitrate_target_kbps.load(std::memory_order_relaxed)};
+      if (requested == 0 || last_bitrate_update_attempt_kbps.exchange(requested, std::memory_order_relaxed) == requested) {
+        return;
+      }
+
+      const auto result {session.apply_bitrate_target(requested)};
+      const auto previous {bitrate_active_kbps.load(std::memory_order_relaxed)};
+      const auto outcome {adaptive_bitrate::resolve_backend_update(result, previous, requested)};
+      bitrate_active_kbps.store(outcome.active_kbps, std::memory_order_relaxed);
+      bitrate_learned_next_kbps.store(outcome.learned_next_kbps, std::memory_order_relaxed);
+      std::lock_guard lock {bitrate_controller_mutex};
+      switch (result) {
+        case adaptive_bitrate::backend_update_e::applied:
+          bitrate_updates_applied.fetch_add(1, std::memory_order_relaxed);
+          bitrate_reason = "backend_applied";
+          break;
+        case adaptive_bitrate::backend_update_e::unsupported:
+          bitrate_updates_unsupported.fetch_add(1, std::memory_order_relaxed);
+          bitrate_reason = "backend_unsupported_learned_next";
+          break;
+        case adaptive_bitrate::backend_update_e::failed:
+          bitrate_updates_failed.fetch_add(1, std::memory_order_relaxed);
+          bitrate_reason = "backend_update_failed";
+          break;
+      }
+    }
+
+    /**
      * @brief Check if we can allow probing for the encoders.
      * @return True if there should be no issues with the probing, false if we should prevent it.
      */
@@ -176,6 +310,11 @@ namespace video {
       return false;
     }
   }  // namespace
+
+  hdr_status_t hdr_status_snapshot() {
+    std::lock_guard lock {hdr_status_mutex};
+    return hdr_status;
+  }
 
   void reset_pipeline_diagnostics() {
     capture_queue_current.store(0, std::memory_order_relaxed);
@@ -210,6 +349,32 @@ namespace video {
     network_queue_frames_max.store(0, std::memory_order_relaxed);
     socket_outq_bytes.store(0, std::memory_order_relaxed);
     socket_outq_bytes_max.store(0, std::memory_order_relaxed);
+    adaptive_bitrate_enabled.store(false, std::memory_order_relaxed);
+    bitrate_minimum_kbps.store(0, std::memory_order_relaxed);
+    bitrate_initial_kbps.store(0, std::memory_order_relaxed);
+    bitrate_target_kbps.store(0, std::memory_order_relaxed);
+    bitrate_maximum_kbps.store(0, std::memory_order_relaxed);
+    bitrate_peak_kbps.store(0, std::memory_order_relaxed);
+    bitrate_vbv_kbits.store(0, std::memory_order_relaxed);
+    bitrate_active_kbps.store(0, std::memory_order_relaxed);
+    bitrate_learned_next_kbps.store(0, std::memory_order_relaxed);
+    congestion_state.store(static_cast<int>(adaptive_bitrate::congestion_state_e::unknown), std::memory_order_relaxed);
+    runtime_bitrate_update_supported.store(false, std::memory_order_relaxed);
+    bitrate_feedback_samples.store(0, std::memory_order_relaxed);
+    bitrate_lost_packets.store(0, std::memory_order_relaxed);
+    bitrate_updates_applied.store(0, std::memory_order_relaxed);
+    bitrate_updates_unsupported.store(0, std::memory_order_relaxed);
+    bitrate_updates_failed.store(0, std::memory_order_relaxed);
+    last_bitrate_update_attempt_kbps.store(0, std::memory_order_relaxed);
+    bitrate_burst_event.store(false, std::memory_order_relaxed);
+    encoded_video_bytes.store(0, std::memory_order_relaxed);
+    first_encoded_packet_microseconds.store(0, std::memory_order_relaxed);
+    last_encoded_packet_microseconds.store(0, std::memory_order_relaxed);
+    {
+      std::lock_guard lock {bitrate_controller_mutex};
+      bitrate_controller.reset();
+      bitrate_reason = "disabled";
+    }
     idr_requests.store(0, std::memory_order_relaxed);
     idr_emitted.store(0, std::memory_order_relaxed);
     idr_reason_client_request.store(0, std::memory_order_relaxed);
@@ -223,6 +388,10 @@ namespace video {
     frame_age_at_network.reset();
     source_interarrival.reset();
     encode_interarrival.reset();
+    {
+      std::lock_guard lock {hdr_status_mutex};
+      hdr_status = {false, false, false, false, 8, "bt709", "bt709", "bt709", "limited", "not_negotiated"};
+    }
   }
 
   void record_capture_enqueued(const std::optional<std::chrono::steady_clock::time_point> &timestamp, const bool replaced_pending, const std::size_t queue_depth) {
@@ -327,6 +496,11 @@ namespace video {
     network_queue_bytes.fetch_add(bytes, std::memory_order_relaxed);
     network_queue_frames.store(queue_frames, std::memory_order_relaxed);
     update_maximum(network_queue_frames_max, queue_frames);
+    encoded_video_bytes.fetch_add(bytes, std::memory_order_relaxed);
+    const auto now_microseconds {std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch()).count()};
+    auto unset_first {std::int64_t {0}};
+    first_encoded_packet_microseconds.compare_exchange_strong(unset_first, now_microseconds, std::memory_order_relaxed);
+    last_encoded_packet_microseconds.store(now_microseconds, std::memory_order_relaxed);
   }
 
   void record_network_dequeued(
@@ -346,6 +520,58 @@ namespace video {
     update_maximum(socket_outq_bytes_max, bytes);
   }
 
+  void initialize_adaptive_bitrate(const config_t &config) {
+    const auto requested {static_cast<std::uint32_t>(std::max(config.bitrate, 1))};
+    const auto administrator_max {
+      config::video.max_bitrate > 0 ? static_cast<std::uint32_t>(config::video.max_bitrate) : requested
+    };
+    const auto effective_max {std::min(requested, std::max(administrator_max, 1U))};
+    const auto minimum {std::min(effective_max, std::max(effective_max / 4U, 1000U))};
+    const auto envelope {adaptive_bitrate::make_envelope(minimum, effective_max, effective_max, std::max(config.framerate, 1))};
+
+    adaptive_bitrate_enabled.store(config::video.adaptive_bitrate, std::memory_order_relaxed);
+    bitrate_minimum_kbps.store(envelope.minimum_kbps, std::memory_order_relaxed);
+    bitrate_initial_kbps.store(envelope.initial_kbps, std::memory_order_relaxed);
+    bitrate_target_kbps.store(envelope.target_kbps, std::memory_order_relaxed);
+    bitrate_maximum_kbps.store(envelope.maximum_kbps, std::memory_order_relaxed);
+    bitrate_peak_kbps.store(envelope.peak_kbps, std::memory_order_relaxed);
+    bitrate_vbv_kbits.store(envelope.vbv_kbits, std::memory_order_relaxed);
+    bitrate_active_kbps.store(envelope.target_kbps, std::memory_order_relaxed);
+    bitrate_learned_next_kbps.store(envelope.target_kbps, std::memory_order_relaxed);
+    last_bitrate_update_attempt_kbps.store(envelope.target_kbps, std::memory_order_relaxed);
+    std::lock_guard lock {bitrate_controller_mutex};
+    bitrate_controller = std::make_unique<adaptive_bitrate::controller_t>(envelope);
+    bitrate_reason = config::video.adaptive_bitrate ? "collecting" : "disabled";
+  }
+
+  void record_bitrate_feedback(const std::uint32_t lost_packets, const std::uint32_t elapsed_ms, const std::uint32_t rtt_ms) {
+    bitrate_feedback_samples.fetch_add(1, std::memory_order_relaxed);
+    bitrate_lost_packets.fetch_add(lost_packets, std::memory_order_relaxed);
+    if (!adaptive_bitrate_enabled.load(std::memory_order_relaxed)) {
+      return;
+    }
+
+    std::lock_guard lock {bitrate_controller_mutex};
+    if (!bitrate_controller) {
+      return;
+    }
+    const adaptive_bitrate::sample_t sample {
+      .elapsed_ms = elapsed_ms == 0 ? 500U : elapsed_ms,
+      .lost_packets = lost_packets,
+      .rtt_ms = rtt_ms,
+      .network_queue_frames = static_cast<std::uint32_t>(network_queue_frames.load(std::memory_order_relaxed)),
+      .socket_outq_bytes = socket_outq_bytes.load(std::memory_order_relaxed),
+      .idr_or_reconnect = bitrate_burst_event.exchange(false, std::memory_order_relaxed),
+    };
+    const auto decision {bitrate_controller->observe(sample)};
+    congestion_state.store(static_cast<int>(decision.state), std::memory_order_relaxed);
+    bitrate_reason = std::string {decision.reason};
+    const auto &envelope {bitrate_controller->envelope()};
+    bitrate_target_kbps.store(envelope.target_kbps, std::memory_order_relaxed);
+    bitrate_peak_kbps.store(envelope.peak_kbps, std::memory_order_relaxed);
+    bitrate_vbv_kbits.store(envelope.vbv_kbits, std::memory_order_relaxed);
+  }
+
   bool record_idr_request(const idr_reason_e reason) {
     if (reason == idr_reason_e::client_request) {
       constexpr std::int64_t duplicate_window_microseconds {250000};
@@ -358,6 +584,7 @@ namespace video {
       } while (!last_client_idr_request_microseconds.compare_exchange_weak(previous, now, std::memory_order_relaxed));
     }
     idr_requests.fetch_add(1, std::memory_order_relaxed);
+    bitrate_burst_event.store(true, std::memory_order_relaxed);
     return true;
   }
 
@@ -400,6 +627,17 @@ namespace video {
       first_encode_frame_microseconds.load(std::memory_order_relaxed),
       last_encode_frame_microseconds.load(std::memory_order_relaxed)
     )};
+    const auto first_packet {first_encoded_packet_microseconds.load(std::memory_order_relaxed)};
+    const auto last_packet {last_encoded_packet_microseconds.load(std::memory_order_relaxed)};
+    const auto payload_bytes {encoded_video_bytes.load(std::memory_order_relaxed)};
+    const auto actual_bitrate {
+      last_packet > first_packet ? static_cast<double>(payload_bytes) * 8000.0 / static_cast<double>(last_packet - first_packet) : 0.0
+    };
+    std::string current_bitrate_reason;
+    {
+      std::lock_guard lock {bitrate_controller_mutex};
+      current_bitrate_reason = bitrate_reason;
+    }
     const auto request_num {requested_fps_numerator.load(std::memory_order_relaxed)};
     const auto request_den {requested_fps_denominator.load(std::memory_order_relaxed)};
     const auto requested_fps {request_den == 0 ? 0.0 : static_cast<double>(request_num) / request_den};
@@ -451,6 +689,26 @@ namespace video {
       .network_queue_frames_max = network_queue_frames_max.load(std::memory_order_relaxed),
       .socket_outq_bytes = socket_outq_bytes.load(std::memory_order_relaxed),
       .socket_outq_bytes_max = socket_outq_bytes_max.load(std::memory_order_relaxed),
+      .adaptive_bitrate_enabled = adaptive_bitrate_enabled.load(std::memory_order_relaxed),
+      .bitrate = {
+        bitrate_minimum_kbps.load(std::memory_order_relaxed),
+        bitrate_initial_kbps.load(std::memory_order_relaxed),
+        bitrate_target_kbps.load(std::memory_order_relaxed),
+        bitrate_maximum_kbps.load(std::memory_order_relaxed),
+        bitrate_peak_kbps.load(std::memory_order_relaxed),
+        bitrate_vbv_kbits.load(std::memory_order_relaxed),
+      },
+      .congestion_state = static_cast<adaptive_bitrate::congestion_state_e>(congestion_state.load(std::memory_order_relaxed)),
+      .bitrate_reason = std::move(current_bitrate_reason),
+      .bitrate_active_kbps = bitrate_active_kbps.load(std::memory_order_relaxed),
+      .bitrate_learned_next_kbps = bitrate_learned_next_kbps.load(std::memory_order_relaxed),
+      .actual_video_bitrate_kbps = actual_bitrate,
+      .runtime_bitrate_update_supported = runtime_bitrate_update_supported.load(std::memory_order_relaxed),
+      .bitrate_feedback_samples = bitrate_feedback_samples.load(std::memory_order_relaxed),
+      .bitrate_lost_packets = bitrate_lost_packets.load(std::memory_order_relaxed),
+      .bitrate_updates_applied = bitrate_updates_applied.load(std::memory_order_relaxed),
+      .bitrate_updates_unsupported = bitrate_updates_unsupported.load(std::memory_order_relaxed),
+      .bitrate_updates_failed = bitrate_updates_failed.load(std::memory_order_relaxed),
       .idr_requests = idr_requests.load(std::memory_order_relaxed),
       .idr_emitted = idr_emitted.load(std::memory_order_relaxed),
       .idr_reason_client_request = idr_reason_client_request.load(std::memory_order_relaxed),
@@ -887,6 +1145,39 @@ namespace video {
       return true;
     }
 
+    /**
+     * @brief Report FFmpeg parameter-change support for the opened codec.
+     *
+     * @return True when the codec advertises runtime parameter changes.
+     */
+    bool supports_runtime_bitrate_update() const override {
+      return avcodec_ctx && avcodec_ctx->codec && (avcodec_ctx->codec->capabilities & AV_CODEC_CAP_PARAM_CHANGE) != 0;
+    }
+
+    /**
+     * @brief Apply one bounded FFmpeg bitrate target at a frame boundary.
+     *
+     * @param target_kbps Requested video target in kilobits per second.
+     * @return Typed backend result.
+     */
+    adaptive_bitrate::backend_update_e apply_bitrate_target(const std::uint32_t target_kbps) override {
+      if (!supports_runtime_bitrate_update()) {
+        return adaptive_bitrate::backend_update_e::unsupported;
+      }
+      const auto target_bps {static_cast<std::int64_t>(target_kbps) * 1000};
+      const auto previous_bps {std::max<std::int64_t>(avcodec_ctx->bit_rate, 1)};
+      const auto previous_buffer {avcodec_ctx->rc_buffer_size};
+      avcodec_ctx->bit_rate = target_bps;
+      avcodec_ctx->rc_max_rate = target_bps;
+      if (avcodec_ctx->rc_min_rate > 0) {
+        avcodec_ctx->rc_min_rate = target_bps;
+      }
+      if (previous_buffer > 0) {
+        avcodec_ctx->rc_buffer_size = std::max<std::int64_t>(previous_buffer * target_bps / previous_bps, 1);
+      }
+      return adaptive_bitrate::backend_update_e::applied;
+    }
+
     avcodec_ctx_t avcodec_ctx;  ///< FFmpeg codec context owned by the encode session.
     std::unique_ptr<platf::avcodec_encode_device_t> device;  ///< Platform device used by the FFmpeg hardware encoder.
 
@@ -957,6 +1248,26 @@ namespace video {
         return true;
       }
       return false;
+    }
+
+    /**
+     * @brief Report that the direct NVENC wrapper has no safe reconfigure hook.
+     *
+     * @return False until the wrapper exposes a measured reconfigure operation.
+     */
+    bool supports_runtime_bitrate_update() const override {
+      return false;
+    }
+
+    /**
+     * @brief Preserve an NVENC stream instead of recreating it for bitrate only.
+     *
+     * @param target_kbps Requested video target in kilobits per second.
+     * @return Unsupported so the target is learned for the next session.
+     */
+    adaptive_bitrate::backend_update_e apply_bitrate_target(const std::uint32_t target_kbps) override {
+      static_cast<void>(target_kbps);
+      return adaptive_bitrate::backend_update_e::unsupported;
     }
 
     /**
@@ -1807,6 +2118,74 @@ namespace video {
 
   namespace {
     std::atomic_bool encoder_probe_active {false};  ///< Whether capability-only encoder validation is active.
+    std::mutex codec_status_mutex;  ///< Guards the bounded codec status snapshot.
+    codec_status_t codec_status;  ///< Most recent pre-stream decision and opened encoder.
+  }  // namespace
+
+  codec_policy::result_t select_codec(const config_t &config) {
+    codec_policy::request_t request;
+    if (config.videoFormat < 0 || config.videoFormat > 2) {
+      const codec_policy::result_t result {.reason = "codec_unknown"};
+      std::lock_guard lock {codec_status_mutex};
+      codec_status = {};
+      codec_status.reason = std::string {result.reason};
+      return result;
+    }
+
+    request.requested = static_cast<codec_policy::codec_e>(config.videoFormat);
+    request.bit_depth = config.dynamicRange ? 10 : 8;
+    request.chroma_444 = config.chromaSamplingType == 1;
+    request.policy = config::video.codec_policy;
+    request.fallback = config::video.codec_fallback;
+    request.allow_software = config::video.codec_allow_software;
+    const bool hardware {chosen_encoder && chosen_encoder != &software};
+    if (chosen_encoder) {
+      request.capabilities[0] = {
+        .client_advertised = config.videoFormat == 0,
+        .host_open = chosen_encoder->h264[encoder_t::PASSED],
+        .hardware = hardware,
+        .supports_8bit = chosen_encoder->h264[encoder_t::PASSED],
+        .supports_444 = chosen_encoder->h264[encoder_t::YUV444],
+      };
+      request.capabilities[1] = {
+        .client_advertised = config.videoFormat == 1,
+        .host_open = active_hevc_mode != 1 && chosen_encoder->hevc[encoder_t::PASSED],
+        .hardware = hardware,
+        .supports_8bit = chosen_encoder->hevc[encoder_t::PASSED],
+        .supports_10bit = chosen_encoder->hevc[encoder_t::DYNAMIC_RANGE],
+        .supports_444 = chosen_encoder->hevc[encoder_t::YUV444],
+      };
+      request.capabilities[2] = {
+        .client_advertised = config.videoFormat == 2,
+        .host_open = active_av1_mode != 1 && chosen_encoder->av1[encoder_t::PASSED],
+        .hardware = hardware,
+        .supports_8bit = chosen_encoder->av1[encoder_t::PASSED],
+        .supports_10bit = chosen_encoder->av1[encoder_t::DYNAMIC_RANGE],
+        .supports_444 = chosen_encoder->av1[encoder_t::YUV444],
+      };
+    }
+
+    const auto result {codec_policy::select(request)};
+    std::lock_guard lock {codec_status_mutex};
+    codec_status = {};
+    codec_status.requested = std::string {codec_policy::to_string(request.requested)};
+    codec_status.selected = result.accepted ? std::string {codec_policy::to_string(result.selected)} : "";
+    codec_status.profile = result.accepted ? std::string {result.profile} : "";
+    codec_status.bit_depth = result.accepted ? result.bit_depth : 0;
+    codec_status.backend = chosen_encoder ? std::string {chosen_encoder->name} : "";
+    codec_status.hardware = hardware;
+    codec_status.reason = std::string {result.reason};
+    return result;
+  }
+
+  int advertised_codec_mode(const codec_policy::codec_e codec) {
+    const int active_mode {codec == codec_policy::codec_e::hevc ? active_hevc_mode : active_av1_mode};
+    return codec_policy::advertised_mode(config::video.codec_policy, codec, active_mode);
+  }
+
+  codec_status_t codec_status_snapshot() {
+    std::lock_guard lock {codec_status_mutex};
+    return codec_status;
   }
 
   bool encoder_probe_in_progress() {
@@ -2289,6 +2668,7 @@ namespace video {
    * @return 0 when the frame is encoded and queued; nonzero on encoder failure.
    */
   int encode(int64_t frame_nr, encode_session_t &session, safe::mail_raw_t::queue_t<packet_t> &packets, void *channel_data, std::optional<std::chrono::steady_clock::time_point> frame_timestamp) {
+    apply_pending_bitrate_target(session);
     if (auto avcodec_session = dynamic_cast<avcodec_encode_session_t *>(&session)) {
       return encode_avcodec(frame_nr, *avcodec_session, packets, channel_data, frame_timestamp);
     } else if (auto nvenc_session = dynamic_cast<nvenc_encode_session_t *>(&session)) {
@@ -2724,15 +3104,25 @@ namespace video {
    * @return Constructed encode session object.
    */
   std::unique_ptr<encode_session_t> make_encode_session(platf::display_t *disp, const encoder_t &encoder, const config_t &config, int width, int height, std::unique_ptr<platf::encode_device_t> encode_device) {
+    const auto colorspace {encode_device->colorspace};
+    std::unique_ptr<encode_session_t> session;
     if (dynamic_cast<platf::avcodec_encode_device_t *>(encode_device.get())) {
       auto avcodec_encode_device = boost::dynamic_pointer_cast<platf::avcodec_encode_device_t>(std::move(encode_device));
-      return make_avcodec_encode_session(disp, encoder, config, width, height, std::move(avcodec_encode_device));
+      session = make_avcodec_encode_session(disp, encoder, config, width, height, std::move(avcodec_encode_device));
     } else if (dynamic_cast<platf::nvenc_encode_device_t *>(encode_device.get())) {
       auto nvenc_encode_device = boost::dynamic_pointer_cast<platf::nvenc_encode_device_t>(std::move(encode_device));
-      return make_nvenc_encode_session(config, std::move(nvenc_encode_device));
+      session = make_nvenc_encode_session(config, std::move(nvenc_encode_device));
     }
-
-    return nullptr;
+    if (session) {
+      std::lock_guard lock {codec_status_mutex};
+      codec_status.active = std::string {codec_policy::to_string(static_cast<codec_policy::codec_e>(config.videoFormat))};
+      codec_status.backend = std::string {encoder.name};
+      codec_status.hardware = &encoder != &software;
+    }
+    if (session && !encoder_probe_in_progress()) {
+      record_hdr_active(colorspace);
+    }
+    return session;
   }
 
   /**
@@ -2759,10 +3149,34 @@ namespace video {
     const encoder_t &encoder,
     void *channel_data
   ) {
+    const auto active_colorspace = encode_device->colorspace;
     auto session = make_encode_session(disp.get(), encoder, config, disp->width, disp->height, std::move(encode_device));
     if (!session) {
       return;
     }
+    if (channel_data) {
+      stream::session::record_video_active(
+        *static_cast<stream::session_t *>(channel_data),
+        disp->width,
+        disp->height,
+        encoder.name,
+        encoder.codec_from_config(config).name,
+        active_colorspace
+      );
+    }
+
+    hdr_info_t hdr_info = std::make_unique<hdr_info_raw_t>(false);
+    const auto hdr_status {hdr_status_snapshot()};
+    if (hdr_status.active) {
+      if (disp->get_hdr_metadata(hdr_info->metadata)) {
+        hdr_info->enabled = true;
+      } else {
+        BOOST_LOG(error) << "HDR_NEGOTIATION_REJECTED reason=hdr_capture_metadata_lost";
+        record_hdr_runtime_failure("hdr_capture_metadata_lost");
+        return;
+      }
+    }
+    mail->event<hdr_info_t>(mail::hdr)->raise(std::move(hdr_info));
 
     // As a workaround for NVENC hangs and to generally speed up encoder reinit,
     // we will complete the encoder teardown in a separate thread if supported.
@@ -2950,11 +3364,9 @@ namespace video {
       display_env_logical_height = display->env_logical_height;
     }
 
-    auto w2 = scalar * wd;
-    auto h2 = scalar * hd;
-
-    auto offsetX = (config.width - w2) * 0.5f;
-    auto offsetY = (config.height - h2) * 0.5f;
+    const auto content_rectangle {steamos_virtual_session::fit_content_rectangle(display->width, display->height, config.width, config.height)};
+    const float offsetX {static_cast<float>(content_rectangle.x)};
+    const float offsetY {static_cast<float>(content_rectangle.y)};
 
     return input::touch_port_t {
       {
@@ -2969,9 +3381,81 @@ namespace video {
       offsetY,
       1.0f / scalar,
       scalar_tpcoords,
+      config::steamos_virtual_display.margin_input == steamos_virtual_session::margin_input_policy_e::reject,
       display_env_logical_width,
       display_env_logical_height
     };
+  }
+
+  /**
+   * @brief Apply the configured HDR policy to an opened display and encoder probe.
+   *
+   * Main10 SDR remains independent from HDR when the client did not request
+   * HDR. An automatic fallback is permitted only while the selected source is
+   * already SDR; a late fallback from active HDR fails closed to avoid sending
+   * an incorrectly converted or signaled frame.
+   *
+   * @param disp Opened display and capture source.
+   * @param encoder Selected encoder and its probed codec capabilities.
+   * @param stream_config Stream configuration updated with the selected range.
+   * @return True when encoder startup may continue.
+   */
+  bool apply_hdr_policy(platf::display_t &disp, const encoder_t &encoder, config_t &stream_config) {
+    if (encoder_probe_in_progress()) {
+      return true;
+    }
+
+    if (!stream_config.hdrRequested) {
+      if (config::video.steamshine_hdr_policy == hdr_policy::policy_e::off) {
+        stream_config.dynamicRange = 0;
+      }
+      const hdr_policy::result_t result {
+        config::video.steamshine_hdr_policy != hdr_policy::policy_e::require,
+        false,
+        stream_config.dynamicRange == 1 ? 10u : 8u,
+        config::video.steamshine_hdr_policy == hdr_policy::policy_e::off ? "hdr_disabled_by_policy" :
+                                                                           "hdr_not_requested",
+      };
+      record_hdr_selection(stream_config, result);
+      return result.accepted;
+    }
+
+    const auto &video_format {encoder.codec_from_config(stream_config)};
+    const auto dynamic_range_flag {
+      stream_config.chromaSamplingType == 1 ? encoder_t::DYNAMIC_RANGE_YUV444 : encoder_t::DYNAMIC_RANGE
+    };
+    const auto ten_bit_format {
+      stream_config.chromaSamplingType == 1 ? encoder.platform_formats->pix_fmt_yuv444_10bit :
+                                              encoder.platform_formats->pix_fmt_10bit
+    };
+    SS_HDR_METADATA metadata {};
+    const bool source_hdr {disp.is_hdr()};
+    const bool ten_bit_path {ten_bit_format != platf::pix_fmt_e::unknown};
+    const hdr_policy::gates_t gates {
+      true,
+      stream_config.requestedDynamicRange == 1,
+      source_hdr,
+      source_hdr,
+      source_hdr && ten_bit_path,
+      source_hdr && disp.get_hdr_metadata(metadata),
+      ten_bit_path,
+      stream_config.videoFormat != 0 && video_format[encoder_t::PASSED] && video_format[dynamic_range_flag],
+      true,
+    };
+    auto result {hdr_policy::evaluate(config::video.steamshine_hdr_policy, gates)};
+    if (result.accepted && !result.selected && source_hdr) {
+      result.accepted = false;
+    }
+    record_hdr_selection(stream_config, result);
+    if (!result.accepted) {
+      BOOST_LOG(error) << "HDR_NEGOTIATION_REJECTED reason=" << result.reason;
+      return false;
+    }
+
+    stream_config.dynamicRange = result.selected ? 1 : 0;
+    BOOST_LOG(info) << "HDR_NEGOTIATION selected=" << (result.selected ? "hdr10" : "sdr")
+                    << " bit_depth=" << result.bit_depth << " reason=" << result.reason;
+    return true;
   }
 
   /**
@@ -3047,6 +3531,9 @@ namespace video {
 
     encode_session.ctx = &ctx;
 
+    if (!apply_hdr_policy(*disp, encoder, ctx.config)) {
+      return std::nullopt;
+    }
     auto encode_device = make_encode_device(*disp, encoder, ctx.config);
     if (!encode_device) {
       return std::nullopt;
@@ -3055,17 +3542,7 @@ namespace video {
     // absolute mouse coordinates require that the dimensions of the screen are known
     ctx.touch_port_events->raise(make_port(disp, ctx.config));
 
-    // Update client with our current HDR display state
-    hdr_info_t hdr_info = std::make_unique<hdr_info_raw_t>(false);
-    if (colorspace_is_hdr(encode_device->colorspace)) {
-      if (disp->get_hdr_metadata(hdr_info->metadata)) {
-        hdr_info->enabled = true;
-      } else {
-        BOOST_LOG(error) << "Couldn't get display hdr metadata when colorspace selection indicates it should have one";
-      }
-    }
-    ctx.hdr_events->raise(std::move(hdr_info));
-
+    const auto active_colorspace = encode_device->colorspace;
     auto session = make_encode_session(disp, encoder, ctx.config, img.width, img.height, std::move(encode_device));
     if (!session) {
       return std::nullopt;
@@ -3075,6 +3552,30 @@ namespace video {
     if (session->convert(img)) {
       BOOST_LOG(error) << "Could not convert initial image"sv;
       return std::nullopt;
+    }
+
+    hdr_info_t hdr_info = std::make_unique<hdr_info_raw_t>(false);
+    const auto hdr_status {hdr_status_snapshot()};
+    if (hdr_status.active) {
+      if (disp->get_hdr_metadata(hdr_info->metadata)) {
+        hdr_info->enabled = true;
+      } else {
+        BOOST_LOG(error) << "HDR_NEGOTIATION_REJECTED reason=hdr_capture_metadata_lost";
+        record_hdr_runtime_failure("hdr_capture_metadata_lost");
+        return std::nullopt;
+      }
+    }
+    ctx.hdr_events->raise(std::move(hdr_info));
+
+    if (ctx.channel_data) {
+      stream::session::record_video_active(
+        *static_cast<stream::session_t *>(ctx.channel_data),
+        disp->width,
+        disp->height,
+        encoder.name,
+        encoder.codec_from_config(ctx.config).name,
+        active_colorspace
+      );
     }
 
     encode_session.session = std::move(session);
@@ -3316,8 +3817,6 @@ namespace video {
     int frame_nr = 1;
 
     auto touch_port_event = mail->event<input::touch_port_t>(mail::touch_port);
-    auto hdr_event = mail->event<hdr_info_t>(mail::hdr);
-
     // Encoding takes place on this thread
     platf::adjust_thread_priority(platf::thread_priority_e::high);
 
@@ -3340,6 +3839,9 @@ namespace video {
 
       auto &encoder = *chosen_encoder;
 
+      if (!apply_hdr_policy(*display, encoder, config)) {
+        return;
+      }
       auto encode_device = make_encode_device(*display, encoder, config);
       if (!encode_device) {
         return;
@@ -3347,17 +3849,6 @@ namespace video {
 
       // absolute mouse coordinates require that the dimensions of the screen are known
       touch_port_event->raise(make_port(display.get(), config));
-
-      // Update client with our current HDR display state
-      hdr_info_t hdr_info = std::make_unique<hdr_info_raw_t>(false);
-      if (colorspace_is_hdr(encode_device->colorspace)) {
-        if (display->get_hdr_metadata(hdr_info->metadata)) {
-          hdr_info->enabled = true;
-        } else {
-          BOOST_LOG(error) << "Couldn't get display hdr metadata when colorspace selection indicates it should have one";
-        }
-      }
-      hdr_event->raise(std::move(hdr_info));
 
       encode_run(
         frame_nr,
@@ -3386,6 +3877,7 @@ namespace video {
     void *channel_data
   ) {
     reset_pipeline_diagnostics();
+    initialize_adaptive_bitrate(config);
     auto idr_events = mail->event<idr_reason_e>(mail::idr);
 
     if (record_idr_request(idr_reason_e::reconnect)) {
@@ -3429,12 +3921,16 @@ namespace video {
    * @return 0 when the selected encoder/device accepts the configuration; nonzero otherwise.
    */
   int validate_config(std::shared_ptr<platf::display_t> disp, const encoder_t &encoder, const config_t &config) {
-    auto encode_device = make_encode_device(*disp, encoder, config);
+    auto effective_config {config};
+    if (!apply_hdr_policy(*disp, encoder, effective_config)) {
+      return -1;
+    }
+    auto encode_device = make_encode_device(*disp, encoder, effective_config);
     if (!encode_device) {
       return -1;
     }
 
-    auto session = make_encode_session(disp.get(), encoder, config, disp->width, disp->height, std::move(encode_device));
+    auto session = make_encode_session(disp.get(), encoder, effective_config, disp->width, disp->height, std::move(encode_device));
     if (!session) {
       return -1;
     }

@@ -27,6 +27,20 @@ TEST(ProcessCommandSelectionTest, LaunchesConfiguredOwnedVirtualDesktop) {
 }
 
 /**
+ * @brief Verify only the explicit automatic physical-display protocol requests fallback.
+ */
+TEST(ProcessCommandSelectionTest, RecognizesOwnedVirtualDisplayFallbackProtocol) {
+  using steamos_virtual_session::session_origin_e;
+  using steamos_virtual_session::virtual_display_mode_e;
+
+  EXPECT_TRUE(proc::should_retry_owned_virtual_display(75, true, virtual_display_mode_e::auto_detect, session_origin_e::none));
+  EXPECT_FALSE(proc::should_retry_owned_virtual_display(1, true, virtual_display_mode_e::auto_detect, session_origin_e::none));
+  EXPECT_FALSE(proc::should_retry_owned_virtual_display(75, false, virtual_display_mode_e::auto_detect, session_origin_e::none));
+  EXPECT_FALSE(proc::should_retry_owned_virtual_display(75, true, virtual_display_mode_e::off, session_origin_e::none));
+  EXPECT_FALSE(proc::should_retry_owned_virtual_display(75, true, virtual_display_mode_e::auto_detect, session_origin_e::attached_existing));
+}
+
+/**
  * @brief Verify the packaged KDE surface uses Gamescope's cursor-capable XWayland path.
  */
 TEST(ProcessCommandSelectionTest, ConstrainsPackagedVirtualDesktopToXwayland) {

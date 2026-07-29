@@ -332,6 +332,16 @@ TEST(SyntheticPipeWireProducer, ClassifiesPtsDamageAndCorruption) {
 }
 
 /**
+ * @brief Verify PipeWire HDR classification rejects every pixel/metadata mismatch.
+ */
+TEST(SyntheticPipeWireProducer, RequiresCompleteTenBitHdrMetadata) {
+  EXPECT_TRUE(pipewire_capture::is_hdr10_capture(true, true, true));
+  EXPECT_FALSE(pipewire_capture::is_hdr10_capture(false, true, true));
+  EXPECT_FALSE(pipewire_capture::is_hdr10_capture(true, false, true));
+  EXPECT_FALSE(pipewire_capture::is_hdr10_capture(true, true, false));
+}
+
+/**
  * @brief Verify motion-to-static-to-motion reduces only unchanged output.
  */
 TEST(SyntheticPipeWireProducer, TransitionsThroughTenSecondsStatic) {

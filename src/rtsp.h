@@ -9,6 +9,7 @@
 
 // local includes
 #include "crypto.h"
+#include "stream_negotiation.h"
 #include "thread_safe.h"
 
 namespace rtsp_stream {
@@ -36,13 +37,15 @@ namespace rtsp_stream {
     int surround_info;  ///< Encoded GameStream surround-sound capability flags.
     std::string surround_params;  ///< Client-provided surround-sound layout parameters.
     bool continuous_audio;  ///< Whether audio packets continue during silence.
-    bool enable_hdr;  ///< Whether HDR streaming is requested.
+    bool hdr_requested;  ///< Original client HDR intent before administrator policy.
+    bool enable_hdr;  ///< Whether display preparation should enable HDR after policy.
     bool enable_sops;  ///< Whether sequence output protection is requested.
 
     std::optional<crypto::cipher::gcm_t> rtsp_cipher;  ///< AES-GCM cipher used once encrypted RTSP is negotiated.
     std::string rtsp_url_scheme;  ///< URL scheme selected by the RTSP SETUP flow.
     uint32_t rtsp_iv_counter;  ///< Counter value mixed into encrypted RTSP IVs.
     std::string client_cert;  ///< PEM certificate for the paired Moonlight client.
+    stream::stream_negotiation_snapshot_t negotiation;  ///< Canonical state populated through launch and RTSP setup.
   };
 
   /**
@@ -63,6 +66,13 @@ namespace rtsp_stream {
    * @return Count of active sessions.
    */
   int session_count();
+
+  /**
+   * @brief Return the canonical state for the newest active stream session.
+   *
+   * @return Active negotiation snapshot, or an empty optional when no stream exists.
+   */
+  std::optional<stream::stream_negotiation_snapshot_t> active_negotiation_snapshot();
 
   /**
    * @brief Terminates all running streaming sessions.

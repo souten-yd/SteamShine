@@ -157,6 +157,7 @@ namespace pipewire {
   struct shared_state_t {
     std::atomic<int> negotiated_width {0};  ///< Width negotiated with PipeWire for the stream.
     std::atomic<int> negotiated_height {0};  ///< Height negotiated with PipeWire for the stream.
+    std::atomic<int> pixel_format {SPA_VIDEO_FORMAT_UNKNOWN};  ///< Raw PipeWire format selected for captured frames.
     std::atomic<int> color_primaries {0};  ///< PipeWire color-primaries metadata for the stream.
     std::atomic<int> transfer_function {0};  ///< PipeWire transfer-function metadata for the stream.
     std::atomic<bool> stream_dead {false};  ///< Whether the PipeWire stream has been destroyed.
@@ -881,6 +882,7 @@ namespace pipewire {
           d->shared->negotiated_width.store(physical_w);
           d->shared->negotiated_height.store(physical_h);
         }
+        d->shared->pixel_format.store(d->format.info.raw.format);
 
         if (d->format.info.raw.color_primaries != old_color_primaries || d->format.info.raw.transfer_function != old_transfer_function) {
           d->shared->color_primaries.store(d->format.info.raw.color_primaries);
@@ -1080,6 +1082,7 @@ namespace pipewire {
         shared_state->stream_dead.store(false);
         shared_state->negotiated_width.store(0);
         shared_state->negotiated_height.store(0);
+        shared_state->pixel_format.store(SPA_VIDEO_FORMAT_UNKNOWN);
         shared_state->color_primaries.store(0);
         shared_state->transfer_function.store(0);
       }
@@ -1348,10 +1351,15 @@ namespace pipewire {
      * @return True when the active display mode is HDR.
      */
     bool is_hdr() override {
+      const int pixel_format = shared_state->pixel_format.load();
       int color_primaries = shared_state->color_primaries.load();
       int transfer_function = shared_state->transfer_function.load();
 
-      if (color_primaries == SPA_VIDEO_COLOR_PRIMARIES_BT2020 && transfer_function == SPA_VIDEO_TRANSFER_SMPTE2084) {
+      if (pipewire_capture::is_hdr10_capture(
+            pixel_format == SPA_VIDEO_FORMAT_xBGR_210LE,
+            color_primaries == SPA_VIDEO_COLOR_PRIMARIES_BT2020,
+            transfer_function == SPA_VIDEO_TRANSFER_SMPTE2084
+          )) {
         return true;
       }
 

@@ -1758,6 +1758,79 @@ namespace confighttp {
   }
 
   /**
+   * @brief Return bounded per-client and network stream profiles.
+   *
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   */
+  void steamshine_stream_profiles(const resp_https_t &response, const req_https_t &request) {
+    if (require_steamshine_session(response, request).empty()) {
+      return;
+    }
+    send_steamshine_response(response, web::stream_profile_service().snapshot());
+  }
+
+  /**
+   * @brief Validate and persist one stream negotiation profile.
+   *
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   */
+  void steamshine_save_stream_profile(const resp_https_t &response, const req_https_t &request) {
+    if (require_steamshine_mutation(response, request).empty()) {
+      return;
+    }
+    nlohmann::json input;
+    if (!read_steamshine_json(response, request, input)) {
+      return;
+    }
+    try {
+      const web::stream_profile_t profile {
+        .client_id = input.at("client_id").get<std::string>(),
+        .network_class = input.at("network_class").get<std::string>(),
+        .capability_signature = input.at("capability_signature").get<std::string>(),
+        .geometry_policy = input.value("geometry_policy", "fit"),
+        .fps_policy = input.value("fps_policy", "auto"),
+        .fps_ceiling = input.value("fps_ceiling", 0),
+        .codec_policy = input.value("codec_policy", "auto"),
+        .hdr_policy = input.value("hdr_policy", "auto"),
+        .bitrate_ceiling_kbps = input.value("bitrate_ceiling_kbps", 0),
+        .quality_preset = input.value("quality_preset", "balanced"),
+        .orientation = input.value("orientation", "auto"),
+        .safe_area_percent = input.value("safe_area_percent", 0),
+        .learned_start_kbps = input.value("learned_start_kbps", 0),
+        .active = input.value("active", false),
+      };
+      const auto result {web::stream_profile_service().save(profile)};
+      send_steamshine_response(response, {{"status", result.success}, {"code", result.code}, {"message", result.message}});
+    } catch (const nlohmann::json::exception &) {
+      bad_request(response, request, "Invalid stream profile payload");
+    }
+  }
+
+  /**
+   * @brief Reset one exact client/network stream profile.
+   *
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   */
+  void steamshine_reset_stream_profile(const resp_https_t &response, const req_https_t &request) {
+    if (require_steamshine_mutation(response, request).empty()) {
+      return;
+    }
+    nlohmann::json input;
+    if (!read_steamshine_json(response, request, input)) {
+      return;
+    }
+    try {
+      const auto result {web::stream_profile_service().reset(input.at("client_id").get<std::string>(), input.at("network_class").get<std::string>())};
+      send_steamshine_response(response, {{"status", result.success}, {"code", result.code}, {"message", result.message}});
+    } catch (const nlohmann::json::exception &) {
+      bad_request(response, request, "Invalid stream profile reset payload");
+    }
+  }
+
+  /**
    * @brief Return a live CPU/memory/AMD GPU telemetry snapshot to SteamShine.
    *
    * @param response The HTTP response object.
@@ -2779,7 +2852,7 @@ namespace confighttp {
     server.resource["^/pin/?$"]["GET"] = page_handler("pin.html");
     server.resource["^/troubleshooting/?$"]["GET"] = page_handler("troubleshooting.html");
     server.resource["^/welcome/?$"]["GET"] = page_handler("welcome.html", false, true);
-    server.resource["^/steamshine/?(?:setup|login|monitor|applications|gpu|settings|config|pairing|clients|terminal)?/?$"]["GET"] = getSteamshinePage;
+    server.resource["^/steamshine/?(?:setup|login|monitor|stream|applications|gpu|settings|config|pairing|clients|terminal)?/?$"]["GET"] = getSteamshinePage;
 
     // rest api
     server.resource["^/api/browse$"]["GET"] = browseDirectory;
@@ -2811,6 +2884,9 @@ namespace confighttp {
     server.resource["^/api/steamshine/v1/auth/login$"]["POST"] = steamshine_handler(steamshine_login);
     server.resource["^/api/steamshine/v1/auth/logout$"]["POST"] = steamshine_handler(steamshine_logout);
     server.resource["^/api/steamshine/v1/status$"]["GET"] = steamshine_handler(steamshine_status);
+    server.resource["^/api/steamshine/v1/stream/profiles$"]["GET"] = steamshine_handler(steamshine_stream_profiles);
+    server.resource["^/api/steamshine/v1/stream/profiles$"]["POST"] = steamshine_handler(steamshine_save_stream_profile);
+    server.resource["^/api/steamshine/v1/stream/profiles/reset$"]["POST"] = steamshine_handler(steamshine_reset_stream_profile);
     server.resource["^/api/steamshine/v1/system/metrics$"]["GET"] = steamshine_handler(steamshine_system_metrics);
     server.resource["^/api/steamshine/v1/apps$"]["GET"] = steamshine_handler(steamshine_get_apps);
     server.resource["^/api/steamshine/v1/apps$"]["POST"] = steamshine_handler(steamshine_save_app);

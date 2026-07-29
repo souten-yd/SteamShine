@@ -1421,6 +1421,36 @@ editing the `conf` file in a text editor. Use the examples as reference.
     </tr>
 </table>
 
+### steamshine_hdr_policy
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Selects the end-to-end HDR10 policy independently from display-device preparation. HDR becomes active only when the client request, source, display or Gamescope canvas, 10-bit capture and conversion path, encoder profile, metadata, and GameStream signaling agree. The selected state and a stable fallback or rejection reason are exposed in SteamShine diagnostics. This option does not replace <code>dd_hdr_option</code>.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            auto
+            @endcode</td>
+    </tr>
+    <tr>
+        <td rowspan="3">Choices</td>
+        <td>off</td>
+        <td>Always select the safe 8-bit SDR path.</td>
+    </tr>
+    <tr>
+        <td>auto</td>
+        <td>Select HDR10 only when every required gate passes. A failed gate uses SDR when the source can safely remain or return to SDR; a late mismatch after HDR source activation rejects the stream before any incorrectly signaled frame is sent.</td>
+    </tr>
+    <tr>
+        <td>require</td>
+        <td>Reject stream startup when HDR10 was not requested or any required gate fails.</td>
+    </tr>
+</table>
+
 ### max_bitrate
 
 <table>
@@ -1441,6 +1471,32 @@ editing the `conf` file in a text editor. Use the examples as reference.
         <td colspan="2">@code{}
             max_bitrate = 5000
             @endcode</td>
+    </tr>
+</table>
+
+### steamshine_adaptive_bitrate
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Enable bounded adaptive video bitrate control. SteamShine samples client packet loss and the existing bounded sender/socket queues, decides at two-second intervals, and reduces the video target before changing geometry. Growth is limited to five percent after clean windows and is held after congestion, IDR, or reconnect events. Encoders without a safe runtime update keep the active stream unchanged and retain the lower target only for the next session; the encoder is never recreated solely for a bitrate update.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            disabled
+            @endcode</td>
+    </tr>
+    <tr>
+        <td rowspan="2">Choices</td>
+        <td>enabled</td>
+        <td>Allow bounded adaptive bitrate decisions and frame-boundary runtime updates.</td>
+    </tr>
+    <tr>
+        <td>disabled</td>
+        <td>Keep the video target fixed at the negotiated bitrate.</td>
     </tr>
 </table>
 
@@ -2149,6 +2205,56 @@ editing the `conf` file in a text editor. Use the examples as reference.
     </tr>
 </table>
 
+### steamshine_codec_policy
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Selects the SteamShine SDR codec policy. @code{} auto @endcode accepts the codec chosen by the client only
+            after the selected encoder's open probe succeeds. A manual value requires that exact codec and does not
+            silently rewrite the RTSP request.
+        </td>
+    </tr>
+    <tr><td>Default</td><td colspan="2">@code{} auto @endcode</td></tr>
+    <tr><td>Example</td><td colspan="2">@code{} steamshine_codec_policy = hevc @endcode</td></tr>
+    <tr><td rowspan="4">Choices</td><td>auto</td><td>validate the client-selected codec against probed capabilities</td></tr>
+    <tr><td>h264</td><td>require H.264</td></tr>
+    <tr><td>hevc</td><td>require HEVC</td></tr>
+    <tr><td>av1</td><td>require AV1</td></tr>
+</table>
+
+### steamshine_codec_fallback
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Controls manual-codec recovery. @code{} strict @endcode rejects a mismatched or unavailable codec.
+            @code{} h264 @endcode permits H.264 only when the manual target is unavailable and the client explicitly
+            requests the advertised H.264 recovery path.
+        </td>
+    </tr>
+    <tr><td>Default</td><td colspan="2">@code{} strict @endcode</td></tr>
+    <tr><td>Example</td><td colspan="2">@code{} steamshine_codec_fallback = h264 @endcode</td></tr>
+    <tr><td rowspan="2">Choices</td><td>strict</td><td>reject instead of changing codec</td></tr>
+    <tr><td>h264</td><td>allow explicit H.264 recovery when the manual target is unavailable</td></tr>
+</table>
+
+### steamshine_codec_allow_software
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Permits the existing software encoder to satisfy SteamShine codec policy for explicit diagnostics.
+            Production streaming requires the selected hardware encoder by default.
+        </td>
+    </tr>
+    <tr><td>Default</td><td colspan="2">@code{} disabled @endcode</td></tr>
+    <tr><td>Example</td><td colspan="2">@code{} steamshine_codec_allow_software = enabled @endcode</td></tr>
+</table>
+
 ### capture
 
 <table>
@@ -2288,6 +2394,14 @@ with a stable @code{} input_route_error @endcode.
 
 <table><tr><td>Description</td><td colspan="2">Select @code{} auto @endcode, @code{} off @endcode, or @code{} mirror @endcode for local presentation of SteamShine-owned private sessions. Existing Game Mode is not mirrored a second time.</td></tr><tr><td>Default</td><td colspan="2">@code{} auto @endcode</td></tr><tr><td>Example</td><td colspan="2">@code{} steamos_local_presentation = off @endcode</td></tr></table>
 
+### steamos_geometry_alignment
+
+<table><tr><td>Description</td><td colspan="2">Select @code{} auto @endcode to minimally align coded dimensions and report the adjustment, or @code{} require_exact @endcode to reject an unaligned client request.</td></tr><tr><td>Default</td><td colspan="2">@code{} auto @endcode</td></tr><tr><td>Example</td><td colspan="2">@code{} steamos_geometry_alignment = require_exact @endcode</td></tr></table>
+
+### steamos_margin_input
+
+<table><tr><td>Description</td><td colspan="2">Select @code{} clamp @endcode to map absolute input in letterbox or pillarbox margins to the nearest visible edge, or @code{} reject @endcode to ignore that input.</td></tr><tr><td>Default</td><td colspan="2">@code{} clamp @endcode</td></tr><tr><td>Example</td><td colspan="2">@code{} steamos_margin_input = reject @endcode</td></tr></table>
+
 ### steamos_keep_session_alive
 
 <table><tr><td>Description</td><td colspan="2">Retain a compatible SteamShine-owned session across a Moonlight disconnect. Explicit cancel or service stop still destroys owned resources.</td></tr><tr><td>Default</td><td colspan="2">@code{} enabled @endcode</td></tr><tr><td>Example</td><td colspan="2">@code{} steamos_keep_session_alive = enabled @endcode</td></tr></table>
@@ -2351,6 +2465,18 @@ with a stable @code{} input_route_error @endcode.
 ### steamos_default_fps
 
 <table><tr><td>Description</td><td colspan="2">Fallback virtual-display refresh rate when a client request is unavailable.</td></tr><tr><td>Default</td><td colspan="2">@code{} 60 @endcode</td></tr><tr><td>Range</td><td colspan="2">30 through 240</td></tr></table>
+
+### steamos_max_frame_pixels
+
+<table><tr><td>Description</td><td colspan="2">Administrator ceiling for one selected coded frame extent.</td></tr><tr><td>Default</td><td colspan="2">@code{} 33177600 @endcode (7680 by 4320)</td></tr><tr><td>Range</td><td colspan="2">307200 through 33177600</td></tr></table>
+
+### steamos_max_pixel_rate
+
+<table><tr><td>Description</td><td colspan="2">Administrator ceiling for selected coded pixels per second. Requests must also fit the active encoder and decoder capabilities.</td></tr><tr><td>Default</td><td colspan="2">@code{} 1990656000 @endcode</td></tr><tr><td>Range</td><td colspan="2">9216000 through 2000000000</td></tr></table>
+
+### steamos_max_buffer_megabytes
+
+<table><tr><td>Description</td><td colspan="2">Maximum memory budget in MiB for a conservative simultaneous capture and encode frame-buffer estimate.</td></tr><tr><td>Default</td><td colspan="2">@code{} 512 @endcode</td></tr><tr><td>Range</td><td colspan="2">64 through 2048</td></tr></table>
 
 ### steamos_cleanup_orphan_sessions
 

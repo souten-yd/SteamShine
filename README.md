@@ -282,6 +282,7 @@ exactly that, and reports from other hardware are genuinely useful.
 | [STREAM_NEGOTIATION_HDR_QUALITY_DESIGN.md](docs/STREAM_NEGOTIATION_HDR_QUALITY_DESIGN.md) | Requested/selected/active/observed state, geometry, codecs, HDR, VBR, and Adaptive Bitrate. |
 | [CODEX_GOAL_MODE_STREAMING.md](docs/CODEX_GOAL_MODE_STREAMING.md) | Per-PR implementation contract and evidence requirements. |
 | [IMPLEMENTATION_STATUS.md](docs/IMPLEMENTATION_STATUS.md) | Per-feature status, in more detail than above. |
+| [STREAM_PROFILES_UI.md](docs/STREAM_PROFILES_UI.md) | Exact stream-profile matching and the four-stage Stream UI. |
 | [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | When it doesn't come up cleanly. |
 
 ---

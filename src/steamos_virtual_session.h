@@ -101,6 +101,14 @@ namespace steamos_virtual_session {
     int width {0};  ///< Requested virtual-display width in pixels.
     int height {0};  ///< Requested virtual-display height in pixels.
     int fps {0};  ///< Requested virtual-display refresh rate.
+    int requested_width {0};  ///< Original client width before coded-extent alignment.
+    int requested_height {0};  ///< Original client height before coded-extent alignment.
+    display_refresh_t requested_refresh;  ///< Original exact client refresh.
+    display_refresh_t refresh;  ///< Selected exact refresh when available.
+    std::string geometry_reason;  ///< Stable geometry selection or adjustment reason.
+    int capture_width {0};  ///< Active PipeWire producer width.
+    int capture_height {0};  ///< Active PipeWire producer height.
+    content_rectangle_t content_rectangle;  ///< Visible source rectangle in encoded output coordinates.
     int gamescope_pid {-1};  ///< Owned Gamescope leader PID, when available.
     uint64_t captured_frames {0};  ///< Frames acquired from the owned DMA-BUF path.
     uint64_t encoded_packets {0};  ///< Encoded packets emitted by the session.
@@ -128,9 +136,10 @@ namespace steamos_virtual_session {
    *
    * @param launch_session Moonlight request containing width, height, FPS, and HDR intent.
    * @param error Human-readable failure reason for the GameStream response.
+   * @param force_owned_fallback Force an owned private canvas after physical-mode preparation fails.
    * @return True only after a Wayland readiness signal is observed.
    */
-  bool prepare(const rtsp_stream::launch_session_t &launch_session, std::string &error);
+  bool prepare(const rtsp_stream::launch_session_t &launch_session, std::string &error, bool force_owned_fallback = false);
 
   /**
    * @brief Report whether SteamOS virtual-display capture is enabled.
@@ -361,6 +370,14 @@ namespace steamos_virtual_session {
    * treating a socket's existence as proof that frames can be captured.
    */
   void mark_capture_ready();
+
+  /**
+   * @brief Record the active producer extent and fitted encoded-output rectangle.
+   *
+   * @param width Negotiated PipeWire producer width.
+   * @param height Negotiated PipeWire producer height.
+   */
+  void record_capture_geometry(int width, int height);
 
   /**
    * @brief Prepare an active verified capture source for backend reinitialization.

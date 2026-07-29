@@ -52,6 +52,18 @@ namespace proc {
 
   proc_t proc;  ///< Global process registry used to track and terminate child processes.
 
+  bool should_retry_owned_virtual_display(
+    const int exit_code,
+    const bool feature_enabled,
+    const steamos_virtual_session::virtual_display_mode_e mode,
+    const steamos_virtual_session::session_origin_e origin
+  ) {
+    return exit_code == virtual_display_fallback_exit_code &&
+           feature_enabled &&
+           mode == steamos_virtual_session::virtual_display_mode_e::auto_detect &&
+           origin == steamos_virtual_session::session_origin_e::none;
+  }
+
   bool should_launch_owned_virtual_desktop(
     const std::string_view app_command,
     const std::size_t detached_command_count,
@@ -355,6 +367,17 @@ namespace proc {
       auto ret = child.exit_code();
       if (ret != 0) {
         BOOST_LOG(error) << '[' << cmd.do_cmd << "] exited with code ["sv << ret << ']';
+        if (should_retry_owned_virtual_display(
+              ret,
+              config::steamos_virtual_display.enabled,
+              config::steamos_virtual_display.mode,
+              virtual_status.origin
+            )) {
+          // The failed display-mode helper may already have saved or changed physical state.
+          // Treat its matching undo command as active so fail_guard restores it before retry.
+          ++_app_prep_it;
+          return virtual_display_fallback_exit_code;
+        }
         return -1;
       }
     }

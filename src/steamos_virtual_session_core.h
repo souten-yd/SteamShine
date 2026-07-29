@@ -262,13 +262,121 @@ namespace steamos_virtual_session {
   );
 
   /**
-   * @brief A validated nested Gamescope display request.
+   * @brief Policy applied when a requested coded extent needs alignment.
+   */
+  enum class geometry_alignment_policy_e {
+    auto_align,  ///< Minimally align a representable request and report the change.
+    require_exact,  ///< Reject a request that cannot be represented exactly.
+  };
+
+  /**
+   * @brief Parse a geometry alignment policy.
+   *
+   * @param value Configuration value; matching is case-sensitive.
+   * @return Parsed policy, or no value for unsupported text.
+   */
+  std::optional<geometry_alignment_policy_e> parse_geometry_alignment_policy(std::string_view value);
+
+  /**
+   * @brief Return the canonical configuration spelling for an alignment policy.
+   *
+   * @param policy Policy to serialize.
+   * @return Lowercase configuration value.
+   */
+  std::string_view to_string(geometry_alignment_policy_e policy);
+
+  /**
+   * @brief Policy for absolute input that lands in fitted-output margins.
+   */
+  enum class margin_input_policy_e {
+    clamp,  ///< Clamp margin input to the closest visible content edge.
+    reject,  ///< Drop margin input instead of moving at the content edge.
+  };
+
+  /**
+   * @brief Parse an absolute-input margin policy.
+   *
+   * @param value Configuration value; matching is case-sensitive.
+   * @return Parsed policy, or no value for unsupported text.
+   */
+  std::optional<margin_input_policy_e> parse_margin_input_policy(std::string_view value);
+
+  /**
+   * @brief Return the canonical configuration spelling for a margin policy.
+   *
+   * @param policy Policy to serialize.
+   * @return Lowercase configuration value.
+   */
+  std::string_view to_string(margin_input_policy_e policy);
+
+  /**
+   * @brief Exact display refresh represented as a reduced rational number.
+   */
+  struct display_refresh_t {
+    std::uint32_t numerator {0};  ///< Refresh cycles in one denominator interval.
+    std::uint32_t denominator {1};  ///< Positive interval denominator.
+  };
+
+  /**
+   * @brief Safety and administrator ceilings for one display request.
+   */
+  struct display_constraints_t {
+    int minimum_width {640};  ///< Smallest accepted coded width.
+    int maximum_width {7680};  ///< Largest accepted coded width.
+    int minimum_height {480};  ///< Smallest accepted coded height.
+    int maximum_height {4320};  ///< Largest accepted coded height.
+    std::uint32_t width_alignment {2};  ///< Required coded-width alignment.
+    std::uint32_t height_alignment {2};  ///< Required coded-height alignment.
+    std::uint32_t minimum_fps {30};  ///< Smallest accepted refresh rate.
+    std::uint32_t maximum_fps {240};  ///< Administrator refresh ceiling.
+    std::uint64_t maximum_frame_pixels {33177600};  ///< Encoder coded-extent ceiling.
+    std::uint64_t maximum_pixel_rate {1990656000};  ///< Probed/administrator pixels-per-second ceiling.
+    std::uint64_t maximum_buffer_bytes {536870912};  ///< GPU/capture buffer budget for the stream.
+    std::uint32_t buffer_count {4};  ///< Conservatively budgeted simultaneous frame buffers.
+    std::uint32_t bytes_per_pixel {4};  ///< Worst-case bytes per pixel used for budget checks.
+  };
+
+  /**
+   * @brief A validated nested Gamescope display request and its preserved input.
    */
   struct display_request_t {
-    int width;  ///< Nested display width in pixels.
-    int height;  ///< Nested display height in pixels.
-    int fps;  ///< Nested display refresh rate.
+    int requested_width {0};  ///< Original client width before alignment.
+    int requested_height {0};  ///< Original client height before alignment.
+    display_refresh_t requested_refresh;  ///< Original exact refresh request.
+    int width {0};  ///< Selected coded width in pixels.
+    int height {0};  ///< Selected coded height in pixels.
+    int fps {0};  ///< Rounded legacy refresh used by integer-only consumers.
+    display_refresh_t refresh;  ///< Selected exact refresh.
+    bool valid {false};  ///< Whether every safety and capability check passed.
+    bool adjusted {false};  ///< Whether missing or unaligned input changed selection.
+    std::string reason;  ///< Stable selection, adjustment, or rejection reason.
   };
+
+  /**
+   * @brief Select a safe coded extent and rational refresh for one request.
+   *
+   * @param requested_width Client-provided width, or zero with all request fields when unavailable.
+   * @param requested_height Client-provided height, or zero with all request fields when unavailable.
+   * @param requested_fps Client integer FPS.
+   * @param requested_refresh_x100 Optional exact refresh in hundredths of Hz.
+   * @param default_width Configured width used only for a wholly missing request.
+   * @param default_height Configured height used only for a wholly missing request.
+   * @param default_fps Configured FPS used only for a wholly missing request.
+   * @param alignment_policy Whether unaligned dimensions may be minimally adjusted.
+   * @param constraints Effective probed and administrator ceilings.
+   * @return Selected request or a stable rejected result.
+   */
+  display_request_t select_display_request(
+    int requested_width,
+    int requested_height,
+    int requested_fps,
+    int requested_refresh_x100,
+    int default_width,
+    int default_height,
+    int default_fps,
+    geometry_alignment_policy_e alignment_policy,
+    const display_constraints_t &constraints = {}
+  );
 
   /**
    * @brief Clamp a client display request to SteamOS virtual-session bounds.
@@ -282,6 +390,70 @@ namespace steamos_virtual_session {
    * @return A request constrained to 640x480 through 7680x4320 at 30 through 240 FPS.
    */
   display_request_t normalize_display_request(int requested_width, int requested_height, int requested_fps, int default_width, int default_height, int default_fps);
+
+  /**
+   * @brief Immutable facts that determine whether an owned canvas can be reused.
+   */
+  struct retained_session_key_t {
+    int width {0};  ///< Owned canvas width.
+    int height {0};  ///< Owned canvas height.
+    display_refresh_t refresh;  ///< Owned canvas refresh.
+    bool hdr {false};  ///< HDR intent used when the canvas was created.
+    std::string render_node;  ///< GPU render node shared by game, capture, and encoder.
+    std::string source_identity;  ///< Stable owned source identity.
+    std::string capture_pixel_format;  ///< Required capture format class such as NV12 or P010.
+  };
+
+  /**
+   * @brief Compare every retained-session compatibility dimension.
+   *
+   * @param retained Facts recorded for the existing owned session.
+   * @param requested Facts required by the new launch.
+   * @return True only when reuse cannot change canvas, color, GPU, source, or capture format.
+   */
+  bool retained_session_compatible(const retained_session_key_t &retained, const retained_session_key_t &requested);
+
+  /**
+   * @brief Visible source content fitted into one encoded output.
+   */
+  struct content_rectangle_t {
+    int x {0};  ///< Left output offset in pixels.
+    int y {0};  ///< Top output offset in pixels.
+    int width {0};  ///< Visible content width in output pixels.
+    int height {0};  ///< Visible content height in output pixels.
+  };
+
+  /**
+   * @brief Compute a centered aspect-preserving fit rectangle.
+   *
+   * @param source_width Source canvas width.
+   * @param source_height Source canvas height.
+   * @param output_width Encoded output width.
+   * @param output_height Encoded output height.
+   * @param alignment Output rectangle alignment.
+   * @return Centered rectangle, or an empty rectangle for invalid dimensions.
+   */
+  content_rectangle_t fit_content_rectangle(int source_width, int source_height, int output_width, int output_height, int alignment = 2);
+
+  /**
+   * @brief Result of mapping one encoded-output coordinate into visible content.
+   */
+  struct content_coordinate_t {
+    bool accepted {false};  ///< Whether the configured margin policy accepts the coordinate.
+    double x {0.0};  ///< Normalized horizontal source coordinate in the range zero through one.
+    double y {0.0};  ///< Normalized vertical source coordinate in the range zero through one.
+  };
+
+  /**
+   * @brief Map an encoded-output coordinate through its fitted content rectangle.
+   *
+   * @param output_x Horizontal output coordinate.
+   * @param output_y Vertical output coordinate.
+   * @param rectangle Visible fitted content rectangle.
+   * @param policy Margin clamp or rejection policy.
+   * @return Normalized source coordinate and acceptance state.
+   */
+  content_coordinate_t map_content_coordinate(double output_x, double output_y, const content_rectangle_t &rectangle, margin_input_policy_e policy);
 
   /**
    * @brief Build a Gamescope command from options advertised by its own help text.

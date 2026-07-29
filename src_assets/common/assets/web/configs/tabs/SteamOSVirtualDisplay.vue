@@ -108,6 +108,20 @@ const config = ref(props.config)
       </div>
       <div class="row">
         <div class="col-md-4 mb-3">
+          <label class="form-label" for="steamos_max_frame_pixels">Maximum frame pixels</label>
+          <input id="steamos_max_frame_pixels" v-model="config.steamos_max_frame_pixels" class="form-control" type="number" min="307200" max="33177600" />
+        </div>
+        <div class="col-md-4 mb-3">
+          <label class="form-label" for="steamos_max_pixel_rate">Maximum pixels per second</label>
+          <input id="steamos_max_pixel_rate" v-model="config.steamos_max_pixel_rate" class="form-control" type="number" min="9216000" max="2000000000" />
+        </div>
+        <div class="col-md-4 mb-3">
+          <label class="form-label" for="steamos_max_buffer_megabytes">Maximum frame-buffer memory (MiB)</label>
+          <input id="steamos_max_buffer_megabytes" v-model="config.steamos_max_buffer_megabytes" class="form-control" type="number" min="64" max="2048" />
+        </div>
+      </div>
+      <div class="row">
+        <div class="col-md-4 mb-3">
           <label class="form-label" for="steamos_default_width">Default width</label>
           <input id="steamos_default_width" v-model="config.steamos_default_width" class="form-control" type="number" min="640" max="7680" />
         </div>
@@ -118,6 +132,23 @@ const config = ref(props.config)
         <div class="col-md-4 mb-3">
           <label class="form-label" for="steamos_default_fps">Default refresh rate</label>
           <input id="steamos_default_fps" v-model="config.steamos_default_fps" class="form-control" type="number" min="30" max="240" />
+        </div>
+      </div>
+      <div class="row">
+        <div class="col-md-6 mb-3">
+          <label class="form-label" for="steamos_geometry_alignment">Geometry alignment</label>
+          <select id="steamos_geometry_alignment" v-model="config.steamos_geometry_alignment" class="form-select">
+            <option value="auto">Auto: minimally align coded dimensions</option>
+            <option value="require_exact">Require exact client dimensions</option>
+          </select>
+          <div class="form-text">Auto reports any alignment adjustment; exact mode rejects an unrepresentable coded extent.</div>
+        </div>
+        <div class="col-md-6 mb-3">
+          <label class="form-label" for="steamos_margin_input">Input in fitted-output margins</label>
+          <select id="steamos_margin_input" v-model="config.steamos_margin_input" class="form-select">
+            <option value="clamp">Clamp to the nearest visible edge</option>
+            <option value="reject">Ignore input in margins</option>
+          </select>
         </div>
       </div>
       <div class="mb-3 form-check">

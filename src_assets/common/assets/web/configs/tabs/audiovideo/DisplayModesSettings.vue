@@ -18,6 +18,13 @@ const config = ref(props.config)
     <div class="form-text">{{ $t("config.max_bitrate_desc") }}</div>
   </div>
 
+  <!--steamshine_adaptive_bitrate-->
+  <div class="mb-3 form-check form-switch">
+    <input class="form-check-input" type="checkbox" id="steamshine_adaptive_bitrate" v-model="config.steamshine_adaptive_bitrate" />
+    <label class="form-check-label" for="steamshine_adaptive_bitrate">{{ $t("config.steamshine_adaptive_bitrate") }}</label>
+    <div class="form-text">{{ $t("config.steamshine_adaptive_bitrate_desc") }}</div>
+  </div>
+
   <!--minimum_fps_target-->
   <div class="mb-3">
     <label for="minimum_fps_target" class="form-label">{{ $t("config.minimum_fps_target") }}</label>

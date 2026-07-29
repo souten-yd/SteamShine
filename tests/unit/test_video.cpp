@@ -242,6 +242,44 @@ TEST(VideoPipelineDiagnostics, RateLimitsOnlyDuplicateClientIdrRequests) {
 }
 
 /**
+ * @brief Verify client loss feedback changes only the bounded video target.
+ */
+TEST(VideoPipelineDiagnostics, RecordsBoundedAdaptiveBitrateDecision) {
+  const auto original_enabled {config::video.adaptive_bitrate};
+  const auto original_maximum {config::video.max_bitrate};
+  config::video.adaptive_bitrate = true;
+  config::video.max_bitrate = 12000;
+
+  video::reset_pipeline_diagnostics();
+  video::config_t stream_config {};
+  stream_config.framerate = 60;
+  stream_config.bitrate = 10000;
+  video::initialize_adaptive_bitrate(stream_config);
+  video::record_bitrate_feedback(1, 500);
+  video::record_bitrate_feedback(0, 500);
+  video::record_bitrate_feedback(0, 500);
+  video::record_bitrate_feedback(0, 500);
+
+  const auto snapshot {video::pipeline_diagnostics_snapshot()};
+  EXPECT_TRUE(snapshot.adaptive_bitrate_enabled);
+  EXPECT_EQ(snapshot.bitrate.minimum_kbps, 2500U);
+  EXPECT_EQ(snapshot.bitrate.initial_kbps, 10000U);
+  EXPECT_EQ(snapshot.bitrate.target_kbps, 9000U);
+  EXPECT_EQ(snapshot.bitrate.maximum_kbps, 10000U);
+  EXPECT_EQ(snapshot.bitrate.peak_kbps, 9000U);
+  EXPECT_EQ(snapshot.bitrate.vbv_kbits, 149U);
+  EXPECT_EQ(snapshot.congestion_state, adaptive_bitrate::congestion_state_e::warning);
+  EXPECT_EQ(snapshot.bitrate_reason, "isolated_network_pressure");
+  EXPECT_EQ(snapshot.bitrate_feedback_samples, 4U);
+  EXPECT_EQ(snapshot.bitrate_lost_packets, 1U);
+  EXPECT_EQ(snapshot.bitrate_active_kbps, 10000U);
+  EXPECT_EQ(snapshot.bitrate_learned_next_kbps, 10000U);
+
+  config::video.adaptive_bitrate = original_enabled;
+  config::video.max_bitrate = original_maximum;
+}
+
+/**
  * @brief Verify capture handoff retains only the newest source frame.
  */
 TEST(VideoPipelineBackpressure, CaptureHandoffReplacesObsoleteFrame) {

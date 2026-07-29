@@ -4,12 +4,17 @@
  */
 
 // standard includes
+#include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <future>
+#include <limits>
+#include <numeric>
 #include <queue>
 
 // lib includes
@@ -44,6 +49,7 @@ extern "C" {
 #include "system_tray.h"
 #include "thread_safe.h"
 #include "utility.h"
+#include "web_services.h"
 
 constexpr int IDX_START_A = 0;  ///< Control-stream message index for the first stream-start packet.
 constexpr int IDX_START_B = 1;  ///< Control-stream message index for the second stream-start packet.
@@ -89,6 +95,350 @@ using asio::ip::udp;
 using namespace std::literals;
 
 namespace stream {
+  namespace {
+    /**
+     * @brief Convert a non-negative Kbps protocol value to bits per second.
+     *
+     * @param kilobits_per_second Protocol value to convert.
+     * @return Saturated non-negative bits-per-second value.
+     */
+    std::uint64_t bitrate_bps(const std::int64_t kilobits_per_second) {
+      if (kilobits_per_second <= 0) {
+        return 0;
+      }
+      constexpr auto multiplier = std::uint64_t {1000};
+      const auto value = static_cast<std::uint64_t>(kilobits_per_second);
+      return value > std::numeric_limits<std::uint64_t>::max() / multiplier ?
+               std::numeric_limits<std::uint64_t>::max() :
+               value * multiplier;
+    }
+
+    /**
+     * @brief Return the stable protocol codec label for a bitstream format.
+     *
+     * @param codec GameStream bitstream format.
+     * @return Stable codec name, or `unknown` for an unsupported value.
+     */
+    std::string_view codec_name(const int codec) {
+      switch (codec) {
+        case 0:
+          return "h264";
+        case 1:
+          return "hevc";
+        case 2:
+          return "av1";
+        default:
+          return "unknown";
+      }
+    }
+
+    /**
+     * @brief Return the codec bit represented by one GameStream format.
+     *
+     * @param codec GameStream bitstream format.
+     * @return Single codec bit, or zero for an unsupported value.
+     */
+    std::uint32_t codec_mask(const int codec) {
+      return codec >= 0 && codec < 32 ? std::uint32_t {1} << codec : 0;
+    }
+
+    /**
+     * @brief Return a stable colorspace label used by diagnostics JSON.
+     *
+     * @param colorspace Active Sunshine colorspace.
+     * @return Stable lowercase colorspace label.
+     */
+    std::string_view colorspace_name(const video::colorspace_e colorspace) {
+      switch (colorspace) {
+        case video::colorspace_e::rec601:
+          return "rec601";
+        case video::colorspace_e::rec709:
+          return "rec709";
+        case video::colorspace_e::bt2020sdr:
+          return "bt2020_sdr";
+        case video::colorspace_e::bt2020:
+          return "bt2020_pq";
+      }
+      return "unknown";
+    }
+
+    /**
+     * @brief Serialize one rational rate into the public schema.
+     *
+     * @param rate Rate to serialize.
+     * @return JSON numerator and denominator object.
+     */
+    nlohmann::json rational_rate_json(const rational_rate_t &rate) {
+      return {
+        {"numerator", rate.numerator},
+        {"denominator", rate.denominator},
+      };
+    }
+
+    /**
+     * @brief Serialize one geometry into the public schema.
+     *
+     * @param geometry Geometry to serialize.
+     * @return JSON width, height, and frame-rate object.
+     */
+    nlohmann::json geometry_json(const stream_geometry_t &geometry) {
+      return {
+        {"width", geometry.width},
+        {"height", geometry.height},
+        {"frame_rate", rational_rate_json(geometry.frame_rate)},
+      };
+    }
+
+    /**
+     * @brief Serialize one bitrate envelope into the public schema.
+     *
+     * @param bitrate Envelope to serialize.
+     * @return JSON bitrate object using bits-per-second units.
+     */
+    nlohmann::json bitrate_json(const bitrate_envelope_t &bitrate) {
+      return {
+        {"minimum_bps", bitrate.minimum_bps},
+        {"initial_bps", bitrate.initial_bps},
+        {"target_bps", bitrate.target_bps},
+        {"maximum_bps", bitrate.maximum_bps},
+        {"peak_bps", bitrate.peak_bps},
+        {"vbv_buffer_bits", bitrate.vbv_buffer_bits},
+      };
+    }
+
+    /**
+     * @brief Serialize color facts into the public schema.
+     *
+     * @param color Color state to serialize.
+     * @return JSON color object.
+     */
+    nlohmann::json color_json(const stream_color_state_t &color) {
+      return {
+        {"hdr_requested", color.hdr_requested},
+        {"hdr_selected", color.hdr_selected},
+        {"hdr_active", color.hdr_active},
+        {"bit_depth", color.bit_depth},
+        {"encoder_csc_mode", color.encoder_csc_mode},
+        {"chroma_sampling_type", color.chroma_sampling_type},
+        {"colorspace", color.colorspace},
+        {"full_range", color.full_range},
+      };
+    }
+
+    /**
+     * @brief Serialize selected or active endpoint state.
+     *
+     * @param endpoint Endpoint state to serialize.
+     * @return JSON endpoint object.
+     */
+    nlohmann::json endpoint_json(const stream_endpoint_state_t &endpoint) {
+      return {
+        {"source_origin", endpoint.source_origin},
+        {"source_geometry", geometry_json(endpoint.source_geometry)},
+        {"capture_geometry", geometry_json(endpoint.capture_geometry)},
+        {"encode_geometry", geometry_json(endpoint.encode_geometry)},
+        {"codec", endpoint.codec},
+        {"codec_name", codec_name(endpoint.codec)},
+        {"profile", endpoint.profile},
+        {"color", color_json(endpoint.color)},
+        {"bitrate", bitrate_json(endpoint.bitrate)},
+        {"backend", endpoint.backend},
+        {"render_node", endpoint.render_node},
+        {"runtime_rate_update_supported", endpoint.runtime_rate_update_supported},
+        {"reason", endpoint.reason},
+        {"network_class", endpoint.network_class},
+        {"profile_selection_reason", endpoint.profile_selection_reason},
+        {"geometry_policy", endpoint.geometry_policy},
+        {"quality_preset", endpoint.quality_preset},
+        {"orientation", endpoint.orientation},
+        {"safe_area_percent", endpoint.safe_area_percent},
+      };
+    }
+  }  // namespace
+
+  /** @copydoc rational_rate_from_protocol */
+  rational_rate_t rational_rate_from_protocol(const int integer_fps, const int refresh_rate_x100) {
+    std::uint32_t numerator = integer_fps > 0 ? static_cast<std::uint32_t>(integer_fps) : 0;
+    std::uint32_t denominator = 1;
+    if (refresh_rate_x100 > 0) {
+      numerator = static_cast<std::uint32_t>(refresh_rate_x100);
+      denominator = 100;
+      const auto divisor = std::gcd(numerator, denominator);
+      numerator /= divisor;
+      denominator /= divisor;
+    }
+    return {numerator, denominator};
+  }
+
+  /** @copydoc initialize_launch_negotiation */
+  void initialize_launch_negotiation(rtsp_stream::launch_session_t &launch_session) {
+    auto &snapshot = launch_session.negotiation;
+    snapshot = {};
+    snapshot.generation = launch_session.id;
+    snapshot.requested.launch_geometry = {
+      launch_session.width > 0 ? static_cast<std::uint32_t>(launch_session.width) : 0,
+      launch_session.height > 0 ? static_cast<std::uint32_t>(launch_session.height) : 0,
+      rational_rate_from_protocol(launch_session.fps),
+    };
+    snapshot.requested.client_id = launch_session.unique_id;
+    snapshot.requested.application_id = launch_session.appid;
+    snapshot.requested.hdr_requested = launch_session.hdr_requested;
+  }
+
+  /** @copydoc add_fallback_reason */
+  void add_fallback_reason(stream_negotiation_snapshot_t &snapshot, const std::string_view reason) {
+    if (reason.empty() || std::ranges::find(snapshot.fallback_reasons, reason) != snapshot.fallback_reasons.end()) {
+      return;
+    }
+    snapshot.fallback_reasons.emplace_back(reason);
+  }
+
+  /** @copydoc populate_rtsp_negotiation */
+  void populate_rtsp_negotiation(
+    rtsp_stream::launch_session_t &launch_session,
+    const config_t &config,
+    const video::config_t &requested_monitor,
+    const std::int64_t client_maximum_bitrate_kbps,
+    const std::int64_t configured_total_bitrate_kbps,
+    const bool refresh_hint_discarded
+  ) {
+    auto &snapshot = launch_session.negotiation;
+    snapshot.requested.stream_geometry = {
+      requested_monitor.width > 0 ? static_cast<std::uint32_t>(requested_monitor.width) : 0,
+      requested_monitor.height > 0 ? static_cast<std::uint32_t>(requested_monitor.height) : 0,
+      rational_rate_from_protocol(requested_monitor.framerate, requested_monitor.framerateX100),
+    };
+    snapshot.requested.rtsp_received = true;
+    snapshot.requested.client_bitrate_ceiling_bps = bitrate_bps(client_maximum_bitrate_kbps);
+    snapshot.requested.configured_total_bitrate_bps = bitrate_bps(configured_total_bitrate_kbps);
+    snapshot.requested.requested_codec = requested_monitor.videoFormat;
+    snapshot.requested.client_codec_mask |= codec_mask(requested_monitor.videoFormat);
+    snapshot.requested.ten_bit_requested = requested_monitor.requestedDynamicRange != 0;
+
+    if (refresh_hint_discarded) {
+      add_fallback_reason(snapshot, "client_refresh_rate_hint_inconsistent");
+    }
+    if (snapshot.requested.launch_geometry.width != snapshot.requested.stream_geometry.width ||
+        snapshot.requested.launch_geometry.height != snapshot.requested.stream_geometry.height) {
+      add_fallback_reason(snapshot, "rtsp_geometry_differs_from_launch");
+    }
+    if (snapshot.requested.launch_geometry.frame_rate.numerator != snapshot.requested.stream_geometry.frame_rate.numerator ||
+        snapshot.requested.launch_geometry.frame_rate.denominator != snapshot.requested.stream_geometry.frame_rate.denominator) {
+      add_fallback_reason(snapshot, "rtsp_frame_rate_differs_from_launch");
+    }
+    if (configured_total_bitrate_kbps > 0 && configured_total_bitrate_kbps != config.monitor.bitrate) {
+      add_fallback_reason(snapshot, "configured_total_bitrate_adjusted_for_overhead");
+    }
+
+    const auto virtual_session = steamos_virtual_session::status_snapshot();
+    auto &selected = snapshot.selected;
+    selected.source_origin = std::string {steamos_virtual_session::to_string(virtual_session.origin)};
+    if (selected.source_origin == "none" && virtual_session.selection_reason == "capturable_output_present") {
+      selected.source_origin = "physical_desktop";
+    }
+    selected.source_geometry = {
+      virtual_session.width > 0 ? static_cast<std::uint32_t>(virtual_session.width) : snapshot.requested.launch_geometry.width,
+      virtual_session.height > 0 ? static_cast<std::uint32_t>(virtual_session.height) : snapshot.requested.launch_geometry.height,
+      virtual_session.fps > 0 ? rational_rate_from_protocol(virtual_session.fps) : snapshot.requested.launch_geometry.frame_rate,
+    };
+    selected.capture_geometry = selected.source_geometry;
+    selected.encode_geometry = {
+      config.monitor.width > 0 ? static_cast<std::uint32_t>(config.monitor.width) : 0,
+      config.monitor.height > 0 ? static_cast<std::uint32_t>(config.monitor.height) : 0,
+      rational_rate_from_protocol(config.monitor.framerate, config.monitor.framerateX100),
+    };
+    selected.codec = config.monitor.videoFormat;
+    selected.profile = config.monitor.videoFormat == 0 ? "h264_8bit" :
+                       config.monitor.videoFormat == 1 ? (config.monitor.dynamicRange ? "hevc_main10" : "hevc_main") :
+                       config.monitor.videoFormat == 2 ? (config.monitor.dynamicRange ? "av1_main10" : "av1_main") :
+                                                         "unknown";
+    selected.color = {
+      .hdr_requested = launch_session.hdr_requested,
+      .hdr_selected = config.monitor.dynamicRange != 0,
+      .hdr_active = false,
+      .bit_depth = static_cast<std::uint8_t>(config.monitor.dynamicRange ? 10 : 8),
+      .encoder_csc_mode = config.monitor.encoderCscMode,
+      .chroma_sampling_type = config.monitor.chromaSamplingType,
+    };
+    const auto target_bps = bitrate_bps(config.monitor.bitrate);
+    const auto maximum_bps = target_bps;
+    selected.bitrate = {
+      .minimum_bps = 0,
+      .initial_bps = target_bps,
+      .target_bps = target_bps,
+      .maximum_bps = maximum_bps,
+      .peak_bps = maximum_bps,
+      .vbv_buffer_bits = 0,
+    };
+    selected.render_node = virtual_session.render_node;
+    selected.reason = virtual_session.selection_reason.empty() ? "rtsp_request_validated" : virtual_session.selection_reason;
+  }
+
+  /** @copydoc populate_active_video */
+  void populate_active_video(
+    stream_negotiation_snapshot_t &snapshot,
+    const int source_width,
+    const int source_height,
+    const std::string_view backend,
+    const std::string_view profile,
+    const video::sunshine_colorspace_t &colorspace
+  ) {
+    auto &active = snapshot.active;
+    active = snapshot.selected;
+    active.source_geometry.width = source_width > 0 ? static_cast<std::uint32_t>(source_width) : 0;
+    active.source_geometry.height = source_height > 0 ? static_cast<std::uint32_t>(source_height) : 0;
+    active.capture_geometry = active.source_geometry;
+    active.backend = backend;
+    active.profile = profile;
+    active.color.hdr_active = video::colorspace_is_hdr(colorspace);
+    active.color.bit_depth = static_cast<std::uint8_t>(colorspace.bit_depth);
+    active.color.colorspace = colorspace_name(colorspace.colorspace);
+    active.color.full_range = colorspace.full_range;
+    active.reason = "video_encoder_opened";
+  }
+
+  /** @copydoc negotiation_snapshot_json */
+  nlohmann::json negotiation_snapshot_json(const stream_negotiation_snapshot_t &snapshot, const bool available) {
+    return {
+      {"schema_version", 1},
+      {"poll_interval_ms", 2000},
+      {"available", available},
+      {"generation", snapshot.generation},
+      {"requested", {
+                      {"launch_geometry", geometry_json(snapshot.requested.launch_geometry)},
+                      {"stream_geometry", geometry_json(snapshot.requested.stream_geometry)},
+                      {"rtsp_received", snapshot.requested.rtsp_received},
+                      {"client_bitrate_ceiling_bps", snapshot.requested.client_bitrate_ceiling_bps},
+                      {"configured_total_bitrate_bps", snapshot.requested.configured_total_bitrate_bps},
+                      {"client_codec_mask", snapshot.requested.client_codec_mask},
+                      {"requested_codec", snapshot.requested.requested_codec},
+                      {"requested_codec_name", codec_name(snapshot.requested.requested_codec)},
+                      {"hdr_requested", snapshot.requested.hdr_requested},
+                      {"ten_bit_requested", snapshot.requested.ten_bit_requested},
+                      {"client_id", snapshot.requested.client_id},
+                      {"capability_signature", snapshot.requested.capability_signature},
+                      {"application_id", snapshot.requested.application_id},
+                    }},
+      {"selected", endpoint_json(snapshot.selected)},
+      {"active", endpoint_json(snapshot.active)},
+      {"observed", {
+                     {"source_fps", snapshot.observed.source_fps},
+                     {"encode_fps", snapshot.observed.encode_fps},
+                     {"target_bitrate_bps", snapshot.observed.target_bitrate_bps},
+                     {"actual_bitrate_bps", snapshot.observed.actual_bitrate_bps},
+                     {"capture_queue_frames", snapshot.observed.capture_queue_frames},
+                     {"encoder_queue_frames", snapshot.observed.encoder_queue_frames},
+                     {"network_queue_frames", snapshot.observed.network_queue_frames},
+                     {"network_queue_bytes", snapshot.observed.network_queue_bytes},
+                     {"capture_age_p99_ms", snapshot.observed.capture_age_p99_ms},
+                     {"encode_age_p99_ms", snapshot.observed.encode_age_p99_ms},
+                     {"network_age_p99_ms", snapshot.observed.network_age_p99_ms},
+                     {"output_status_reason", snapshot.observed.output_status_reason},
+                   }},
+      {"fallback_reasons", snapshot.fallback_reasons},
+    };
+  }
+
   namespace {
     std::atomic_uint64_t diagnostics_report_sequence {0};  ///< Prevents report-name collisions within one process.
 
@@ -138,9 +488,14 @@ namespace stream {
      * lifecycle. Event and frame paths update atomics and fixed RAM rings only.
      *
      * @param stream_config Negotiated stream configuration to report.
+     * @param negotiation Canonical four-stage negotiation state for the session.
      * @param started_at Monotonic stream start time.
      */
-    void write_session_diagnostics(const config_t &stream_config, const std::chrono::steady_clock::time_point started_at) {
+    void write_session_diagnostics(
+      const config_t &stream_config,
+      const stream_negotiation_snapshot_t &negotiation,
+      const std::chrono::steady_clock::time_point started_at
+    ) {
 #if defined(__linux__)
       try {
         const auto directory {diagnostics_state_directory()};
@@ -157,7 +512,9 @@ namespace stream {
 
         const auto input_diagnostics {input::diagnostics_snapshot()};
         const auto video_diagnostics {video::pipeline_diagnostics_snapshot()};
+        const auto hdr_status {video::hdr_status_snapshot()};
         const auto virtual_session {steamos_virtual_session::status_snapshot()};
+        const auto codec_status {video::codec_status_snapshot()};
         const auto ended_at {std::chrono::system_clock::now()};
         const auto ended_at_milliseconds {std::chrono::duration_cast<std::chrono::milliseconds>(ended_at.time_since_epoch()).count()};
         const auto duration_milliseconds {std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started_at).count()};
@@ -178,8 +535,50 @@ namespace stream {
           {"height", stream_config.monitor.height},
           {"fps", stream_config.monitor.framerate},
           {"codec", stream_config.monitor.videoFormat},
+          {"codec_requested", codec_status.requested},
+          {"codec_selected", codec_status.selected},
+          {"codec_active", codec_status.active},
+          {"codec_profile", codec_status.profile},
+          {"codec_bit_depth", codec_status.bit_depth},
+          {"codec_backend", codec_status.backend},
+          {"codec_hardware", codec_status.hardware},
+          {"codec_reason", codec_status.reason},
           {"dynamic_range", stream_config.monitor.dynamicRange},
+          {"hdr", {
+                    {"policy", hdr_policy::to_string(config::video.steamshine_hdr_policy)},
+                    {"requested", hdr_status.requested},
+                    {"client_capable", hdr_status.client_capable},
+                    {"selected", hdr_status.selected},
+                    {"active", hdr_status.active},
+                    {"bit_depth", hdr_status.bit_depth},
+                    {"primaries", hdr_status.primaries},
+                    {"transfer", hdr_status.transfer},
+                    {"matrix", hdr_status.matrix},
+                    {"range", hdr_status.range},
+                    {"reason", hdr_status.reason},
+                  }},
           {"bitrate_kbps", stream_config.monitor.bitrate},
+          {"stream_negotiation", negotiation_snapshot_json(negotiation)},
+          {"adaptive_bitrate", {
+                                 {"enabled", video_diagnostics.adaptive_bitrate_enabled},
+                                 {"minimum_kbps", video_diagnostics.bitrate.minimum_kbps},
+                                 {"initial_kbps", video_diagnostics.bitrate.initial_kbps},
+                                 {"target_kbps", video_diagnostics.bitrate.target_kbps},
+                                 {"active_kbps", video_diagnostics.bitrate_active_kbps},
+                                 {"maximum_kbps", video_diagnostics.bitrate.maximum_kbps},
+                                 {"peak_kbps", video_diagnostics.bitrate.peak_kbps},
+                                 {"vbv_kbits", video_diagnostics.bitrate.vbv_kbits},
+                                 {"actual_video_kbps", video_diagnostics.actual_video_bitrate_kbps},
+                                 {"learned_next_kbps", video_diagnostics.bitrate_learned_next_kbps},
+                                 {"state", adaptive_bitrate::to_string(video_diagnostics.congestion_state)},
+                                 {"reason", video_diagnostics.bitrate_reason},
+                                 {"runtime_update_supported", video_diagnostics.runtime_bitrate_update_supported},
+                                 {"feedback_samples", video_diagnostics.bitrate_feedback_samples},
+                                 {"lost_packets", video_diagnostics.bitrate_lost_packets},
+                                 {"updates_applied", video_diagnostics.bitrate_updates_applied},
+                                 {"updates_unsupported", video_diagnostics.bitrate_updates_unsupported},
+                                 {"updates_failed", video_diagnostics.bitrate_updates_failed},
+                               }},
           {"input_events_received", input_diagnostics.events_received},
           {"input_events_injected", input_diagnostics.events_injected},
           {"input_motion_coalesced", input_diagnostics.motion_coalesced},
@@ -251,6 +650,7 @@ namespace stream {
       }
 #else
       (void) stream_config;
+      (void) negotiation;
       (void) started_at;
 #endif
     }
@@ -649,6 +1049,8 @@ namespace stream {
    */
   struct session_t {
     config_t config;  ///< Stream or encoder configuration captured for the worker.
+    std::mutex negotiation_mutex;  ///< Protects active and observed updates to canonical negotiation state.
+    stream_negotiation_snapshot_t negotiation;  ///< Canonical state owned by this existing stream session.
 
     safe::mail_t mail;  ///< Mailbox used to distribute packets and lifecycle events.
 
@@ -1298,7 +1700,12 @@ namespace stream {
     });
 
     server->map(packetTypes[IDX_LOSS_STATS], [&](session_t *session, const std::string_view &payload) {
-      int32_t *stats = (int32_t *) payload.data();
+      if (payload.size() < sizeof(std::int32_t) * 4) {
+        BOOST_LOG(warning) << "Ignoring truncated loss statistics payload";
+        return;
+      }
+      std::array<std::int32_t, 4> stats {};
+      std::memcpy(stats.data(), payload.data(), sizeof(stats));
       auto count = stats[0];
       std::chrono::milliseconds t {stats[1]};
 
@@ -1311,6 +1718,11 @@ namespace stream {
         << "time in milli since last report [" << t.count() << ']' << std::endl
         << "last good frame [" << lastGoodFrame << ']' << std::endl
         << "---end stats---";
+
+      video::record_bitrate_feedback(
+        static_cast<std::uint32_t>(std::max(count, 0)),
+        static_cast<std::uint32_t>(std::max<std::int64_t>(t.count(), 0))
+      );
     });
 
     server->map(packetTypes[IDX_REQUEST_IDR_FRAME], [&](session_t *session, const std::string_view &payload) {
@@ -2336,6 +2748,40 @@ namespace stream {
       return session.client_cert;
     }
 
+    /** @copydoc stream::session::negotiation_snapshot */
+    stream_negotiation_snapshot_t negotiation_snapshot(session_t &session) {
+      const auto diagnostics = video::pipeline_diagnostics_snapshot();
+      std::scoped_lock lock {session.negotiation_mutex};
+      session.negotiation.observed = {
+        .source_fps = diagnostics.observed_source_fps,
+        .encode_fps = diagnostics.observed_encode_fps,
+        .target_bitrate_bps = session.negotiation.active.bitrate.target_bps,
+        .actual_bitrate_bps = 0,
+        .capture_queue_frames = diagnostics.capture_queue_current,
+        .encoder_queue_frames = diagnostics.encoder_queue_current,
+        .network_queue_frames = diagnostics.network_queue_frames,
+        .network_queue_bytes = diagnostics.network_queue_bytes,
+        .capture_age_p99_ms = diagnostics.frame_age_at_capture_ms.p99_ms,
+        .encode_age_p99_ms = diagnostics.frame_age_at_encode_ms.p99_ms,
+        .network_age_p99_ms = diagnostics.frame_age_at_network_ms.p99_ms,
+        .output_status_reason = diagnostics.output_status_reason,
+      };
+      return session.negotiation;
+    }
+
+    /** @copydoc stream::session::record_video_active */
+    void record_video_active(
+      session_t &session,
+      const int source_width,
+      const int source_height,
+      const std::string_view backend,
+      const std::string_view profile,
+      const video::sunshine_colorspace_t &colorspace
+    ) {
+      std::scoped_lock lock {session.negotiation_mutex};
+      populate_active_video(session.negotiation, source_width, source_height, backend, profile, colorspace);
+    }
+
     /**
      * @brief Stop the active streaming session and prevent new packets from being queued.
      */
@@ -2385,7 +2831,20 @@ namespace stream {
         // Moonlight's /resume path; only an explicit /cancel or service stop
         // tears them down.
         steamos_virtual_session::mark_streaming_disconnected();
-        write_session_diagnostics(session.config, session.diagnostics_started_at);
+        const auto final_negotiation {negotiation_snapshot(session)};
+        const auto learned_start_kbps {static_cast<int>(video::pipeline_diagnostics_snapshot().bitrate_learned_next_kbps)};
+        if (!final_negotiation.selected.network_class.empty() && learned_start_kbps > 0) {
+          const auto result {web::stream_profile_service().update_learned_start(
+            final_negotiation.requested.client_id,
+            final_negotiation.selected.network_class,
+            final_negotiation.requested.capability_signature,
+            learned_start_kbps
+          )};
+          if (!result.success) {
+            BOOST_LOG(warning) << "STREAM_PROFILE_LEARNING_SKIPPED reason=" << result.code;
+          }
+        }
+        write_session_diagnostics(session.config, final_negotiation, session.diagnostics_started_at);
         bool revert_display_config {config::video.dd.config_revert_on_disconnect};
         if (proc::proc.running()) {
 #if defined SUNSHINE_TRAY && SUNSHINE_TRAY >= 1
@@ -2464,6 +2923,7 @@ namespace stream {
       session->client_cert = launch_session.client_cert;
 
       session->config = config;
+      session->negotiation = launch_session.negotiation;
 
       session->control.connect_data = launch_session.control_connect_data;
       session->control.feedback_queue = mail->queue<platf::gamepad_feedback_msg_t>(mail::gamepad_feedback);
