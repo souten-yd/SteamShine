@@ -667,6 +667,16 @@ namespace {
   }
 
   /**
+   * @brief Verify only the canonical close URI is treated as a Big Picture teardown request.
+   */
+  TEST(SteamOSVirtualSessionCore, DetectsSteamBigPictureCloseCommands) {
+    EXPECT_TRUE(steam_session::command_closes_big_picture("setsid steam steam://close/bigpicture"));
+    EXPECT_TRUE(steam_session::command_closes_big_picture("xdg-open steam://close/bigpicture"));
+    EXPECT_FALSE(steam_session::command_closes_big_picture("setsid steam steam://open/bigpicture"));
+    EXPECT_FALSE(steam_session::command_closes_big_picture("steam -shutdown"));
+  }
+
+  /**
    * @brief Verify each PipeWire consumer retains a complete, independent source identity.
    */
   TEST(SteamOSVirtualSessionCore, ComparesPipeWireConsumerDescriptorsWithoutSharingFds) {

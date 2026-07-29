@@ -41,6 +41,16 @@ TEST(ProcessCommandSelectionTest, RestoresSafeOwnedVirtualDesktopDefault) {
 }
 
 /**
+ * @brief Verify attached Game Mode preserves its resident Big Picture shell only.
+ */
+TEST(ProcessCommandSelectionTest, SkipsOnlyAttachedBigPictureCloseUndo) {
+  EXPECT_TRUE(proc::should_skip_undo_command(true, "setsid steam steam://close/bigpicture"));
+  EXPECT_FALSE(proc::should_skip_undo_command(false, "setsid steam steam://close/bigpicture"));
+  EXPECT_FALSE(proc::should_skip_undo_command(true, "setsid steam steam://open/bigpicture"));
+  EXPECT_FALSE(proc::should_skip_undo_command(true, "steam -shutdown"));
+}
+
+/**
  * @brief Verify physical Desktop launches preserve their inherited display environment.
  */
 TEST(ProcessDisplayEnvironmentTest, MissingEndpointPreservesPhysicalDesktopEnvironment) {

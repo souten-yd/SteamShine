@@ -71,6 +71,15 @@ namespace proc {
   std::string select_effective_command(std::string_view app_command, bool owned_virtual_display, std::string_view virtual_desktop_command);
 
   /**
+   * @brief Decide whether teardown must preserve the resident Game Mode Steam shell.
+   *
+   * @param preserve_attached_steam Whether the application used a non-owned attached Game Mode session.
+   * @param undo_command Configured teardown command.
+   * @return True only for a Big Picture close request in an attached Game Mode session.
+   */
+  bool should_skip_undo_command(bool preserve_attached_steam, std::string_view undo_command);
+
+  /**
    * @brief Apply one verified Gamescope endpoint to a child environment.
    *
    * A missing endpoint performs no writes, preserving every inherited physical
@@ -212,6 +221,7 @@ namespace proc {
 
     // If no command associated with _app_id, yet it's still running
     bool placebo {};
+    bool preserve_attached_steam_ {};  ///< Whether teardown must leave the non-owned Game Mode Steam shell open.
 
     boost::process::v1::child _process;
     boost::process::v1::group _process_group;

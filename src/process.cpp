@@ -27,6 +27,7 @@
 #include "display_device.h"
 #include "logging.h"
 #include "platform/common.h"
+#include "platform/linux/steam_session.h"
 #include "process.h"
 #include "steamos_virtual_session.h"
 #include "system_tray.h"
@@ -81,6 +82,10 @@ namespace proc {
       return std::string {virtual_desktop_command};
     }
     return std::string {xwayland_virtual_desktop_command};
+  }
+
+  bool should_skip_undo_command(const bool preserve_attached_steam, const std::string_view undo_command) {
+    return preserve_attached_steam && steam_session::command_closes_big_picture(undo_command);
   }
 
   void apply_session_display_environment(boost::process::v1::environment &environment, const std::optional<steamos_virtual_session::session_display_endpoint_t> &endpoint) {
@@ -243,6 +248,7 @@ namespace proc {
     _app_prep_it = _app_prep_begin;
 
     const auto virtual_status {steamos_virtual_session::status_snapshot()};
+    preserve_attached_steam_ = virtual_status.origin == steamos_virtual_session::session_origin_e::attached_existing;
     const bool launch_owned_virtual_desktop {should_launch_owned_virtual_desktop(
       _app.cmd,
       _app.detached.size(),
@@ -440,6 +446,10 @@ namespace proc {
       if (cmd.undo_cmd.empty()) {
         continue;
       }
+      if (should_skip_undo_command(preserve_attached_steam_, cmd.undo_cmd)) {
+        BOOST_LOG(info) << "Skipping Undo Cmd for attached Game Mode Steam: ["sv << cmd.undo_cmd << ']';
+        continue;
+      }
 
       boost::filesystem::path working_dir = _app.working_dir.empty() ?
                                               find_working_directory(cmd.undo_cmd, _env) :
@@ -474,6 +484,7 @@ namespace proc {
     }
 
     _app_id = -1;
+    preserve_attached_steam_ = false;
   }
 
   const std::vector<ctx_t> &proc_t::get_apps() const {

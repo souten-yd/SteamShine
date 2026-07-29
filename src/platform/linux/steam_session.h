@@ -126,6 +126,14 @@ namespace steam_session {
   bool command_references_steam(std::string_view command);
 
   /**
+   * @brief Determine whether a command asks Steam to leave Big Picture mode.
+   *
+   * @param command Configured application or undo command.
+   * @return True when the command contains the canonical Big Picture close URI.
+   */
+  bool command_closes_big_picture(std::string_view command);
+
+  /**
    * @brief Read the cgroup membership of one process without invoking external tools.
    *
    * @param pid Process ID to inspect.
