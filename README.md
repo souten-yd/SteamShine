@@ -278,8 +278,9 @@ exactly that, and reports from other hardware are genuinely useful.
 | [INSTALLATION.md](docs/INSTALLATION.md) | Install paths and artifact verification. |
 | [STEAMOS_SETUP_SCRIPT.md](docs/STEAMOS_SETUP_SCRIPT.md) | Every `steamshine.sh` command and exit code. |
 | [STEAMOS_AUTO_VIRTUAL_DISPLAY_IMPLEMENTATION.md](docs/STEAMOS_AUTO_VIRTUAL_DISPLAY_IMPLEMENTATION.md) | How the virtual display actually works. |
-| [STEAMOS_ADAPTIVE_STREAMING_DESIGN.md](docs/STEAMOS_ADAPTIVE_STREAMING_DESIGN.md) | Client-adaptive resolution and bitrate. |
-| [STREAMING_PRIORITY_AND_PERFORMANCE_POLICY.md](docs/STREAMING_PRIORITY_AND_PERFORMANCE_POLICY.md) | Why the control plane never touches the video path. |
+| [PROJECT_ROADMAP.md](docs/PROJECT_ROADMAP.md) | Post-PR12 feature order, independent PR boundaries, hardware gates, and rollback. |
+| [STREAM_NEGOTIATION_HDR_QUALITY_DESIGN.md](docs/STREAM_NEGOTIATION_HDR_QUALITY_DESIGN.md) | Requested/selected/active/observed state, geometry, codecs, HDR, VBR, and Adaptive Bitrate. |
+| [CODEX_GOAL_MODE_STREAMING.md](docs/CODEX_GOAL_MODE_STREAMING.md) | Per-PR implementation contract and evidence requirements. |
 | [IMPLEMENTATION_STATUS.md](docs/IMPLEMENTATION_STATUS.md) | Per-feature status, in more detail than above. |
 | [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | When it doesn't come up cleanly. |
 
