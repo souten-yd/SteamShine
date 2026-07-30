@@ -51,6 +51,7 @@
 #endif
 
 // local includes
+#include "build_info.h"
 #include "config.h"
 #include "confighttp.h"
 #include "crypto.h"
@@ -213,6 +214,50 @@ namespace confighttp {
     }
     entry.emplace_back(now);
     return true;
+  }
+
+  /**
+   * @brief Check whether one remote address has exhausted a rolling request limit.
+   *
+   * Expired entries are removed while checking. The current request is not
+   * recorded, which allows callers to count only failed operations.
+   *
+   * @param attempts Request timestamps indexed by remote address.
+   * @param address Normalized remote address.
+   * @param maximum_attempts Maximum permitted failed requests in the window.
+   * @param window Rolling time window.
+   * @return True when the address must be rejected.
+   */
+  bool steamshine_rate_limit_exhausted(std::map<std::string, rate_limit_t, std::less<>> &attempts, const std::string_view address, const std::size_t maximum_attempts, const std::chrono::steady_clock::duration window) {
+    const auto now = std::chrono::steady_clock::now();
+    std::scoped_lock lock(steamshine_rate_limit_mutex);
+    auto &entry = attempts[std::string {address}].attempts;
+    while (!entry.empty() && entry.front() <= now - window) {
+      entry.pop_front();
+    }
+    return entry.size() >= maximum_attempts;
+  }
+
+  /**
+   * @brief Record one failed protected operation for a remote address.
+   *
+   * @param attempts Request timestamps indexed by remote address.
+   * @param address Normalized remote address.
+   */
+  void record_steamshine_rate_limit_failure(std::map<std::string, rate_limit_t, std::less<>> &attempts, const std::string_view address) {
+    std::scoped_lock lock(steamshine_rate_limit_mutex);
+    attempts[std::string {address}].attempts.emplace_back(std::chrono::steady_clock::now());
+  }
+
+  /**
+   * @brief Clear failed protected operations after successful authentication.
+   *
+   * @param attempts Request timestamps indexed by remote address.
+   * @param address Normalized remote address.
+   */
+  void clear_steamshine_rate_limit(std::map<std::string, rate_limit_t, std::less<>> &attempts, const std::string_view address) {
+    std::scoped_lock lock(steamshine_rate_limit_mutex);
+    attempts.erase(std::string {address});
   }
 
   /**
@@ -1207,7 +1252,7 @@ namespace confighttp {
     nlohmann::json output_tree;
     output_tree["status"] = true;
     output_tree["platform"] = SUNSHINE_PLATFORM;
-    output_tree["version"] = PROJECT_VERSION;
+    output_tree["version"] = build_info::version();
 
     auto vars = config::parse_config(file_handler::read_file(config::sunshine.config_file.c_str()));
 
@@ -1748,7 +1793,7 @@ namespace confighttp {
       return;
     }
     const auto address = net::addr_to_normalized_string(request->remote_endpoint().address());
-    if (!consume_steamshine_rate_limit(steamshine_login_attempts, address, 5U, std::chrono::minutes(5))) {
+    if (steamshine_rate_limit_exhausted(steamshine_login_attempts, address, 5U, std::chrono::minutes(5))) {
       response->write(SimpleWeb::StatusCode::client_error_too_many_requests);
       return;
     }
@@ -1758,9 +1803,11 @@ namespace confighttp {
     }
     const auto session = session_service.login(credential_service, input.value("username", ""), input.value("password", ""));
     if (!session.has_value()) {
+      record_steamshine_rate_limit_failure(steamshine_login_attempts, address);
       response->write(SimpleWeb::StatusCode::client_error_unauthorized);
       return;
     }
+    clear_steamshine_rate_limit(steamshine_login_attempts, address);
     SimpleWeb::CaseInsensitiveMultimap headers;
     headers.emplace("Set-Cookie", "steamshine_session=" + session->id + "; Path=/; Secure; HttpOnly; SameSite=Strict");
     send_steamshine_response(response, {{"status", true}, {"username", session->username}, {"csrf_token", session->csrf_token}}, std::move(headers));

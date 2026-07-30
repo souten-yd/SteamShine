@@ -14,6 +14,7 @@
 #include <memory>
 
 // local imports
+#include <src/build_info.h>
 #include <src/config.h>
 #include <src/crypto.h>
 #include <src/file_handler.h>
@@ -204,7 +205,7 @@ TEST(WebServicesTest, StatusSnapshotIncludesPipeWireDiagnostics) {
   web::StatusSnapshotService status;
   const auto snapshot = status.snapshot();
 
-  EXPECT_EQ(snapshot.at("service_binary_commit"), PROJECT_VERSION_COMMIT);
+  EXPECT_EQ(snapshot.at("service_binary_commit"), build_info::commit());
   EXPECT_EQ(snapshot.at("service_config_path"), config::sunshine.config_file);
   EXPECT_EQ(snapshot.at("service_launch_mode"), "manual");
   ASSERT_TRUE(snapshot.contains("stream_negotiation"));

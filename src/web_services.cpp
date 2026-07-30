@@ -16,6 +16,7 @@
 #include <boost/algorithm/string/predicate.hpp>
 
 // local includes
+#include "build_info.h"
 #include "config.h"
 #include "crypto.h"
 #include "file_handler.h"
@@ -723,7 +724,7 @@ namespace web {
     const auto hdr_status {video::hdr_status_snapshot()};
     const auto *const launch_mode {std::getenv("STEAMSHINE_LAUNCH_MODE")};
     return {
-      {"service_binary_commit", PROJECT_VERSION_COMMIT},
+      {"service_binary_commit", build_info::commit()},
       {"service_config_path", config::sunshine.config_file},
       {"service_launch_mode", launch_mode && *launch_mode ? launch_mode : "manual"},
       {"active_streams", rtsp_stream::session_count()},

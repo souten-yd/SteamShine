@@ -407,8 +407,18 @@ try {
   securityResults.logout_session_status = await steamshinePage.evaluate(async () => (await fetch('/api/steamshine/v1/session')).status);
   if (securityResults.logout_session_status !== 401) throw new Error('Logout did not invalidate the SteamShine session.');
   const loginRateContext = await request.newContext({ ignoreHTTPSErrors: true, extraHTTPHeaders: { Origin: baseUrl } });
+  const successfulLoginStatuses = [];
+  for (let attempt = 0; attempt < 6; ++attempt) {
+    successfulLoginStatuses.push((await loginRateContext.post(`${baseUrl}/api/steamshine/v1/auth/login`, {
+      data: { username: 'web-e2e', password: 'web-e2e-password-2' },
+    })).status());
+  }
+  securityResults.successful_logins_not_rate_limited = successfulLoginStatuses.every((status) => status === 200);
+  if (!securityResults.successful_logins_not_rate_limited) {
+    throw new Error(`Successful SteamShine logins consumed the failure limit: ${successfulLoginStatuses.join(',')}`);
+  }
   const loginRateStatuses = [];
-  for (let attempt = 0; attempt < 4; ++attempt) {
+  for (let attempt = 0; attempt < 6; ++attempt) {
     loginRateStatuses.push((await loginRateContext.post(`${baseUrl}/api/steamshine/v1/auth/login`, {
       data: { username: 'web-e2e', password: 'wrong-password' },
     })).status());

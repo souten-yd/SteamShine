@@ -5,6 +5,7 @@ glibc
 gcc-libs
 base-devel
 gcc
+ccache
 git
 cmake
 ninja

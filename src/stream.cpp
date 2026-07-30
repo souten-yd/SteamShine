@@ -36,6 +36,7 @@ extern "C" {
 }
 
 // local includes
+#include "build_info.h"
 #include "config.h"
 #include "display_device.h"
 #include "globals.h"
@@ -525,7 +526,7 @@ namespace stream {
           {"schema_version", 1},
           {"ended_at_unix_ms", ended_at_milliseconds},
           {"duration_ms", std::max<std::int64_t>(duration_milliseconds, 0)},
-          {"service_binary_commit", PROJECT_VERSION_COMMIT},
+          {"service_binary_commit", build_info::commit()},
           {"service_config_path", config::sunshine.config_file},
           {"capture_selection_reason", virtual_session.selection_reason},
           {"virtual_display_origin", std::string {steamos_virtual_session::to_string(virtual_session.origin)}},

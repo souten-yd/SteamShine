@@ -6,28 +6,14 @@ on:
       - '.github/workflows/build-steamos.yml'
       - '.github/workflows/build-ci-image.yml'
       - 'ci/steamos/**'
-      - 'src/steamos_virtual_session.*'
-      - 'src/steamos_virtual_session_core.*'
-      - 'src/platform/linux/**'
-      - 'src/nvhttp.*'
-      - 'src/stream.*'
-      - 'src/process.*'
-      - 'src/config.*'
-      - 'src/confighttp.*'
-      - 'src/web_services.*'
-      - 'src_assets/common/assets/**'
-      - 'tests/web/**'
+      - 'src/**'
+      - 'src_assets/**'
+      - 'tests/**'
+      - 'tools/**'
+      - 'third-party/**'
       - 'package.json'
       - 'package-lock.json'
       - 'vite.config.js'
-      - 'tests/unit/test_steamos_virtual_session.cpp'
-      - 'tests/unit/test_steamos_virtual_session_core.cpp'
-      - 'tests/steamos_core/CMakeLists.txt'
-      - 'tests/steamos_lifecycle/**'
-      - 'tests/integration/test_steamshine_script.sh'
-      - 'tests/integration/test_steamos_force_hardware_script.sh'
-      - 'tests/integration/test_web_asset_validation.sh'
-      - 'tests/fixtures/steamos/**'
       - 'scripts/**'
       - 'steamshine.sh'
       - 'CMakeLists.txt'
@@ -39,28 +25,14 @@ on:
       - '.github/workflows/build-steamos.yml'
       - '.github/workflows/build-ci-image.yml'
       - 'ci/steamos/**'
-      - 'src/steamos_virtual_session.*'
-      - 'src/steamos_virtual_session_core.*'
-      - 'src/platform/linux/**'
-      - 'src/nvhttp.*'
-      - 'src/stream.*'
-      - 'src/process.*'
-      - 'src/config.*'
-      - 'src/confighttp.*'
-      - 'src/web_services.*'
-      - 'src_assets/common/assets/**'
-      - 'tests/web/**'
+      - 'src/**'
+      - 'src_assets/**'
+      - 'tests/**'
+      - 'tools/**'
+      - 'third-party/**'
       - 'package.json'
       - 'package-lock.json'
       - 'vite.config.js'
-      - 'tests/unit/test_steamos_virtual_session.cpp'
-      - 'tests/unit/test_steamos_virtual_session_core.cpp'
-      - 'tests/steamos_core/CMakeLists.txt'
-      - 'tests/steamos_lifecycle/**'
-      - 'tests/integration/test_steamshine_script.sh'
-      - 'tests/integration/test_steamos_force_hardware_script.sh'
-      - 'tests/integration/test_web_asset_validation.sh'
-      - 'tests/fixtures/steamos/**'
       - 'scripts/**'
       - 'steamshine.sh'
       - 'CMakeLists.txt'
@@ -120,6 +92,7 @@ jobs:
               packaging/linux/*|scripts/package-steamos-artifact.sh) categories[packaging]=1 ;;
               steamshine.sh|scripts/*.sh|tests/integration/test_steamshine_script.sh|tests/integration/test_steamos_force_hardware_script.sh|tests/integration/test_web_asset_validation.sh|tests/fixtures/steamos/*) categories[shell]=1 ;;
               src/steamos_virtual_session_core.*|tests/unit/test_steamos_virtual_session_core.cpp) categories[cpp-core]=1 ;;
+              tests/unit/*) categories[tests]=1 ;;
               # Pure frontend assets: no C++ recompile needed to validate these.
               src_assets/common/assets/*|tests/web/*|package.json|package-lock.json|vite.config.js) categories[web-assets]=1 ;;
               # The C++ side of the web server: a compiled binary is required to validate these.
@@ -133,13 +106,14 @@ jobs:
           if [[ "${FORCE_FULL}" != true && "${category_list}" == docs ]]; then mode=docs; fi
           if [[ "${FORCE_FULL}" != true && "${category_list}" == shell ]]; then mode=shell; fi
           if [[ "${FORCE_FULL}" != true && "${category_list}" == cpp-core ]]; then mode=cpp-core; fi
+          if [[ "${FORCE_FULL}" != true && "${category_list}" == tests ]]; then mode=test-only; fi
           if [[ "${FORCE_FULL}" != true && "${category_list}" == web-assets ]]; then mode=web-assets; fi
           printf 'mode=%s\n' "${mode}" >>"${GITHUB_OUTPUT}"
           printf 'categories=%s\n' "${category_list:-unclassified}" >>"${GITHUB_OUTPUT}"
 
   fast-validation:
     needs: classify-changes
-    if: needs.classify-changes.outputs.mode != 'full'
+    if: needs.classify-changes.outputs.mode != 'full' && needs.classify-changes.outputs.mode != 'test-only'
     runs-on: ubuntu-latest
     container:
       image: ghcr.io/souten-yd/steamshine-ci@sha256:213904e548dcf23f5eaae8d157304c4070b76317607400a1c79b8d58fe54b387
@@ -197,7 +171,7 @@ jobs:
             python3 scripts/validate-web-assets.py dist-web-assets/assets/web --steamshine-root dist-web-assets/assets/steamshine
           fi
 
-  full-validation:
+  runtime-build:
     needs: classify-changes
     if: needs.classify-changes.outputs.mode == 'full'
     runs-on: ubuntu-latest
@@ -252,35 +226,44 @@ jobs:
       - name: Focused formatting and shell checks
         run: |
           cd "${GITHUB_WORKSPACE}"
-          clang-format --dry-run --Werror src/adaptive_bitrate.h src/codec_policy.h src/hdr_policy.h src/config.cpp src/config.h src/process.cpp src/process.h src/input.cpp src/input.h src/video.cpp src/video.h src/stream.cpp src/stream.h src/stream_negotiation.h src/rtsp.cpp src/rtsp.h src/nvhttp.cpp src/thread_safe.h src/platform/common.h src/platform/linux/misc.cpp src/platform/linux/portalgrab.cpp src/platform/linux/vulkan_encode.cpp src/platform/linux/host_desktop_endpoint.cpp src/platform/linux/host_desktop_endpoint.h src/platform/linux/input/gamescope_eis_input.cpp src/platform/linux/input/gamescope_eis_input.h src/platform/linux/input/gamescope_pointer_state.h src/platform/linux/input/input_key_mapping.h src/steamos_virtual_session.cpp src/steamos_virtual_session.h src/steamos_virtual_session_core.cpp src/steamos_virtual_session_core.h tests/unit/platform/test_common.cpp tests/unit/test_adaptive_bitrate.cpp tests/unit/test_codec_policy.cpp tests/unit/test_hdr_policy.cpp tests/unit/test_input_queue.cpp tests/unit/test_mouse.cpp tests/unit/test_process.cpp tests/unit/test_stream.cpp tests/unit/test_video.cpp tests/unit/test_steamos_virtual_session.cpp tests/unit/test_steamos_virtual_session_core.cpp tests/steamos_lifecycle/stubs.cpp src/confighttp.cpp src/web_services.cpp src/web_services.h tests/unit/test_web_services.cpp tools/steamshine_input_visualizer.cpp
+          clang-format --dry-run --Werror src/build_info.h src/adaptive_bitrate.h src/codec_policy.h src/hdr_policy.h src/config.cpp src/config.h src/process.cpp src/process.h src/input.cpp src/input.h src/video.cpp src/video.h src/stream.cpp src/stream.h src/stream_negotiation.h src/stream_recording.cpp src/stream_recording.h src/rtsp.cpp src/rtsp.h src/nvhttp.cpp src/thread_safe.h src/platform/common.h src/platform/linux/misc.cpp src/platform/linux/portalgrab.cpp src/platform/linux/vulkan_encode.cpp src/platform/linux/host_desktop_endpoint.cpp src/platform/linux/host_desktop_endpoint.h src/platform/linux/input/gamescope_eis_input.cpp src/platform/linux/input/gamescope_eis_input.h src/platform/linux/input/gamescope_pointer_state.h src/platform/linux/input/input_key_mapping.h src/steamos_virtual_session.cpp src/steamos_virtual_session.h src/steamos_virtual_session_core.cpp src/steamos_virtual_session_core.h tests/unit/platform/test_common.cpp tests/unit/test_adaptive_bitrate.cpp tests/unit/test_codec_policy.cpp tests/unit/test_hdr_policy.cpp tests/unit/test_input_queue.cpp tests/unit/test_mouse.cpp tests/unit/test_process.cpp tests/unit/test_stream.cpp tests/unit/test_stream_recording.cpp tests/unit/test_video.cpp tests/unit/test_steamos_virtual_session.cpp tests/unit/test_steamos_virtual_session_core.cpp tests/steamos_lifecycle/stubs.cpp src/confighttp.cpp src/web_services.cpp src/web_services.h tests/unit/test_web_services.cpp tools/steamshine_input_visualizer.cpp
           shellcheck steamshine.sh scripts/*.sh tests/fixtures/steamos/fixture.sh tests/integration/test_steamshine_script.sh tests/integration/test_steamos_force_hardware_script.sh tests/integration/test_web_asset_validation.sh
           python3 -m py_compile scripts/build-steamshine-web-assets.py scripts/configure-steamos-client-display.py scripts/validate-web-assets.py tests/integration/test_steamos_client_display.py
           node --check tests/web/upstream-browser-e2e.mjs
           actionlint .github/workflows/build-steamos.yml .github/workflows/build-ci-image.yml
           if grep -nE '[[:blank:]]+$|^(<<<<<<<|=======|>>>>>>>)' src/config.cpp src/config.h src/process.cpp src/platform/linux/misc.cpp src/platform/linux/portalgrab.cpp src/platform/linux/vulkan_encode.cpp src/steamos_virtual_session.cpp src/steamos_virtual_session.h src/steamos_virtual_session_core.cpp src/steamos_virtual_session_core.h tests/unit/test_steamos_virtual_session.cpp tests/unit/test_steamos_virtual_session_core.cpp tests/steamos_lifecycle/stubs.cpp steamshine.sh scripts/*.sh tests/fixtures/steamos/fixture.sh tests/integration/test_steamshine_script.sh tests/integration/test_steamos_force_hardware_script.sh tests/integration/test_web_asset_validation.sh .github/workflows/build-steamos.yml .github/workflows/build-ci-image.yml; then exit 1; fi
-      - name: Configure clean SteamOS release build
+      - name: Restore release compiler cache
+        uses: actions/cache@v4
+        with:
+          path: .ccache/release
+          key: steamos-release-v2-${{ runner.arch }}-${{ hashFiles('ci/steamos/Containerfile', 'ci/steamos/packages.txt', 'ci/steamos/mirrorlist') }}-${{ github.event.pull_request.head.sha || github.sha }}
+          restore-keys: |
+            steamos-release-v2-${{ runner.arch }}-${{ hashFiles('ci/steamos/Containerfile', 'ci/steamos/packages.txt', 'ci/steamos/mirrorlist') }}-
+      - name: Configure SteamOS release build
         env:
           COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: cd "${GITHUB_WORKSPACE}" && cmake -S . -B cmake-build-steamos -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=ON -DBUILD_DOCS=OFF -DSUNSHINE_ENABLE_CUDA=OFF -DFETCHCONTENT_SOURCE_DIR_BOOST=/opt/steamshine-deps/boost-1.89.0 -DFFMPEG_PREPARED_BINARIES=/opt/steamshine-deps/ffmpeg -DSUNSHINE_ASSETS_DIR=share/assets -DSUNSHINE_ASSETS_DIR_DEF=../share/assets
-      - name: Build runtime binary
-        run: cd "${GITHUB_WORKSPACE}" && cmake --build cmake-build-steamos --target sunshine steamshine_input_visualizer --parallel 2
-      - name: Record compile and link timing
-        run: cd "${GITHUB_WORKSPACE}" && python3 scripts/collect-ninja-timing.py cmake-build-steamos/.ninja_log dist/build-timings.json
-      - name: SteamOS virtual session and installer tests
         run: |
           cd "${GITHUB_WORKSPACE}"
-          cmake -S tests/steamos_core -B cmake-build-steamos-core -G Ninja -DCMAKE_BUILD_TYPE=Release
-          cmake --build cmake-build-steamos-core --target test_steamos_virtual_session_core --parallel 2
-          cmake-build-steamos-core/test_steamos_virtual_session_core --gtest_color=yes
-          cmake -S tests/steamos_lifecycle -B cmake-build-steamos-lifecycle -G Ninja -DCMAKE_BUILD_TYPE=Release
-          cmake --build cmake-build-steamos-lifecycle --target test_steamos_virtual_session_lifecycle --parallel 2
-          cmake-build-steamos-lifecycle/test_steamos_virtual_session_lifecycle --gtest_color=yes
-          cmake --build cmake-build-steamos --target test_sunshine --parallel 2
-          cmake-build-steamos/tests/test_sunshine --gtest_filter='AdaptiveBitrateEnvelope.*:AdaptiveBitrateController.*:AdaptiveBitrateBackend.*:CodecPolicyTest.*:HdrPolicyTest.*:StreamNegotiationTests.*:WebServicesTest.*:ImageFallbackTests.*:InputPacketQueue.*:GamescopeInputMappingTest.*:ProcessCommandSelectionTest.*:ProcessDisplayEnvironmentTest.*:ProcessEnvironmentTest.*:VideoPipelineDiagnostics.*:VideoPipelineBackpressure.*' --gtest_color=yes
-          python3 -m unittest -v tests.integration.test_steamos_client_display
-          tests/integration/test_steamshine_script.sh
-          tests/integration/test_steamos_force_hardware_script.sh
-          tests/integration/test_web_asset_validation.sh
+          cache_args=()
+          if command -v ccache >/dev/null; then
+            export CCACHE_DIR="${GITHUB_WORKSPACE}/.ccache/release"
+            export CCACHE_BASEDIR="${GITHUB_WORKSPACE}"
+            export CCACHE_NAMESPACE=steamshine-release-v2
+            ccache --max-size=2G
+            ccache --zero-stats
+            cache_args=(-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache)
+          fi
+          cmake -S . -B cmake-build-steamos -G Ninja "${cache_args[@]}" -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=ON -DBUILD_DOCS=OFF -DSUNSHINE_ENABLE_CUDA=OFF -DFETCHCONTENT_SOURCE_DIR_BOOST=/opt/steamshine-deps/boost-1.89.0 -DFFMPEG_PREPARED_BINARIES=/opt/steamshine-deps/ffmpeg -DSUNSHINE_ASSETS_DIR=share/assets -DSUNSHINE_ASSETS_DIR_DEF=../share/assets
+      - name: Build runtime binary
+        env:
+          CCACHE_DIR: ${{ github.workspace }}/.ccache/release
+          CCACHE_BASEDIR: ${{ github.workspace }}
+          CCACHE_NAMESPACE: steamshine-release-v2
+        run: cd "${GITHUB_WORKSPACE}" && cmake --build cmake-build-steamos --target sunshine steamshine_input_visualizer --parallel 4
+      - name: Report release compiler cache
+        run: if command -v ccache >/dev/null; then CCACHE_DIR="${GITHUB_WORKSPACE}/.ccache/release" ccache --show-stats; fi
+      - name: Record compile and link timing
+        run: cd "${GITHUB_WORKSPACE}" && python3 scripts/collect-ninja-timing.py cmake-build-steamos/.ninja_log dist/build-timings.json
       - name: Verify runtime linkage and ABI ceiling
         run: |
           cd "${GITHUB_WORKSPACE}"
@@ -289,7 +272,7 @@ jobs:
             if ldd "${binary}" | grep -q 'not found'; then exit 1; fi
             if readelf --version-info "${binary}" | grep -Eq 'GLIBC_2\.(4[2-9]|[5-9][0-9])|GLIBCXX_3\.4\.(3[5-9]|[4-9][0-9])|CXXABI_1\.(4|[5-9][0-9])|Qt_6\.(1[0-9]|[2-9][0-9])'; then exit 1; fi
           done
-      - name: Stage, package, and smoke test the same binary
+      - name: Stage and package the verified runtime binary
         run: |
           cd "${GITHUB_WORKSPACE}"
           # The root-owned container bind mount must be explicitly trusted before
@@ -299,14 +282,122 @@ jobs:
           artifact="$(find dist -name 'steamshine-steamos-*.tar.zst' -print -quit)"
           (cd "$(dirname "${artifact}")" && sha256sum -c "$(basename "${artifact}").sha256")
           tar --zstd -xOf "${artifact}" ./share/assets/apps.json | grep -F '"Input Latency Visualizer"' >/dev/null
-          STEAMSHINE_ARTIFACT_SHA256="$(sha256sum "${artifact}" | awk '{print $1}')"
-          export STEAMSHINE_ARTIFACT_SHA256
-          export STEAMSHINE_COMMIT_SHA="${{ github.event.pull_request.head.sha || github.sha }}"
           smoke_home="$(mktemp -d)"; mkdir -p "${smoke_home}/run"
           HOME="${smoke_home}" XDG_RUNTIME_DIR="${smoke_home}/run" ./steamshine.sh install --artifact "${artifact}" --no-service --non-interactive --yes
           test -x "${smoke_home}/.local/bin/steamshine"
           test -x "${smoke_home}/.local/bin/steamshine-input-visualizer"
           "${smoke_home}/.local/bin/steamshine-input-visualizer" --self-test
+      - uses: actions/upload-artifact@v4
+        with:
+          name: steamshine-runtime-candidate-${{ github.event.pull_request.head.sha || github.sha }}
+          path: dist/
+          if-no-files-found: error
+
+  test-validation:
+    needs: classify-changes
+    if: needs.classify-changes.outputs.mode == 'full' || needs.classify-changes.outputs.mode == 'test-only'
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/souten-yd/steamshine-ci@sha256:213904e548dcf23f5eaae8d157304c4070b76317607400a1c79b8d58fe54b387
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    defaults:
+      run:
+        working-directory: ${{ github.workspace }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          submodules: false
+      - name: Initialize test dependency submodules
+        run: |
+          set -euo pipefail
+          git config --global --add safe.directory "${GITHUB_WORKSPACE}"
+          cd "${GITHUB_WORKSPACE}"
+          git submodule update --init --depth 1 -- third-party/Simple-Web-Server third-party/build-deps third-party/glad third-party/inputtino third-party/libdisplaydevice third-party/lizardbyte-common third-party/moonlight-common-c third-party/nv-codec-headers third-party/plasma-wayland-protocols third-party/tray third-party/wayland-protocols third-party/wlr-protocols
+          git -C third-party/build-deps submodule update --init --depth 1 -- third-party/FFmpeg/Vulkan-Headers
+          git -C third-party/lizardbyte-common submodule update --init --depth 1 -- third-party/googletest
+          git -C third-party/moonlight-common-c submodule update --init --recursive --depth 1
+      - name: Validate test source formatting
+        if: needs.classify-changes.outputs.mode == 'test-only'
+        run: clang-format --dry-run --Werror tests/unit/*.cpp
+      - name: Restore test compiler cache
+        uses: actions/cache@v4
+        with:
+          path: .ccache/test
+          key: steamos-test-v2-${{ runner.arch }}-${{ hashFiles('ci/steamos/Containerfile', 'ci/steamos/packages.txt', 'ci/steamos/mirrorlist') }}-${{ github.event.pull_request.head.sha || github.sha }}
+          restore-keys: |
+            steamos-test-v2-${{ runner.arch }}-${{ hashFiles('ci/steamos/Containerfile', 'ci/steamos/packages.txt', 'ci/steamos/mirrorlist') }}-
+      - name: Configure coverage test build
+        env:
+          COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          cd "${GITHUB_WORKSPACE}"
+          cache_args=()
+          if command -v ccache >/dev/null; then
+            export CCACHE_DIR="${GITHUB_WORKSPACE}/.ccache/test"
+            export CCACHE_BASEDIR="${GITHUB_WORKSPACE}"
+            export CCACHE_NAMESPACE=steamshine-test-v2
+            ccache --max-size=2G
+            ccache --zero-stats
+            cache_args=(-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache)
+          fi
+          cmake -S . -B cmake-build-steamos -G Ninja "${cache_args[@]}" -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=ON -DBUILD_DOCS=OFF -DSUNSHINE_ENABLE_CUDA=OFF -DFETCHCONTENT_SOURCE_DIR_BOOST=/opt/steamshine-deps/boost-1.89.0 -DFFMPEG_PREPARED_BINARIES=/opt/steamshine-deps/ffmpeg -DSUNSHINE_ASSETS_DIR=share/assets -DSUNSHINE_ASSETS_DIR_DEF=../share/assets
+      - name: Build and run SteamOS tests
+        env:
+          CCACHE_DIR: ${{ github.workspace }}/.ccache/test
+          CCACHE_BASEDIR: ${{ github.workspace }}
+          CCACHE_NAMESPACE: steamshine-test-v2
+        run: |
+          cd "${GITHUB_WORKSPACE}"
+          cmake -S tests/steamos_core -B cmake-build-steamos-core -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build cmake-build-steamos-core --target test_steamos_virtual_session_core --parallel 4
+          cmake-build-steamos-core/test_steamos_virtual_session_core --gtest_color=yes
+          cmake -S tests/steamos_lifecycle -B cmake-build-steamos-lifecycle -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build cmake-build-steamos-lifecycle --target test_steamos_virtual_session_lifecycle --parallel 4
+          cmake-build-steamos-lifecycle/test_steamos_virtual_session_lifecycle --gtest_color=yes
+          cmake --build cmake-build-steamos --target test_sunshine --parallel 4
+          cmake-build-steamos/tests/test_sunshine --gtest_filter='AdaptiveBitrateEnvelope.*:AdaptiveBitrateController.*:AdaptiveBitrateBackend.*:CodecPolicyTest.*:HdrPolicyTest.*:StreamNegotiationTests.*:StreamRecordingTest.*:WebServicesTest.*:ImageFallbackTests.*:InputPacketQueue.*:GamescopeInputMappingTest.*:ProcessCommandSelectionTest.*:ProcessDisplayEnvironmentTest.*:ProcessEnvironmentTest.*:VideoPipelineDiagnostics.*:VideoPipelineBackpressure.*' --gtest_color=yes
+          python3 -m unittest -v tests.integration.test_steamos_client_display
+          tests/integration/test_steamshine_script.sh
+          tests/integration/test_steamos_force_hardware_script.sh
+          tests/integration/test_web_asset_validation.sh
+      - name: Report test compiler cache
+        run: if command -v ccache >/dev/null; then CCACHE_DIR="${GITHUB_WORKSPACE}/.ccache/test" ccache --show-stats; fi
+
+  browser-smoke:
+    needs: [classify-changes, runtime-build]
+    if: needs.classify-changes.outputs.mode == 'full'
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/souten-yd/steamshine-ci@sha256:213904e548dcf23f5eaae8d157304c4070b76317607400a1c79b8d58fe54b387
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    defaults:
+      run:
+        working-directory: ${{ github.workspace }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          submodules: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: steamshine-runtime-candidate-${{ github.event.pull_request.head.sha || github.sha }}
+          path: dist
+      - name: Install and browser-smoke the runtime candidate
+        run: |
+          set -euo pipefail
+          cd "${GITHUB_WORKSPACE}"
+          artifact="$(find dist -name 'steamshine-steamos-*.tar.zst' -print -quit)"
+          (cd "$(dirname "${artifact}")" && sha256sum -c "$(basename "${artifact}").sha256")
+          STEAMSHINE_ARTIFACT_SHA256="$(sha256sum "${artifact}" | awk '{print $1}')"
+          export STEAMSHINE_ARTIFACT_SHA256
+          export STEAMSHINE_COMMIT_SHA="${{ github.event.pull_request.head.sha || github.sha }}"
+          smoke_home="$(mktemp -d)"; mkdir -p "${smoke_home}/run"
+          HOME="${smoke_home}" XDG_RUNTIME_DIR="${smoke_home}/run" ./steamshine.sh install --artifact "${artifact}" --no-service --non-interactive --yes
           "${smoke_home}/.local/share/steamshine/current/scripts/test-steamos-web-http.sh" "${smoke_home}/.local/bin/steamshine" dist
           STEAMSHINE_BINARY="${smoke_home}/.local/bin/steamshine" STEAMSHINE_BROWSER_REPORT_DIR=dist PLAYWRIGHT_CHROMIUM_EXECUTABLE=/usr/bin/chromium node tests/web/upstream-browser-e2e.mjs
       - uses: actions/upload-artifact@v4
@@ -315,8 +406,24 @@ jobs:
           path: dist/
           if-no-files-found: error
 
+  full-validation:
+    needs: [classify-changes, runtime-build, test-validation, browser-smoke]
+    if: always() && needs.classify-changes.outputs.mode == 'full'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every full-validation shard
+        env:
+          RUNTIME_RESULT: ${{ needs.runtime-build.result }}
+          TEST_RESULT: ${{ needs.test-validation.result }}
+          BROWSER_RESULT: ${{ needs.browser-smoke.result }}
+        run: |
+          set -euo pipefail
+          test "${RUNTIME_RESULT}" = success
+          test "${TEST_RESULT}" = success
+          test "${BROWSER_RESULT}" = success
+
   record-timings:
-    needs: [classify-changes, fast-validation, full-validation]
+    needs: [classify-changes, fast-validation, runtime-build, test-validation, browser-smoke, full-validation]
     if: always()
     runs-on: ubuntu-latest
     steps:
