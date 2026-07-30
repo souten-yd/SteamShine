@@ -6,6 +6,7 @@
 
 // standard includes
 #include <cstdint>
+#include <optional>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -25,8 +26,70 @@ namespace stream {
   constexpr auto VIDEO_STREAM_PORT = 9;  ///< GameStream base-port offset used for the video UDP stream.
   constexpr auto CONTROL_PORT = 10;  ///< GameStream base-port offset used for the control channel.
   constexpr auto AUDIO_STREAM_PORT = 11;  ///< GameStream base-port offset used for the audio UDP stream.
+  constexpr std::uint16_t FRAME_FEC_STATUS_PACKET_TYPE = 0x5502;  ///< Moonlight per-frame FEC status control-message type.
+
+  /**
+   * @brief Validated Moonlight per-frame FEC reception counters.
+   */
+  struct frame_fec_status_t {
+    std::uint32_t frame_index {};  ///< Video frame index described by this report.
+    std::uint16_t highest_received_sequence_number {};  ///< Highest RTP sequence number observed for the frame.
+    std::uint16_t next_contiguous_sequence_number {};  ///< First sequence number after the contiguous receive prefix.
+    std::uint16_t missing_packets_before_highest {};  ///< Packet holes observed before the highest sequence number.
+    std::uint16_t total_data_packets {};  ///< Data packets transmitted for this FEC block.
+    std::uint16_t total_parity_packets {};  ///< Parity packets transmitted for this FEC block.
+    std::uint16_t received_data_packets {};  ///< Data packets received by Moonlight.
+    std::uint16_t received_parity_packets {};  ///< Parity packets received by Moonlight.
+    std::uint8_t fec_percentage {};  ///< FEC percentage associated with the encoded frame.
+    std::uint8_t multi_fec_block_index {};  ///< Zero-based block index within the frame.
+    std::uint8_t multi_fec_block_count {};  ///< Number of FEC blocks forming the frame.
+  };
+
+  /**
+   * @brief First cause that requested termination of a streaming session.
+   */
+  enum class disconnect_reason_e : std::uint8_t {
+    unknown,  ///< No terminating path recorded a more specific cause.
+    remote_control_disconnect,  ///< ENet reported that the remote control peer disconnected.
+    control_ping_timeout,  ///< The server received no control traffic before its ping deadline.
+    control_protocol_error,  ///< Authentication or framing validation failed on a control packet.
+    initial_video_ping_timeout,  ///< The client never established its video UDP endpoint.
+    initial_audio_ping_timeout,  ///< The client never established its audio UDP endpoint.
+    video_worker_ended,  ///< Capture or video transmission ended before another stop cause was recorded.
+    audio_worker_ended,  ///< Audio capture or transmission ended before another stop cause was recorded.
+    local_session_cleanup,  ///< RTSP or application lifecycle cleanup stopped the session locally.
+    service_shutdown,  ///< SteamShine shutdown stopped the control broadcast.
+  };
 
   struct session_t;
+
+  /**
+   * @brief Parse and validate one big-endian Moonlight frame-FEC status payload.
+   *
+   * @param payload Raw control-message payload following packet type 0x5502.
+   * @return Parsed counters, or no value for truncated or inconsistent input.
+   */
+  std::optional<frame_fec_status_t> parse_frame_fec_status(std::string_view payload);
+
+  /**
+   * @brief Convert a disconnect cause to a stable diagnostics token.
+   *
+   * @param reason Disconnect cause to convert.
+   * @return Stable lowercase token suitable for logs and JSON.
+   */
+  std::string_view to_string(disconnect_reason_e reason);
+
+  /**
+   * @brief Classify an IP address for transport-path diagnostics.
+   *
+   * The shared-address-space result covers RFC 6598 addresses commonly used
+   * by carrier-grade NAT and overlay networks without assuming a particular
+   * networking product.
+   *
+   * @param address Textual IPv4 or IPv6 address without a port.
+   * @return Stable diagnostics token describing the address scope.
+   */
+  std::string_view classify_network_address(std::string_view address);
 
   /**
    * @brief Concatenate byte ranges while inserting padding at fixed intervals.
@@ -173,8 +236,14 @@ namespace stream {
      * @brief Stop a streaming session and prevent more packets from being queued.
      *
      * @param session Active streaming or pairing session for the request.
+     * @param reason First local or remote cause requesting termination.
+     * @param event_data Optional ENet disconnect data supplied by the peer.
      */
-    void stop(session_t &session);
+    void stop(
+      session_t &session,
+      disconnect_reason_e reason = disconnect_reason_e::local_session_cleanup,
+      std::uint32_t event_data = 0
+    );
     /**
      * @brief Wait for worker threads owned by the session to exit.
      *

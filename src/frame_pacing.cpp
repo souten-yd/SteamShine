@@ -85,10 +85,12 @@ namespace frame_pacing {
   void output_policy_t::reset(const std::chrono::steady_clock::time_point now) {
     last_unique_ = now;
     last_output_ = now;
+    observed_unique_ = false;
   }
 
   void output_policy_t::observe_unique(const std::chrono::steady_clock::time_point now) {
     last_unique_ = now;
+    observed_unique_ = true;
   }
 
   bool output_policy_t::should_encode(const std::chrono::steady_clock::time_point now, const bool force_immediate) const {
@@ -100,6 +102,9 @@ namespace frame_pacing {
   }
 
   bool output_policy_t::static_mode(const std::chrono::steady_clock::time_point now) const {
-    return now - last_unique_ >= static_after_;
+    // Keep emitting startup dummy frames at the active cadence until the
+    // producer supplies a real frame. A one-second pre-frame gap can make a
+    // Moonlight client classify an otherwise healthy stream as disconnected.
+    return observed_unique_ && now - last_unique_ >= static_after_;
   }
 }  // namespace frame_pacing

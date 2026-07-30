@@ -19,6 +19,17 @@ namespace rtsp_stream {
 
 namespace steamos_virtual_session {
   /**
+   * @brief Close descriptors that must not survive into an exec child.
+   *
+   * Standard input, output, and error may be retained by choosing a first
+   * descriptor of three. Invalid and already-closed descriptors are ignored.
+   *
+   * @param first_descriptor First descriptor to close, inclusive.
+   * @param descriptor_limit Exclusive upper bound for descriptors to close.
+   */
+  void close_inherited_descriptors_for_exec(int first_descriptor, int descriptor_limit);
+
+  /**
    * @brief Verification state for a session display endpoint.
    */
   enum class display_verification_e {

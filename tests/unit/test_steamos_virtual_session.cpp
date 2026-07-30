@@ -7,6 +7,7 @@
   #include <chrono>
   #include <cstdlib>
   #include <cstring>
+  #include <fcntl.h>
   #include <filesystem>
   #include <fstream>
   #include <gtest/gtest.h>
@@ -271,6 +272,27 @@ TEST_F(SteamOSVirtualSessionTest, FeatureFlagDisabledPreservesNormalLaunch) {
   EXPECT_EQ(steamos_virtual_session::state(), steamos_virtual_session::state_e::Disabled);
   EXPECT_FALSE(steamos_virtual_session::active());
   EXPECT_FALSE(steamos_virtual_session::application_environment().has_value());
+}
+
+/**
+ * @brief Verify an exec child cannot retain an unrelated server descriptor.
+ */
+TEST(SteamOsVirtualSessionDescriptorTests, ClosesDescriptorsAtOrAboveBoundary) {
+  const int descriptor {::open("/dev/null", O_RDONLY | O_CLOEXEC)};
+  ASSERT_GE(descriptor, 3);
+
+  const pid_t child {::fork()};
+  ASSERT_GE(child, 0);
+  if (child == 0) {
+    steamos_virtual_session::close_inherited_descriptors_for_exec(descriptor, descriptor + 1);
+    _exit(::fcntl(descriptor, F_GETFD) == -1 && errno == EBADF ? 0 : 1);
+  }
+
+  int status {};
+  ASSERT_EQ(::waitpid(child, &status, 0), child);
+  EXPECT_TRUE(WIFEXITED(status));
+  EXPECT_EQ(WEXITSTATUS(status), 0);
+  ::close(descriptor);
 }
 
 /**

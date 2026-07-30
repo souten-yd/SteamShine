@@ -98,7 +98,114 @@ using asio::ip::udp;
 using namespace std::literals;
 
 namespace stream {
+  std::string_view to_string(const disconnect_reason_e reason) {
+    switch (reason) {
+      case disconnect_reason_e::unknown:
+        return "unknown";
+      case disconnect_reason_e::remote_control_disconnect:
+        return "remote_control_disconnect";
+      case disconnect_reason_e::control_ping_timeout:
+        return "control_ping_timeout";
+      case disconnect_reason_e::control_protocol_error:
+        return "control_protocol_error";
+      case disconnect_reason_e::initial_video_ping_timeout:
+        return "initial_video_ping_timeout";
+      case disconnect_reason_e::initial_audio_ping_timeout:
+        return "initial_audio_ping_timeout";
+      case disconnect_reason_e::video_worker_ended:
+        return "video_worker_ended";
+      case disconnect_reason_e::audio_worker_ended:
+        return "audio_worker_ended";
+      case disconnect_reason_e::local_session_cleanup:
+        return "local_session_cleanup";
+      case disconnect_reason_e::service_shutdown:
+        return "service_shutdown";
+    }
+    return "unknown";
+  }
+
+  std::string_view classify_network_address(const std::string_view address) {
+    boost::system::error_code error;
+    const auto parsed {boost::asio::ip::make_address(address, error)};
+    if (error) {
+      return "unknown";
+    }
+    if (parsed.is_loopback()) {
+      return "loopback";
+    }
+    if (parsed.is_v4()) {
+      const auto bytes {parsed.to_v4().to_bytes()};
+      if (bytes[0] == 100 && (bytes[1] & 0xc0U) == 64U) {
+        return "shared_address_space";
+      }
+      if (bytes[0] == 10 || (bytes[0] == 172 && (bytes[1] & 0xf0U) == 16U) || (bytes[0] == 192 && bytes[1] == 168) || (bytes[0] == 169 && bytes[1] == 254)) {
+        return "private_lan";
+      }
+      return "public_network";
+    }
+
+    const auto bytes {parsed.to_v6().to_bytes()};
+    if ((bytes[0] & 0xfeU) == 0xfcU || (bytes[0] == 0xfeU && (bytes[1] & 0xc0U) == 0x80U)) {
+      return "private_lan";
+    }
+    return "public_network";
+  }
+
+  std::optional<frame_fec_status_t> parse_frame_fec_status(const std::string_view payload) {
+    constexpr std::size_t payload_size {21};
+    if (payload.size() != payload_size) {
+      return std::nullopt;
+    }
+
+    const auto read_u16 = [&payload](const std::size_t offset) {
+      return static_cast<std::uint16_t>((static_cast<std::uint16_t>(static_cast<std::uint8_t>(payload[offset])) << 8U) | static_cast<std::uint8_t>(payload[offset + 1]));
+    };
+    const auto read_u32 = [&payload](const std::size_t offset) {
+      return (static_cast<std::uint32_t>(static_cast<std::uint8_t>(payload[offset])) << 24U) |
+             (static_cast<std::uint32_t>(static_cast<std::uint8_t>(payload[offset + 1])) << 16U) |
+             (static_cast<std::uint32_t>(static_cast<std::uint8_t>(payload[offset + 2])) << 8U) |
+             static_cast<std::uint8_t>(payload[offset + 3]);
+    };
+
+    frame_fec_status_t status {
+      .frame_index = read_u32(0),
+      .highest_received_sequence_number = read_u16(4),
+      .next_contiguous_sequence_number = read_u16(6),
+      .missing_packets_before_highest = read_u16(8),
+      .total_data_packets = read_u16(10),
+      .total_parity_packets = read_u16(12),
+      .received_data_packets = read_u16(14),
+      .received_parity_packets = read_u16(16),
+      .fec_percentage = static_cast<std::uint8_t>(payload[18]),
+      .multi_fec_block_index = static_cast<std::uint8_t>(payload[19]),
+      .multi_fec_block_count = static_cast<std::uint8_t>(payload[20]),
+    };
+    if (status.received_data_packets > status.total_data_packets || status.received_parity_packets > status.total_parity_packets || status.fec_percentage > 100 || status.multi_fec_block_count == 0 || status.multi_fec_block_index >= status.multi_fec_block_count) {
+      return std::nullopt;
+    }
+    return status;
+  }
+
   namespace {
+    /**
+     * @brief Bounded control-channel evidence copied into the final session report.
+     */
+    struct disconnect_diagnostics_snapshot_t {
+      disconnect_reason_e reason {disconnect_reason_e::unknown};  ///< First recorded stop cause.
+      std::uint32_t event_data {};  ///< ENet disconnect data supplied with the event.
+      std::string peer_address;  ///< Remote control endpoint observed by ENet.
+      std::string local_address;  ///< Local address selected for the control connection.
+      std::string path_scope;  ///< Scope of the local control address selected by routing.
+      std::uint32_t enet_peer_state {};  ///< Final ENet peer state value.
+      std::uint32_t enet_rtt_ms {};  ///< Final smoothed reliable-control RTT.
+      std::uint32_t enet_rtt_variance_ms {};  ///< Final reliable-control RTT variance.
+      std::uint32_t enet_packets_sent {};  ///< Reliable control packets sent by ENet.
+      std::uint32_t enet_packets_lost {};  ///< Reliable control packets ENet considered lost.
+      std::uint32_t enet_packet_loss_raw {};  ///< ENet fixed-point mean packet-loss value.
+      std::uint32_t reliable_data_in_transit {};  ///< Reliable bytes awaiting acknowledgement.
+      std::int64_t last_control_receive_age_ms {-1};  ///< Age of the last control event at report time.
+    };
+
     /**
      * @brief Convert a non-negative Kbps protocol value to bits per second.
      *
@@ -491,11 +598,13 @@ namespace stream {
      * @param stream_config Negotiated stream configuration to report.
      * @param negotiation Canonical four-stage negotiation state for the session.
      * @param started_at Monotonic stream start time.
+     * @param disconnect Final bounded control-channel disconnect diagnostics.
      */
     void write_session_diagnostics(
       const config_t &stream_config,
       const stream_negotiation_snapshot_t &negotiation,
-      const std::chrono::steady_clock::time_point started_at
+      const std::chrono::steady_clock::time_point started_at,
+      const disconnect_diagnostics_snapshot_t &disconnect
     ) {
 #if defined(__linux__)
       try {
@@ -523,11 +632,26 @@ namespace stream {
         const auto path {directory / ("session-" + std::to_string(ended_at_milliseconds) + "-" + std::to_string(sequence) + ".json")};
 
         const nlohmann::json report {
-          {"schema_version", 1},
+          {"schema_version", 2},
           {"ended_at_unix_ms", ended_at_milliseconds},
           {"duration_ms", std::max<std::int64_t>(duration_milliseconds, 0)},
           {"service_binary_commit", build_info::commit()},
           {"service_config_path", config::sunshine.config_file},
+          {"disconnect", {
+                           {"reason", to_string(disconnect.reason)},
+                           {"event_data", disconnect.event_data},
+                           {"peer_address", disconnect.peer_address},
+                           {"local_address", disconnect.local_address},
+                           {"path_scope", disconnect.path_scope},
+                           {"enet_peer_state", disconnect.enet_peer_state},
+                           {"enet_rtt_ms", disconnect.enet_rtt_ms},
+                           {"enet_rtt_variance_ms", disconnect.enet_rtt_variance_ms},
+                           {"enet_packets_sent", disconnect.enet_packets_sent},
+                           {"enet_packets_lost", disconnect.enet_packets_lost},
+                           {"enet_packet_loss_raw", disconnect.enet_packet_loss_raw},
+                           {"reliable_data_in_transit", disconnect.reliable_data_in_transit},
+                           {"last_control_receive_age_ms", disconnect.last_control_receive_age_ms},
+                         }},
           {"capture_selection_reason", virtual_session.selection_reason},
           {"virtual_display_origin", std::string {steamos_virtual_session::to_string(virtual_session.origin)}},
           {"gamescope_pid", virtual_session.gamescope_pid},
@@ -653,6 +777,7 @@ namespace stream {
       (void) stream_config;
       (void) negotiation;
       (void) started_at;
+      (void) disconnect;
 #endif
     }
   }  // namespace
@@ -1063,6 +1188,20 @@ namespace stream {
     std::chrono::steady_clock::time_point pingTimeout;  ///< Deadline for receiving the next client ping.
     std::chrono::steady_clock::time_point diagnostics_started_at {std::chrono::steady_clock::now()};  ///< Start time used by the final aggregate report.
 
+    std::atomic<disconnect_reason_e> disconnect_reason {disconnect_reason_e::unknown};  ///< First cause that stopped this session.
+    std::atomic<std::uint32_t> disconnect_event_data {};  ///< ENet data associated with the first disconnect event.
+    std::string control_peer_address;  ///< Remote control endpoint selected for this session.
+    std::string control_local_address;  ///< Local control endpoint selected for this session.
+    std::string control_path_scope {"unknown"};  ///< Scope of the selected local control address.
+    std::atomic<std::uint32_t> enet_peer_state {};  ///< Most recently observed ENet peer state.
+    std::atomic<std::uint32_t> enet_rtt_ms {};  ///< Most recently observed ENet smoothed RTT.
+    std::atomic<std::uint32_t> enet_rtt_variance_ms {};  ///< Most recently observed ENet RTT variance.
+    std::atomic<std::uint32_t> enet_packets_sent {};  ///< Most recently observed ENet reliable packets sent.
+    std::atomic<std::uint32_t> enet_packets_lost {};  ///< Most recently observed ENet reliable packets lost.
+    std::atomic<std::uint32_t> enet_packet_loss_raw {};  ///< Most recently observed ENet fixed-point packet-loss mean.
+    std::atomic<std::uint32_t> reliable_data_in_transit {};  ///< Most recently observed unacknowledged reliable bytes.
+    std::atomic<std::int64_t> last_control_receive_steady_ms {-1};  ///< Monotonic time of the latest control event.
+
     safe::shared_t<broadcast_ctx_t>::ptr_t broadcast_ref;  ///< Shared broadcast context retained while the session is active.
 
     boost::asio::ip::address localAddress;  ///< Local address.
@@ -1110,6 +1249,7 @@ namespace stream {
 
       net::peer_t peer;
       std::uint32_t seq;
+      std::chrono::steady_clock::time_point last_fec_feedback_at {};  ///< Time of the preceding modern Moonlight FEC report.
 
       platf::feedback_queue_t feedback_queue;
       safe::mail_raw_t::event_t<video::hdr_info_t> hdr_queue;
@@ -1123,6 +1263,37 @@ namespace stream {
 
     std::atomic<session::state_e> state;  ///< Current lifecycle state observed by stream workers.
   };
+
+  /**
+   * @brief Return the current monotonic timestamp in milliseconds.
+   *
+   * @return Milliseconds on the process steady clock.
+   */
+  std::int64_t steady_clock_milliseconds() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+             std::chrono::steady_clock::now().time_since_epoch()
+    )
+      .count();
+  }
+
+  /**
+   * @brief Copy volatile ENet transport counters into session-owned diagnostics.
+   *
+   * ENet owns the peer object, so the final report must not dereference it after
+   * disconnect processing has advanced the host state.
+   *
+   * @param session Session receiving the bounded snapshot.
+   * @param peer Live ENet peer associated with the current event.
+   */
+  void record_control_transport_snapshot(session_t &session, const net::peer_t peer) {
+    session.enet_peer_state.store(static_cast<std::uint32_t>(peer->state), std::memory_order_relaxed);
+    session.enet_rtt_ms.store(peer->roundTripTime, std::memory_order_relaxed);
+    session.enet_rtt_variance_ms.store(peer->roundTripTimeVariance, std::memory_order_relaxed);
+    session.enet_packets_sent.store(peer->packetsSent, std::memory_order_relaxed);
+    session.enet_packets_lost.store(peer->packetsLost, std::memory_order_relaxed);
+    session.enet_packet_loss_raw.store(peer->packetLoss, std::memory_order_relaxed);
+    session.reliable_data_in_transit.store(peer->reliableDataInTransit, std::memory_order_relaxed);
+  }
 
   /**
    * First part of cipher must be struct of type control_encrypted_t
@@ -1238,6 +1409,13 @@ namespace stream {
       rtsp_stream::launch_session_clear(session_p->launch_session_id);
 
       session_p->control.peer = peer;
+      TUPLE_2D(control_peer_port, control_peer_address, platf::from_sockaddr_ex((sockaddr *) &peer->address.address));
+      TUPLE_2D(control_local_port, control_local_address, platf::from_sockaddr_ex((sockaddr *) &peer->localAddress.address));
+      session_p->control_peer_address = control_peer_address + ':' + std::to_string(control_peer_port);
+      session_p->control_local_address = control_local_address + ':' + std::to_string(control_local_port);
+      session_p->control_path_scope = classify_network_address(control_local_address);
+      record_control_transport_snapshot(*session_p, peer);
+      session_p->last_control_receive_steady_ms.store(steady_clock_milliseconds(), std::memory_order_relaxed);
 
       // Use the local address from the control connection as the source address
       // for other communications to the client. This is necessary to ensure
@@ -1302,10 +1480,12 @@ namespace stream {
       }
 
       session->pingTimeout = std::chrono::steady_clock::now() + config::stream.ping_timeout;
+      record_control_transport_snapshot(*session, event.peer);
 
       switch (event.type) {
         case ENET_EVENT_TYPE_RECEIVE:
           {
+            session->last_control_receive_steady_ms.store(steady_clock_milliseconds(), std::memory_order_relaxed);
             net::packet_t packet {event.packet};
 
             auto type = *(std::uint16_t *) packet->data;
@@ -1315,13 +1495,26 @@ namespace stream {
           }
           break;
         case ENET_EVENT_TYPE_CONNECT:
-          BOOST_LOG(info) << "CLIENT CONNECTED"sv;
+          session->last_control_receive_steady_ms.store(steady_clock_milliseconds(), std::memory_order_relaxed);
+          BOOST_LOG(info) << "CONTROL_CONNECTED peer=" << session->control_peer_address
+                          << " local=" << session->control_local_address
+                          << " path_scope=" << session->control_path_scope
+                          << " rtt_ms=" << session->enet_rtt_ms.load(std::memory_order_relaxed);
+          if (session->control_path_scope == "shared_address_space") {
+            BOOST_LOG(warning) << "CONTROL_PATH_SHARED_ADDRESS_SPACE local=" << session->control_local_address
+                               << " recommendation=prefer_direct_lan_address_when_on_same_lan";
+          }
           break;
         case ENET_EVENT_TYPE_DISCONNECT:
-          BOOST_LOG(info) << "CLIENT DISCONNECTED"sv;
+          BOOST_LOG(info) << "CONTROL_DISCONNECTED peer=" << session->control_peer_address
+                          << " event_data=" << event.data
+                          << " rtt_ms=" << session->enet_rtt_ms.load(std::memory_order_relaxed)
+                          << " packets_sent=" << session->enet_packets_sent.load(std::memory_order_relaxed)
+                          << " packets_lost=" << session->enet_packets_lost.load(std::memory_order_relaxed)
+                          << " reliable_bytes_in_transit=" << session->reliable_data_in_transit.load(std::memory_order_relaxed);
           // No more clients to send video data to ^_^
           if (session->state == session::state_e::RUNNING) {
-            session::stop(*session);
+            session::stop(*session, disconnect_reason_e::remote_control_disconnect, event.data);
           }
           break;
         case ENET_EVENT_TYPE_NONE:
@@ -1726,6 +1919,28 @@ namespace stream {
       );
     });
 
+    server->map(FRAME_FEC_STATUS_PACKET_TYPE, [](session_t *session, const std::string_view &payload) {
+      const auto status {parse_frame_fec_status(payload)};
+      if (!status) {
+        BOOST_LOG(warning) << "Ignoring invalid Moonlight frame FEC status payload";
+        return;
+      }
+
+      const auto now {std::chrono::steady_clock::now()};
+      const auto previous {session->control.last_fec_feedback_at};
+      session->control.last_fec_feedback_at = now;
+      const auto elapsed_ms {
+        previous == std::chrono::steady_clock::time_point {} ? 1000LL :
+                                                               std::chrono::duration_cast<std::chrono::milliseconds>(now - previous).count()
+      };
+      const auto rtt_ms {session->control.peer ? session->control.peer->roundTripTime : 0U};
+      video::record_bitrate_feedback(
+        status->missing_packets_before_highest,
+        static_cast<std::uint32_t>(std::clamp<std::int64_t>(elapsed_ms, 1, 60000)),
+        rtt_ms
+      );
+    });
+
     server->map(packetTypes[IDX_REQUEST_IDR_FRAME], [&](session_t *session, const std::string_view &payload) {
       BOOST_LOG(debug) << "type [IDX_REQUEST_IDR_FRAME]"sv;
 
@@ -1762,7 +1977,7 @@ namespace stream {
 
         BOOST_LOG(error) << "Failed to verify tag"sv;
 
-        session::stop(*session);
+        session::stop(*session, disconnect_reason_e::control_protocol_error);
         return;
       }
 
@@ -1817,7 +2032,7 @@ namespace stream {
 
         BOOST_LOG(error) << "Failed to verify tag"sv;
 
-        session::stop(*session);
+        session::stop(*session, disconnect_reason_e::control_protocol_error);
         return;
       }
 
@@ -1826,7 +2041,7 @@ namespace stream {
 
       if (type == packetTypes[IDX_ENCRYPTED]) {
         BOOST_LOG(error) << "Bad packet type [IDX_ENCRYPTED] found"sv;
-        session::stop(*session);
+        session::stop(*session, disconnect_reason_e::control_protocol_error);
         return;
       }
 
@@ -1867,7 +2082,7 @@ namespace stream {
           if (now > session->pingTimeout) {
             auto address = session->control.peer ? platf::from_sockaddr((sockaddr *) &session->control.peer->address.address) : session->control.expected_peer_address;
             BOOST_LOG(info) << address << ": Ping Timeout"sv;
-            session::stop(*session);
+            session::stop(*session, disconnect_reason_e::control_ping_timeout);
           }
 
           if (session->state.load(std::memory_order_acquire) == session::state_e::STOPPING) {
@@ -1946,7 +2161,7 @@ namespace stream {
         }
       }
 
-      session->shutdown_event->raise(true);
+      session::stop(*session, disconnect_reason_e::service_shutdown);
       session->controlEnd.raise(true);
     }
 
@@ -2698,7 +2913,7 @@ namespace stream {
   void videoThread(session_t *session) {
     platf::set_thread_name("session::video");
     auto fg = util::fail_guard([&]() {
-      session::stop(*session);
+      session::stop(*session, disconnect_reason_e::video_worker_ended);
     });
 
     while_starting_do_nothing(session->state);
@@ -2706,6 +2921,7 @@ namespace stream {
     auto ref = broadcast.ref();
     auto error = recv_ping(session, ref, socket_e::video, session->video.ping_payload, session->video.peer, config::stream.ping_timeout);
     if (error < 0) {
+      session::stop(*session, disconnect_reason_e::initial_video_ping_timeout);
       return;
     }
 
@@ -2725,7 +2941,7 @@ namespace stream {
   void audioThread(session_t *session) {
     platf::set_thread_name("session::audio");
     auto fg = util::fail_guard([&]() {
-      session::stop(*session);
+      session::stop(*session, disconnect_reason_e::audio_worker_ended);
     });
 
     while_starting_do_nothing(session->state);
@@ -2733,6 +2949,7 @@ namespace stream {
     auto ref = broadcast.ref();
     auto error = recv_ping(session, ref, socket_e::audio, session->audio.ping_payload, session->audio.peer, config::stream.ping_timeout);
     if (error < 0) {
+      session::stop(*session, disconnect_reason_e::initial_audio_ping_timeout);
       return;
     }
 
@@ -2798,13 +3015,20 @@ namespace stream {
     /**
      * @brief Stop the active streaming session and prevent new packets from being queued.
      */
-    void stop(session_t &session) {
+    void stop(session_t &session, const disconnect_reason_e reason, const std::uint32_t event_data) {
       while_starting_do_nothing(session.state);
+      auto expected_reason = disconnect_reason_e::unknown;
+      if (session.disconnect_reason.compare_exchange_strong(expected_reason, reason, std::memory_order_relaxed)) {
+        session.disconnect_event_data.store(event_data, std::memory_order_relaxed);
+      }
       auto expected = state_e::RUNNING;
       auto already_stopping = !session.state.compare_exchange_strong(expected, state_e::STOPPING);
       if (already_stopping) {
         return;
       }
+
+      BOOST_LOG(info) << "SESSION_STOP reason=" << to_string(session.disconnect_reason.load(std::memory_order_relaxed))
+                      << " event_data=" << session.disconnect_event_data.load(std::memory_order_relaxed);
 
       stream_recording::service().stream_ended(reinterpret_cast<std::uintptr_t>(&session));
       session.shutdown_event->raise(true);
@@ -2838,6 +3062,25 @@ namespace stream {
       BOOST_LOG(debug) << "Resetting Input..."sv;
       input::reset(session.input);
 
+      const auto final_negotiation {negotiation_snapshot(session)};
+      const auto last_control_receive {session.last_control_receive_steady_ms.load(std::memory_order_relaxed)};
+      const disconnect_diagnostics_snapshot_t disconnect {
+        .reason = session.disconnect_reason.load(std::memory_order_relaxed),
+        .event_data = session.disconnect_event_data.load(std::memory_order_relaxed),
+        .peer_address = session.control_peer_address,
+        .local_address = session.control_local_address,
+        .path_scope = session.control_path_scope,
+        .enet_peer_state = session.enet_peer_state.load(std::memory_order_relaxed),
+        .enet_rtt_ms = session.enet_rtt_ms.load(std::memory_order_relaxed),
+        .enet_rtt_variance_ms = session.enet_rtt_variance_ms.load(std::memory_order_relaxed),
+        .enet_packets_sent = session.enet_packets_sent.load(std::memory_order_relaxed),
+        .enet_packets_lost = session.enet_packets_lost.load(std::memory_order_relaxed),
+        .enet_packet_loss_raw = session.enet_packet_loss_raw.load(std::memory_order_relaxed),
+        .reliable_data_in_transit = session.reliable_data_in_transit.load(std::memory_order_relaxed),
+        .last_control_receive_age_ms = last_control_receive < 0 ? -1 : std::max<std::int64_t>(steady_clock_milliseconds() - last_control_receive, 0),
+      };
+      write_session_diagnostics(session.config, final_negotiation, session.diagnostics_started_at, disconnect);
+
       // If this is the last session, invoke the platform callbacks
       if (--running_sessions == 0) {
         // A network disconnect is not a request to stop the application. Keep
@@ -2845,7 +3088,6 @@ namespace stream {
         // Moonlight's /resume path; only an explicit /cancel or service stop
         // tears them down.
         steamos_virtual_session::mark_streaming_disconnected();
-        const auto final_negotiation {negotiation_snapshot(session)};
         const auto learned_start_kbps {static_cast<int>(video::pipeline_diagnostics_snapshot().bitrate_learned_next_kbps)};
         if (!final_negotiation.selected.network_class.empty() && learned_start_kbps > 0) {
           const auto result {web::stream_profile_service().update_learned_start(
@@ -2858,7 +3100,6 @@ namespace stream {
             BOOST_LOG(warning) << "STREAM_PROFILE_LEARNING_SKIPPED reason=" << result.code;
           }
         }
-        write_session_diagnostics(session.config, final_negotiation, session.diagnostics_started_at);
         bool revert_display_config {config::video.dd.config_revert_on_disconnect};
         if (proc::proc.running()) {
 #if defined SUNSHINE_TRAY && SUNSHINE_TRAY >= 1
