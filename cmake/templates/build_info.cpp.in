@@ -1,0 +1,20 @@
+/**
+ * @file build_info.cpp
+ * @brief Generated implementation of build-specific version metadata.
+ */
+#include "src/build_info.h"
+
+namespace {
+  constexpr std::string_view BUILD_VERSION {"@PROJECT_VERSION@"};  ///< Configured application version.
+  constexpr std::string_view BUILD_COMMIT {"@GITHUB_COMMIT@"};  ///< Configured source commit.
+}  // namespace
+
+namespace build_info {
+  std::string_view version() {
+    return BUILD_VERSION;
+  }
+
+  std::string_view commit() {
+    return BUILD_COMMIT;
+  }
+}  // namespace build_info

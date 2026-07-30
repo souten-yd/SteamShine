@@ -720,6 +720,25 @@ TEST_F(ConfigHttpTest, GetPageNoRedirectWhenUsernameEmpty) {
   config::sunshine.username = saved;
 }
 
+TEST(ConfigHttpHelpersTest, SteamshinePageContentSecurityPolicyAllowsOnlyRequestedTerminalHost) {
+  const auto localhost_policy = confighttp::steamshine_page_content_security_policy("localhost:47990", 47991);
+  EXPECT_NE(localhost_policy.find("connect-src 'self' wss://localhost:47991;"), std::string::npos);
+
+  const auto ipv4_policy = confighttp::steamshine_page_content_security_policy("192.168.68.71:47990", 47991);
+  EXPECT_NE(ipv4_policy.find("connect-src 'self' wss://192.168.68.71:47991;"), std::string::npos);
+
+  const auto ipv6_policy = confighttp::steamshine_page_content_security_policy("[::1]:47990", 47991);
+  EXPECT_NE(ipv6_policy.find("connect-src 'self' wss://[::1]:47991;"), std::string::npos);
+}
+
+TEST(ConfigHttpHelpersTest, SteamshinePageContentSecurityPolicyRejectsInvalidHosts) {
+  for (const std::string_view host : {"", "localhost:", "localhost:not-a-port", "2001:db8::1", "[::1", "[::1]:bad", "localhost; wss://attacker.example"}) {
+    const auto policy = confighttp::steamshine_page_content_security_policy(host, 47991);
+    EXPECT_EQ(policy.find("wss://"), std::string::npos) << host;
+    EXPECT_NE(policy.find("connect-src 'self';"), std::string::npos) << host;
+  }
+}
+
 // Test: confighttp::getLocale() returns locale JSON
 TEST_F(ConfigHttpTest, GetLocaleReturnsJson) {
   const auto response = client->request("GET", "/locale-test");
@@ -1402,3 +1421,12 @@ TEST_F(BrowseDirectoryTest, GetWindowsDrives_EntriesHaveCorrectFormat) {
   }
 }
 #endif
+/**
+ * @brief Verify terminal accept retries only transient non-blocking errors.
+ */
+TEST(ConfigHttpTerminalTest, ClassifiesNonBlockingAcceptErrors) {
+  EXPECT_TRUE(confighttp::terminal_accept_is_retryable(boost::asio::error::would_block));
+  EXPECT_TRUE(confighttp::terminal_accept_is_retryable(boost::asio::error::try_again));
+  EXPECT_FALSE(confighttp::terminal_accept_is_retryable(boost::asio::error::operation_aborted));
+  EXPECT_FALSE(confighttp::terminal_accept_is_retryable({}));
+}

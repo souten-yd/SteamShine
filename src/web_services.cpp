@@ -5,14 +5,18 @@
 
 // standard includes
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cstdlib>
+#include <format>
+#include <fstream>
 #include <vector>
 
 // lib includes
 #include <boost/algorithm/string/predicate.hpp>
 
 // local includes
+#include "build_info.h"
 #include "config.h"
 #include "crypto.h"
 #include "file_handler.h"
@@ -23,6 +27,7 @@
 #include "process.h"
 #include "rtsp.h"
 #include "steamos_virtual_session.h"
+#include "stream.h"
 #include "video.h"
 #include "web_services.h"
 
@@ -71,6 +76,81 @@ namespace web {
     std::shared_ptr<PairingClientBackend> default_pairing_client_backend() {
       static const auto backend = std::make_shared<NvHttpPairingClientBackend>();
       return backend;
+    }
+
+    /**
+     * @brief Serialize one bounded stream profile.
+     *
+     * @param profile Profile to serialize.
+     * @return Public JSON representation.
+     */
+    nlohmann::json stream_profile_json(const stream_profile_t &profile) {
+      return {
+        {"client_id", profile.client_id},
+        {"network_class", profile.network_class},
+        {"capability_signature", profile.capability_signature},
+        {"geometry_policy", profile.geometry_policy},
+        {"fps_policy", profile.fps_policy},
+        {"fps_ceiling", profile.fps_ceiling},
+        {"codec_policy", profile.codec_policy},
+        {"hdr_policy", profile.hdr_policy},
+        {"bitrate_ceiling_kbps", profile.bitrate_ceiling_kbps},
+        {"quality_preset", profile.quality_preset},
+        {"orientation", profile.orientation},
+        {"safe_area_percent", profile.safe_area_percent},
+        {"learned_start_kbps", profile.learned_start_kbps},
+        {"active", profile.active},
+      };
+    }
+
+    /**
+     * @brief Parse one stream profile without accepting implicit JSON coercion.
+     *
+     * @param value JSON object to parse.
+     * @return Parsed profile, or an empty optional for malformed input.
+     */
+    std::optional<stream_profile_t> stream_profile_from_json(const nlohmann::json &value) {
+      try {
+        return stream_profile_t {
+          .client_id = value.at("client_id").get<std::string>(),
+          .network_class = value.at("network_class").get<std::string>(),
+          .capability_signature = value.at("capability_signature").get<std::string>(),
+          .geometry_policy = value.value("geometry_policy", "fit"),
+          .fps_policy = value.value("fps_policy", "auto"),
+          .fps_ceiling = value.value("fps_ceiling", 0),
+          .codec_policy = value.value("codec_policy", "auto"),
+          .hdr_policy = value.value("hdr_policy", "auto"),
+          .bitrate_ceiling_kbps = value.value("bitrate_ceiling_kbps", 0),
+          .quality_preset = value.value("quality_preset", "balanced"),
+          .orientation = value.value("orientation", "auto"),
+          .safe_area_percent = value.value("safe_area_percent", 0),
+          .learned_start_kbps = value.value("learned_start_kbps", 0),
+          .active = value.value("active", false),
+        };
+      } catch (const nlohmann::json::exception &) {
+        return std::nullopt;
+      }
+    }
+
+    /**
+     * @brief Resolve the owner-private default stream profile path.
+     *
+     * @return Absolute profile path, or an empty path when no user state root exists.
+     */
+    std::filesystem::path default_stream_profile_path() {
+      if (const auto *const state_home {std::getenv("XDG_STATE_HOME")}; state_home && *state_home) {
+        const std::filesystem::path path {state_home};
+        if (path.is_absolute()) {
+          return path / "steamshine" / "stream-profiles.json";
+        }
+      }
+      if (const auto *const user_home {std::getenv("HOME")}; user_home && *user_home) {
+        const std::filesystem::path path {user_home};
+        if (path.is_absolute()) {
+          return path / ".local" / "state" / "steamshine" / "stream-profiles.json";
+        }
+      }
+      return {};
     }
 
     /**
@@ -230,6 +310,294 @@ namespace web {
     return backend_->list_clients();
   }
 
+  StreamProfileService::StreamProfileService(std::filesystem::path path):
+      path_ {path.empty() ? default_stream_profile_path() : std::move(path)} {
+    if (path_.empty()) {
+      return;
+    }
+    try {
+      const auto document = nlohmann::json::parse(file_handler::read_file(path_.string().c_str()));
+      if (document.value("schema_version", 0) != 1 || !document.contains("profiles") || !document.at("profiles").is_array()) {
+        return;
+      }
+      for (const auto &value : document.at("profiles")) {
+        const auto profile {stream_profile_from_json(value)};
+        if (!profile || !validate(*profile).empty() || profiles_.size() >= 64) {
+          continue;
+        }
+        if (profile->active) {
+          for (auto &[existing_key, existing_profile] : profiles_) {
+            if (existing_key.first == profile->client_id) {
+              existing_profile.active = false;
+            }
+          }
+        }
+        profiles_[{profile->client_id, profile->network_class}] = *profile;
+      }
+    } catch (const std::exception &) {
+    }
+  }
+
+  nlohmann::json StreamProfileService::snapshot() const {
+    std::lock_guard lock {mutex_};
+    nlohmann::json profiles = nlohmann::json::array();
+    for (const auto &[key, profile] : profiles_) {
+      static_cast<void>(key);
+      profiles.push_back(stream_profile_json(profile));
+    }
+    return nlohmann::json::object({
+      {"schema_version", 1},
+      {"maximum_profiles", 64},
+      {"profiles", std::move(profiles)},
+    });
+  }
+
+  service_result_t StreamProfileService::save(const stream_profile_t &profile) {
+    if (const auto error {validate(profile)}; !error.empty()) {
+      return {false, error, "Stream profile validation failed."};
+    }
+    std::lock_guard lock {mutex_};
+    const auto key {std::make_pair(profile.client_id, profile.network_class)};
+    if (!profiles_.contains(key) && profiles_.size() >= 64) {
+      return {false, "profile_limit_reached", "The bounded stream profile limit was reached."};
+    }
+    const auto old_profiles {profiles_};
+    if (profile.active) {
+      for (auto &[existing_key, existing_profile] : profiles_) {
+        if (existing_key.first == profile.client_id) {
+          existing_profile.active = false;
+        }
+      }
+    }
+    profiles_[key] = profile;
+    if (!persist_locked()) {
+      profiles_ = old_profiles;
+      return {false, "profile_save_failed", "Unable to save the stream profile."};
+    }
+    return {true, "profile_saved", "Stream profile saved."};
+  }
+
+  service_result_t StreamProfileService::reset(const std::string_view client_id, const std::string_view network_class) {
+    stream_profile_t reset_key;
+    reset_key.client_id = std::string {client_id};
+    reset_key.network_class = std::string {network_class};
+    reset_key.capability_signature = "reset";
+    if (const auto error {validate(reset_key)}; error == "invalid_client_id" || error == "invalid_network_class") {
+      return {false, error, "Stream profile reset key is invalid."};
+    }
+    std::lock_guard lock {mutex_};
+    const auto key {std::make_pair(std::string {client_id}, std::string {network_class})};
+    const auto position {profiles_.find(key)};
+    if (position == profiles_.end()) {
+      return {false, "profile_not_found", "Stream profile was not found."};
+    }
+    const auto previous {position->second};
+    profiles_.erase(position);
+    if (!persist_locked()) {
+      profiles_[key] = previous;
+      return {false, "profile_save_failed", "Unable to reset the stream profile."};
+    }
+    return {true, "profile_reset", "Stream profile reset."};
+  }
+
+  stream_profile_selection_t StreamProfileService::select(
+    const std::string_view client_id,
+    const std::string_view network_class,
+    const std::string_view capability_signature
+  ) const {
+    std::lock_guard lock {mutex_};
+    const auto position {profiles_.find({std::string {client_id}, std::string {network_class}})};
+    if (position == profiles_.end()) {
+      return {std::nullopt, "profile_not_found"};
+    }
+    if (position->second.capability_signature != capability_signature) {
+      return {std::nullopt, "capability_signature_changed"};
+    }
+    return {position->second, "exact_client_network_capability_match"};
+  }
+
+  stream_profile_selection_t StreamProfileService::select_active(
+    const std::string_view client_id,
+    const std::string_view capability_signature
+  ) const {
+    std::lock_guard lock {mutex_};
+    const auto position = std::find_if(profiles_.begin(), profiles_.end(), [client_id](const auto &entry) {
+      return entry.first.first == client_id && entry.second.active;
+    });
+    if (position == profiles_.end()) {
+      return {std::nullopt, "active_network_profile_not_found"};
+    }
+    if (position->second.capability_signature != capability_signature) {
+      return {std::nullopt, "capability_signature_changed"};
+    }
+    return {position->second, "exact_active_client_network_capability_match"};
+  }
+
+  service_result_t StreamProfileService::update_learned_start(
+    const std::string_view client_id,
+    const std::string_view network_class,
+    const std::string_view capability_signature,
+    const int learned_start_kbps
+  ) {
+    if (learned_start_kbps < 0 || learned_start_kbps > 200000) {
+      return {false, "invalid_learned_start", "Learned stream bitrate is outside the bounded range."};
+    }
+    std::lock_guard lock {mutex_};
+    const auto key {std::make_pair(std::string {client_id}, std::string {network_class})};
+    const auto position {profiles_.find(key)};
+    if (position == profiles_.end()) {
+      return {false, "profile_not_found", "Stream profile was not found."};
+    }
+    if (!position->second.active || position->second.capability_signature != capability_signature) {
+      return {false, "profile_selection_changed", "Stream profile selection changed before learning completed."};
+    }
+    const auto previous {position->second.learned_start_kbps};
+    position->second.learned_start_kbps = learned_start_kbps;
+    if (!persist_locked()) {
+      position->second.learned_start_kbps = previous;
+      return {false, "profile_save_failed", "Unable to save the learned stream bitrate."};
+    }
+    return {true, "learned_start_saved", "Learned stream bitrate saved."};
+  }
+
+  StreamProfileService &stream_profile_service() {
+    static StreamProfileService service;
+    return service;
+  }
+
+  std::string stream_capability_signature(const video::config_t &request, const bool hdr_requested) {
+    return std::format(
+      "v1-c{}-d{}-x{}-h{}",
+      request.videoFormat,
+      request.requestedDynamicRange,
+      request.chromaSamplingType,
+      hdr_requested ? 1 : 0
+    );
+  }
+
+  stream_profile_application_t apply_stream_profile(const stream_profile_t &profile, video::config_t &config) {
+    stream_profile_application_t result;
+    if (profile.fps_policy == "custom" && config.framerate > profile.fps_ceiling) {
+      config.framerate = profile.fps_ceiling;
+      config.framerateX100 = 0;
+      result.applied = true;
+      result.fallback_reasons.emplace_back("profile_fps_ceiling_applied");
+    }
+    if (profile.bitrate_ceiling_kbps > 0 && config.bitrate > profile.bitrate_ceiling_kbps) {
+      config.bitrate = profile.bitrate_ceiling_kbps;
+      result.applied = true;
+      result.fallback_reasons.emplace_back("profile_bitrate_ceiling_applied");
+    }
+    if (profile.learned_start_kbps > 0 && config.bitrate > profile.learned_start_kbps) {
+      config.bitrate = profile.learned_start_kbps;
+      result.applied = true;
+      result.fallback_reasons.emplace_back("profile_learned_start_applied");
+    }
+    const auto requested_codec = config.videoFormat == 0 ? "h264" : config.videoFormat == 1 ? "hevc" :
+                                                                  config.videoFormat == 2   ? "av1" :
+                                                                                              "unknown";
+    if (profile.codec_policy != "auto" && profile.codec_policy != requested_codec) {
+      result.fallback_reasons.emplace_back("profile_codec_yielded_to_client_request");
+    }
+    if (profile.hdr_policy == "off" && config.dynamicRange != 0) {
+      config.dynamicRange = 0;
+      result.applied = true;
+      result.fallback_reasons.emplace_back("profile_hdr_off_applied");
+    } else if (profile.hdr_policy == "require" && config.requestedDynamicRange != 1) {
+      result.fallback_reasons.emplace_back("profile_hdr_requirement_yielded_to_client_capability");
+    }
+    return result;
+  }
+
+  std::string StreamProfileService::validate(const stream_profile_t &profile) {
+    const auto bounded_token = [](const std::string_view value, const std::size_t maximum) {
+      return !value.empty() && value.size() <= maximum && std::all_of(value.begin(), value.end(), [](const unsigned char character) {
+        return std::isalnum(character) || character == '-' || character == '_' || character == '.' || character == ':';
+      });
+    };
+    if (!bounded_token(profile.client_id, 128)) {
+      return "invalid_client_id";
+    }
+    if (!bounded_token(profile.network_class, 32)) {
+      return "invalid_network_class";
+    }
+    if (!bounded_token(profile.capability_signature, 256)) {
+      return "invalid_capability_signature";
+    }
+    const auto one_of = [](const std::string &value, const std::initializer_list<std::string_view> accepted) {
+      return std::find(accepted.begin(), accepted.end(), value) != accepted.end();
+    };
+    if (!one_of(profile.geometry_policy, {"exact", "fit", "virtual_fallback"})) {
+      return "invalid_geometry_policy";
+    }
+    if (!one_of(profile.fps_policy, {"auto", "custom"}) || (profile.fps_policy == "auto" ? profile.fps_ceiling != 0 : profile.fps_ceiling < 30 || profile.fps_ceiling > 240)) {
+      return "invalid_fps_policy";
+    }
+    if (!one_of(profile.codec_policy, {"auto", "h264", "hevc", "av1"})) {
+      return "invalid_codec_policy";
+    }
+    if (!one_of(profile.hdr_policy, {"off", "auto", "require"})) {
+      return "invalid_hdr_policy";
+    }
+    if (profile.bitrate_ceiling_kbps < 0 || profile.bitrate_ceiling_kbps > 200000) {
+      return "invalid_bitrate_ceiling";
+    }
+    if (!one_of(profile.quality_preset, {"low_latency", "balanced", "quality"})) {
+      return "invalid_quality_preset";
+    }
+    if (!one_of(profile.orientation, {"auto", "landscape", "portrait"}) || profile.safe_area_percent < 0 || profile.safe_area_percent > 25) {
+      return "invalid_layout_policy";
+    }
+    if (profile.learned_start_kbps < 0 || profile.learned_start_kbps > 200000) {
+      return "invalid_learned_start";
+    }
+    return {};
+  }
+
+  bool StreamProfileService::persist_locked() const {
+    if (path_.empty()) {
+      return false;
+    }
+    std::error_code error;
+    std::filesystem::create_directories(path_.parent_path(), error);
+    if (error) {
+      return false;
+    }
+    nlohmann::json profiles = nlohmann::json::array();
+    for (const auto &[key, profile] : profiles_) {
+      static_cast<void>(key);
+      profiles.push_back(stream_profile_json(profile));
+    }
+    const auto document = nlohmann::json::object({
+      {"schema_version", 1},
+      {"profiles", std::move(profiles)},
+    });
+    auto temporary {path_};
+    temporary += ".tmp";
+    {
+      std::ofstream output {temporary, std::ios::binary | std::ios::trunc};
+      if (!output || !(output << document.dump(2) << '\n')) {
+        return false;
+      }
+    }
+    std::filesystem::permissions(
+      temporary,
+      std::filesystem::perms::owner_read | std::filesystem::perms::owner_write,
+      std::filesystem::perm_options::replace,
+      error
+    );
+    if (error) {
+      std::filesystem::remove(temporary, error);
+      return false;
+    }
+    std::filesystem::rename(temporary, path_, error);
+    if (error) {
+      std::filesystem::remove(temporary, error);
+      return false;
+    }
+    return true;
+  }
+
   service_result_t ClientService::revoke(const std::string_view uuid) const {
     if (uuid.empty() || uuid.size() > 128) {
       return {false, "invalid_client_id", "Client identifier is invalid."};
@@ -349,13 +717,18 @@ namespace web {
     std::string render_node;
     const bool render_node_ready = steamos_virtual_session::encoder_render_node(render_node);
     const auto virtual_session {steamos_virtual_session::status_snapshot()};
+    const auto codec {video::codec_status_snapshot()};
     const auto [input_diagnostics, video_diagnostics] {aggregated_diagnostics()};
+    const auto negotiation {rtsp_stream::active_negotiation_snapshot()};
+    const stream::stream_negotiation_snapshot_t empty_negotiation;
+    const auto hdr_status {video::hdr_status_snapshot()};
     const auto *const launch_mode {std::getenv("STEAMSHINE_LAUNCH_MODE")};
     return {
-      {"service_binary_commit", PROJECT_VERSION_COMMIT},
+      {"service_binary_commit", build_info::commit()},
       {"service_config_path", config::sunshine.config_file},
       {"service_launch_mode", launch_mode && *launch_mode ? launch_mode : "manual"},
       {"active_streams", rtsp_stream::session_count()},
+      {"stream_negotiation", stream::negotiation_snapshot_json(negotiation ? *negotiation : empty_negotiation, negotiation.has_value())},
       {"application_running", proc::proc.running() > 0},
       {"gamescope_active", steamos_virtual_session::active()},
       {"virtual_display_enabled", config::steamos_virtual_display.enabled},
@@ -368,6 +741,32 @@ namespace web {
       {"encoder_gpu", config::steamos_virtual_display.encoder_gpu},
       {"render_node", render_node_ready ? render_node : ""},
       {"encoder", config::video.encoder},
+      {"codec_policy", std::string {codec_policy::to_string(config::video.codec_policy)}},
+      {"codec_fallback", std::string {codec_policy::to_string(config::video.codec_fallback)}},
+      {"codec_allow_software", config::video.codec_allow_software},
+      {"codec_state", {
+                        {"requested", codec.requested},
+                        {"selected", codec.selected},
+                        {"active", codec.active},
+                        {"profile", codec.profile},
+                        {"bit_depth", codec.bit_depth},
+                        {"backend", codec.backend},
+                        {"hardware", codec.hardware},
+                        {"reason", codec.reason},
+                      }},
+      {"steamshine_hdr_policy", hdr_policy::to_string(config::video.steamshine_hdr_policy)},
+      {"hdr_state", {
+                      {"requested", hdr_status.requested},
+                      {"client_capable", hdr_status.client_capable},
+                      {"selected", hdr_status.selected},
+                      {"active", hdr_status.active},
+                      {"bit_depth", hdr_status.bit_depth},
+                      {"primaries", hdr_status.primaries},
+                      {"transfer", hdr_status.transfer},
+                      {"matrix", hdr_status.matrix},
+                      {"range", hdr_status.range},
+                      {"reason", hdr_status.reason},
+                    }},
       {"virtual_display_state", std::string {steamos_virtual_session::to_string(virtual_session.state)}},
       {"virtual_display_origin", std::string {steamos_virtual_session::to_string(virtual_session.origin)}},
       {"virtual_display_process_owned", virtual_session.process_owned},
@@ -404,6 +803,27 @@ namespace web {
       {"pipewire_producer_pid", virtual_session.pipewire_producer_pid},
       {"gamescope_pid", virtual_session.gamescope_pid},
       {"pci_bdf", virtual_session.pci_bdf},
+      {"requested_stream_width", virtual_session.requested_width},
+      {"requested_stream_height", virtual_session.requested_height},
+      {"requested_stream_refresh", {
+                                     {"numerator", virtual_session.requested_refresh.numerator},
+                                     {"denominator", virtual_session.requested_refresh.denominator},
+                                   }},
+      {"selected_stream_width", virtual_session.width},
+      {"selected_stream_height", virtual_session.height},
+      {"selected_stream_refresh", {
+                                    {"numerator", virtual_session.refresh.numerator},
+                                    {"denominator", virtual_session.refresh.denominator},
+                                  }},
+      {"stream_geometry_reason", virtual_session.geometry_reason},
+      {"capture_width", virtual_session.capture_width},
+      {"capture_height", virtual_session.capture_height},
+      {"content_rectangle", {
+                              {"x", virtual_session.content_rectangle.x},
+                              {"y", virtual_session.content_rectangle.y},
+                              {"width", virtual_session.content_rectangle.width},
+                              {"height", virtual_session.content_rectangle.height},
+                            }},
       {"captured_frames", virtual_session.captured_frames},
       {"encoded_packets", virtual_session.encoded_packets},
       {"encoded_bytes", virtual_session.encoded_bytes},
@@ -457,6 +877,26 @@ namespace web {
       {"network_queue_frames_max", video_diagnostics.network_queue_frames_max},
       {"socket_outq_bytes", video_diagnostics.socket_outq_bytes},
       {"socket_outq_bytes_max", video_diagnostics.socket_outq_bytes_max},
+      {"adaptive_bitrate", {
+                             {"enabled", video_diagnostics.adaptive_bitrate_enabled},
+                             {"minimum_kbps", video_diagnostics.bitrate.minimum_kbps},
+                             {"initial_kbps", video_diagnostics.bitrate.initial_kbps},
+                             {"target_kbps", video_diagnostics.bitrate.target_kbps},
+                             {"active_kbps", video_diagnostics.bitrate_active_kbps},
+                             {"maximum_kbps", video_diagnostics.bitrate.maximum_kbps},
+                             {"peak_kbps", video_diagnostics.bitrate.peak_kbps},
+                             {"vbv_kbits", video_diagnostics.bitrate.vbv_kbits},
+                             {"actual_video_kbps", video_diagnostics.actual_video_bitrate_kbps},
+                             {"learned_next_kbps", video_diagnostics.bitrate_learned_next_kbps},
+                             {"state", adaptive_bitrate::to_string(video_diagnostics.congestion_state)},
+                             {"reason", video_diagnostics.bitrate_reason},
+                             {"runtime_update_supported", video_diagnostics.runtime_bitrate_update_supported},
+                             {"feedback_samples", video_diagnostics.bitrate_feedback_samples},
+                             {"lost_packets", video_diagnostics.bitrate_lost_packets},
+                             {"updates_applied", video_diagnostics.bitrate_updates_applied},
+                             {"updates_unsupported", video_diagnostics.bitrate_updates_unsupported},
+                             {"updates_failed", video_diagnostics.bitrate_updates_failed},
+                           }},
       {"idr_requests", video_diagnostics.idr_requests},
       {"idr_emitted", video_diagnostics.idr_emitted},
       {"idr_reason_client_request", video_diagnostics.idr_reason_client_request},

@@ -58,6 +58,46 @@ const config = ref(props.config)
       <div class="form-text">{{ $t('config.av1_mode_desc') }}</div>
     </div>
 
+    <!-- SteamShine Codec Policy -->
+    <div class="mb-3">
+      <label for="steamshine_codec_policy" class="form-label">{{ $t('config.steamshine_codec_policy') }}</label>
+      <select id="steamshine_codec_policy" class="form-select" v-model="config.steamshine_codec_policy">
+        <option value="auto">{{ $t('config.steamshine_codec_policy_auto') }}</option>
+        <option value="h264">H.264</option>
+        <option value="hevc">HEVC</option>
+        <option value="av1">AV1</option>
+      </select>
+      <div class="form-text">{{ $t('config.steamshine_codec_policy_desc') }}</div>
+    </div>
+
+    <!-- SteamShine Codec Fallback -->
+    <div class="mb-3">
+      <label for="steamshine_codec_fallback" class="form-label">{{ $t('config.steamshine_codec_fallback') }}</label>
+      <select id="steamshine_codec_fallback" class="form-select" v-model="config.steamshine_codec_fallback">
+        <option value="strict">{{ $t('config.steamshine_codec_fallback_strict') }}</option>
+        <option value="h264">{{ $t('config.steamshine_codec_fallback_h264') }}</option>
+      </select>
+      <div class="form-text">{{ $t('config.steamshine_codec_fallback_desc') }}</div>
+    </div>
+
+    <!-- SteamShine Software Codec Diagnostics -->
+    <div class="mb-3 form-check form-switch">
+      <input id="steamshine_codec_allow_software" class="form-check-input" type="checkbox" true-value="enabled" false-value="disabled" v-model="config.steamshine_codec_allow_software" />
+      <label for="steamshine_codec_allow_software" class="form-check-label">{{ $t('config.steamshine_codec_allow_software') }}</label>
+      <div class="form-text">{{ $t('config.steamshine_codec_allow_software_desc') }}</div>
+    </div>
+
+    <!-- SteamShine HDR Policy -->
+    <div class="mb-3">
+      <label for="steamshine_hdr_policy" class="form-label">{{ $t('config.steamshine_hdr_policy') }}</label>
+      <select id="steamshine_hdr_policy" class="form-select" v-model="config.steamshine_hdr_policy">
+        <option value="off">{{ $t('config.steamshine_hdr_policy_off') }}</option>
+        <option value="auto">{{ $t('config.steamshine_hdr_policy_auto') }}</option>
+        <option value="require">{{ $t('config.steamshine_hdr_policy_require') }}</option>
+      </select>
+      <div class="form-text">{{ $t('config.steamshine_hdr_policy_desc') }}</div>
+    </div>
+
     <!-- Capture -->
     <div class="mb-3" v-if="platform !== 'macos'">
       <label for="capture" class="form-label">{{ $t('config.capture') }}</label>

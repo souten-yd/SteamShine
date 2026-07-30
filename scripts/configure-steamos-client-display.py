@@ -164,7 +164,7 @@ def select_output(configuration: dict[str, Any], requested_name: str = "") -> di
 
 
 def select_mode(output: dict[str, Any], width: int, height: int, fps: float) -> dict[str, Any]:
-    """Select the exact requested size whose refresh rate is nearest the request."""
+    """Select an exact-size mode at the requested or nearest lower safe refresh."""
     modes = [
         mode
         for mode in output.get("modes", [])
@@ -173,7 +173,15 @@ def select_mode(output: dict[str, Any], width: int, height: int, fps: float) -> 
     ]
     if not modes:
         raise ValueError(f"KDE output {output.get('name', 'unknown')} has no {width}x{height} mode")
-    return min(modes, key=lambda mode: abs(float(mode.get("refreshRate", 0.0)) - fps))
+    safe_modes = [mode for mode in modes if float(mode.get("refreshRate", 0.0)) <= fps + 0.01]
+    if not safe_modes:
+        raise ValueError(
+            f"KDE output {output.get('name', 'unknown')} has no safe {width}x{height} mode at or below {fps:g} Hz"
+        )
+    return min(
+        safe_modes,
+        key=lambda mode: (abs(float(mode.get("refreshRate", 0.0)) - fps), -float(mode.get("refreshRate", 0.0))),
+    )
 
 
 def read_configuration(environment: dict[str, str]) -> dict[str, Any]:

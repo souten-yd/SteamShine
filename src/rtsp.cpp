@@ -31,6 +31,7 @@ extern "C" {
 #include "stream.h"
 #include "sync.h"
 #include "video.h"
+#include "web_services.h"
 
 namespace asio = boost::asio;
 
@@ -639,6 +640,26 @@ namespace rtsp_stream {
       return (int) _session_slots->size();
     }
 
+    /**
+     * @brief Return the newest canonical negotiation owned by an active session.
+     *
+     * @return Snapshot with the greatest launch generation, or an empty optional.
+     */
+    std::optional<stream::stream_negotiation_snapshot_t> active_negotiation_snapshot() {
+      auto lg = _session_slots.lock();
+      std::optional<stream::stream_negotiation_snapshot_t> newest;
+      for (const auto &slot : *_session_slots) {
+        if (stream::session::state(*slot) == stream::session::state_e::STOPPING) {
+          continue;
+        }
+        auto candidate = stream::session::negotiation_snapshot(*slot);
+        if (!newest || candidate.generation > newest->generation) {
+          newest = std::move(candidate);
+        }
+      }
+      return newest;
+    }
+
     safe::event_t<std::shared_ptr<launch_session_t>> launch_event;  ///< Launch event.
 
     /**
@@ -754,6 +775,10 @@ namespace rtsp_stream {
     server.clear(false);
 
     return server.session_count();
+  }
+
+  std::optional<stream::stream_negotiation_snapshot_t> active_negotiation_snapshot() {
+    return server.active_negotiation_snapshot();
   }
 
   void terminate_sessions() {
@@ -949,11 +974,11 @@ namespace rtsp_stream {
       ss << "a=x-nv-video[0].refPicInvalidation:1"sv << std::endl;
     }
 
-    if (video::active_hevc_mode != 1) {
+    if (video::advertised_codec_mode(codec_policy::codec_e::hevc) != 1) {
       ss << "sprop-parameter-sets=AAAAAU"sv << std::endl;
     }
 
-    if (video::active_av1_mode != 1) {
+    if (video::advertised_codec_mode(codec_policy::codec_e::av1) != 1) {
       ss << "a=rtpmap:98 AV1/90000"sv << std::endl;
     }
 
@@ -1140,6 +1165,7 @@ namespace rtsp_stream {
     stream::config_t config;
 
     std::int64_t configuredBitrateKbps;
+    bool refreshHintDiscarded {false};
     config.audio.flags[audio::config_t::HOST_AUDIO] = session.host_audio;
     try {
       config.audio.channels = (int) util::from_view(args.at("x-nv-audio.surround.numChannels"sv));
@@ -1191,6 +1217,7 @@ namespace rtsp_stream {
         double ratio = fps_strict / config.monitor.framerate;
         if (ratio < 0.99 || ratio > 1.01) {
           config.monitor.framerateX100 = 0;
+          refreshHintDiscarded = true;
         }
       }
       config.monitor.bitrate = (int) util::from_view(args.at("x-nv-vqos[0].bw.maximumBitrateKbps"sv));
@@ -1199,6 +1226,8 @@ namespace rtsp_stream {
       config.monitor.encoderCscMode = (int) util::from_view(args.at("x-nv-video[0].encoderCscMode"sv));
       config.monitor.videoFormat = (int) util::from_view(args.at("x-nv-vqos[0].bitStreamFormat"sv));
       config.monitor.dynamicRange = (int) util::from_view(args.at("x-nv-video[0].dynamicRangeMode"sv));
+      config.monitor.requestedDynamicRange = config.monitor.dynamicRange;
+      config.monitor.hdrRequested = session.hdr_requested;
       config.monitor.chromaSamplingType = (int) util::from_view(args.at("x-ss-video[0].chromaSamplingType"sv));
       config.monitor.enableIntraRefresh = (int) util::from_view(args.at("x-ss-video[0].intraRefresh"sv));
 
@@ -1207,6 +1236,11 @@ namespace rtsp_stream {
       respond(sock, session, &option, 400, "BAD REQUEST", req->sequenceNumber, {});
       return;
     }
+
+    const auto clientMaximumBitrateKbps {static_cast<std::int64_t>(config.monitor.bitrate)};
+    const auto configuredTotalBitrateKbps {configuredBitrateKbps};
+    const auto requestedMonitor {config.monitor};
+    const auto capabilitySignature {web::stream_capability_signature(requestedMonitor, session.hdr_requested)};
 
     // When using stereo audio, the audio quality is (strangely) indicated by whether the Host field
     // in the RTSP message matches a local interface's IP address. Fortunately, Moonlight always sends
@@ -1273,16 +1307,62 @@ namespace rtsp_stream {
       config.monitor.bitrate = (int) configuredBitrateKbps;
     }
 
-    if (config.monitor.videoFormat == 1 && video::active_hevc_mode == 1) {
-      BOOST_LOG(warning) << "HEVC is disabled, yet the client requested HEVC"sv;
+    session.negotiation.requested.capability_signature = capabilitySignature;
+    const auto profileSelection {web::stream_profile_service().select_active(session.unique_id, capabilitySignature)};
+    session.negotiation.selected.profile_selection_reason = profileSelection.reason;
+    if (profileSelection.profile) {
+      const auto &profile {*profileSelection.profile};
+      session.negotiation.selected.network_class = profile.network_class;
+      session.negotiation.selected.geometry_policy = profile.geometry_policy;
+      session.negotiation.selected.quality_preset = profile.quality_preset;
+      session.negotiation.selected.orientation = profile.orientation;
+      session.negotiation.selected.safe_area_percent = profile.safe_area_percent;
+      const auto application {web::apply_stream_profile(profile, config.monitor)};
+      for (const auto &reason : application.fallback_reasons) {
+        stream::add_fallback_reason(session.negotiation, reason);
+      }
+      BOOST_LOG(info) << "STREAM_PROFILE_SELECTED client=" << session.unique_id
+                      << " network=" << profile.network_class
+                      << " reason=" << profileSelection.reason
+                      << " applied=" << application.applied;
+    }
 
+    const auto codec_selection {video::select_codec(config.monitor)};
+    if (!codec_selection.accepted) {
+      BOOST_LOG(warning) << "Rejecting client codec request: "sv << codec_selection.reason;
       respond(sock, session, &option, 400, "BAD REQUEST", req->sequenceNumber, {});
       return;
     }
+    BOOST_LOG(info) << "STREAM_CODEC_SELECTED codec="sv << codec_policy::to_string(codec_selection.selected)
+                    << " profile="sv << codec_selection.profile
+                    << " bit_depth="sv << codec_selection.bit_depth
+                    << " reason="sv << codec_selection.reason;
 
-    if (config.monitor.videoFormat == 2 && video::active_av1_mode == 1) {
-      BOOST_LOG(warning) << "AV1 is disabled, yet the client requested AV1"sv;
-
+    if (config.monitor.dynamicRange < 0 || config.monitor.dynamicRange > 1) {
+      BOOST_LOG(warning) << "HDR_NEGOTIATION_REJECTED reason=hdr_dynamic_range_invalid";
+      respond(sock, session, &option, 400, "BAD REQUEST", req->sequenceNumber, {});
+      return;
+    }
+    if (config::video.steamshine_hdr_policy == hdr_policy::policy_e::off) {
+      config.monitor.dynamicRange = 0;
+    } else if (config::video.steamshine_hdr_policy == hdr_policy::policy_e::require) {
+      if (!session.hdr_requested || config.monitor.requestedDynamicRange != 1) {
+        BOOST_LOG(warning) << "HDR_NEGOTIATION_REJECTED reason="
+                           << (!session.hdr_requested ? "hdr_required_but_not_requested" : "hdr_client_not_capable");
+        respond(sock, session, &option, 400, "BAD REQUEST", req->sequenceNumber, {});
+        return;
+      }
+      if (config.monitor.dynamicRange == 0) {
+        stream::add_fallback_reason(session.negotiation, "profile_hdr_off_yielded_to_administrator_requirement");
+      }
+      config.monitor.dynamicRange = 1;
+    } else if (session.hdr_requested && config.monitor.requestedDynamicRange != 1) {
+      BOOST_LOG(warning) << "HDR_NEGOTIATION_REJECTED reason=hdr_client_not_capable";
+      respond(sock, session, &option, 400, "BAD REQUEST", req->sequenceNumber, {});
+      return;
+    }
+    if (config.monitor.dynamicRange == 1 && config.monitor.videoFormat == 0) {
+      BOOST_LOG(warning) << "HDR_NEGOTIATION_REJECTED reason=hdr_encoder_profile_unavailable";
       respond(sock, session, &option, 400, "BAD REQUEST", req->sequenceNumber, {});
       return;
     }
@@ -1297,6 +1377,14 @@ namespace rtsp_stream {
       return;
     }
 
+    stream::populate_rtsp_negotiation(
+      session,
+      config,
+      requestedMonitor,
+      clientMaximumBitrateKbps,
+      configuredTotalBitrateKbps,
+      refreshHintDiscarded
+    );
     auto stream_session = stream::session::alloc(config, session);
     server->insert(stream_session);
 

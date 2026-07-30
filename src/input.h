@@ -186,6 +186,7 @@ namespace input {
 
     float scalar_inv;  ///< Inverse scale factor from client coordinates to display coordinates.
     float scalar_tpcoords;  ///< Scale factor from client coordinates to touch-port coordinates.
+    bool reject_client_margins;  ///< Drop absolute input in letterbox or pillarbox margins instead of clamping it.
 
     int env_logical_width;  ///< Width of the full capture environment after display scaling.
     int env_logical_height;  ///< Height of the full capture environment after display scaling.

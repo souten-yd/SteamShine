@@ -15,6 +15,18 @@
 
 namespace pipewire_capture {
   /**
+   * @brief Validate that one PipeWire capture format is a complete HDR10 source.
+   *
+   * @param ten_bit Whether the negotiated raw pixel format carries 10-bit components.
+   * @param bt2020 Whether the producer reports BT.2020 color primaries.
+   * @param pq Whether the producer reports the SMPTE ST 2084 transfer function.
+   * @return True only when pixels and both HDR10 color metadata fields agree.
+   */
+  constexpr bool is_hdr10_capture(const bool ten_bit, const bool bt2020, const bool pq) {
+    return ten_bit && bt2020 && pq;
+  }
+
+  /**
    * @brief Small ordered source queue with explicit overflow and fixed capacity.
    *
    * @tparam T Source item retained until the capture consumer accepts it.

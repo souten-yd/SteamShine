@@ -46,6 +46,7 @@ class ClientDisplayTests(unittest.TestCase):
                     "modes": [
                         {"id": "1", "size": {"width": 3440, "height": 1440}, "refreshRate": 99.982},
                         {"id": "6", "size": {"width": 1920, "height": 1080}, "refreshRate": 60.0},
+                        {"id": "50", "size": {"width": 1920, "height": 1080}, "refreshRate": 50.0},
                         {"id": "30", "size": {"width": 1920, "height": 1080}, "refreshRate": 100.0},
                     ],
                 }
@@ -65,6 +66,13 @@ class ClientDisplayTests(unittest.TestCase):
             DISPLAY.requested_mode(invalid)
         with self.assertRaises(ValueError):
             DISPLAY.select_mode(self.configuration["outputs"][0], 1170, 2532, 60.0)
+
+    def test_selects_nearest_lower_refresh_and_rejects_higher_only_mode(self) -> None:
+        """Allow a lower exact-size mode but never silently select a refresh above the request."""
+        output = DISPLAY.select_output(self.configuration)
+        self.assertEqual(DISPLAY.select_mode(output, 1920, 1080, 59.0)["id"], "50")
+        with self.assertRaisesRegex(ValueError, "no safe"):
+            DISPLAY.select_mode(output, 1920, 1080, 49.0)
 
     @mock.patch.object(DISPLAY, "read_configuration")
     def test_skips_host_display_changes_for_owned_virtual_session(self, read_configuration: mock.Mock) -> None:

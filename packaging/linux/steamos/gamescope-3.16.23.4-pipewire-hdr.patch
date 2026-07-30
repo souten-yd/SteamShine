@@ -1,0 +1,171 @@
+diff --git a/src/Backends/HeadlessBackend.cpp b/src/Backends/HeadlessBackend.cpp
+index 8e45400..5c14102 100644
+--- a/src/Backends/HeadlessBackend.cpp
++++ b/src/Backends/HeadlessBackend.cpp
+@@ -1,5 +1,6 @@
+ #include "backend.h"
+ #include "rendervulkan.hpp"
++#include "steamcompmgr.hpp"
+ #include "wlserver.hpp"
+ #include "refresh_rate.h"
+ 
+@@ -13,6 +14,8 @@ namespace gamescope
+     public:
+         CHeadlessConnector()
+         {
++            m_HDRInfo.bExposeHDRSupport = true;
++            m_HDRInfo.eOutputEncodingEOTF = EOTF_PQ;
+         }
+         virtual ~CHeadlessConnector()
+         {
+@@ -28,11 +31,11 @@ namespace gamescope
+         }
+         virtual bool SupportsHDR() const override
+         {
+-            return false;
++            return steamcompmgr_pipewire_hdr_enabled() && m_HDRInfo.IsHDR10();
+         }
+         virtual bool IsHDRActive() const override
+         {
+-            return false;
++            return SupportsHDR();
+         }
+         virtual const BackendConnectorHDRInfo &GetHDRInfo() const override
+         {
+@@ -66,10 +69,10 @@ namespace gamescope
+             displaycolorimetry_t *displayColorimetry, EOTF *displayEOTF,
+             displaycolorimetry_t *outputEncodingColorimetry, EOTF *outputEncodingEOTF ) const override
+         {
+-			*displayColorimetry = displaycolorimetry_709;
+-			*displayEOTF = EOTF_Gamma22;
+-			*outputEncodingColorimetry = displaycolorimetry_709;
+-			*outputEncodingEOTF = EOTF_Gamma22;
++            *displayColorimetry = displaycolorimetry_709;
++            *displayEOTF = EOTF_Gamma22;
++            *outputEncodingColorimetry = bHDR10 ? displaycolorimetry_2020 : displaycolorimetry_709;
++            *outputEncodingEOTF = bHDR10 ? EOTF_PQ : EOTF_Gamma22;
+         }
+ 
+         virtual const char *GetName() const override
+@@ -276,4 +279,4 @@ namespace gamescope
+ 		return Set( new CHeadlessBackend{} );
+ 	}
+ 
+-}
+\ No newline at end of file
++}
+diff --git a/src/pipewire.cpp b/src/pipewire.cpp
+index 76b3ea8..4fd2f8f 100644
+--- a/src/pipewire.cpp
++++ b/src/pipewire.cpp
+@@ -13,6 +13,7 @@
+ #include "main.hpp"
+ #include "pipewire.hpp"
+ #include "log.hpp"
++#include "steamcompmgr.hpp"
+ 
+ #include <spa/debug/format.h>
+ 
+@@ -112,6 +113,12 @@ static void build_format_params(struct spa_pod_builder *builder, spa_video_forma
+ 		SPA_FORMAT_VIDEO_requested_size, SPA_POD_CHOICE_RANGE_Rectangle( &min_requested_size, &min_requested_size, &max_requested_size ),
+ 		SPA_FORMAT_VIDEO_gamescope_focus_appid, SPA_POD_CHOICE_RANGE_Long( 0ll, INT64_MIN, INT64_MAX ),
+ 		0);
++	if (format == SPA_VIDEO_FORMAT_xBGR_210LE) {
++		spa_pod_builder_add(builder,
++			SPA_FORMAT_VIDEO_colorPrimaries, SPA_POD_Id(SPA_VIDEO_COLOR_PRIMARIES_BT2020),
++			SPA_FORMAT_VIDEO_transferFunction, SPA_POD_Id(SPA_VIDEO_TRANSFER_SMPTE2084),
++			0);
++	}
+ 	if (format == SPA_VIDEO_FORMAT_NV12) {
+ 		spa_pod_builder_add(builder,
+ 			SPA_FORMAT_VIDEO_colorMatrix, SPA_POD_CHOICE_ENUM_Id(3,
+@@ -141,6 +148,12 @@ static void build_format_params(struct spa_pod_builder *builder, spa_video_forma
+ 		SPA_FORMAT_VIDEO_requested_size, SPA_POD_CHOICE_RANGE_Rectangle( &min_requested_size, &min_requested_size, &max_requested_size ),
+ 		SPA_FORMAT_VIDEO_gamescope_focus_appid, SPA_POD_CHOICE_RANGE_Long( 0ll, INT64_MIN, INT64_MAX ),
+ 		0);
++	if (format == SPA_VIDEO_FORMAT_xBGR_210LE) {
++		spa_pod_builder_add(builder,
++			SPA_FORMAT_VIDEO_colorPrimaries, SPA_POD_Id(SPA_VIDEO_COLOR_PRIMARIES_BT2020),
++			SPA_FORMAT_VIDEO_transferFunction, SPA_POD_Id(SPA_VIDEO_TRANSFER_SMPTE2084),
++			0);
++	}
+ 	if (format == SPA_VIDEO_FORMAT_NV12) {
+ 		spa_pod_builder_add(builder,
+ 			SPA_FORMAT_VIDEO_colorMatrix, SPA_POD_CHOICE_ENUM_Id(3,
+@@ -164,6 +177,9 @@ static std::vector<const struct spa_pod *> build_format_params(struct spa_pod_bu
+ {
+ 	std::vector<const struct spa_pod *> params;
+ 
++	if (steamcompmgr_pipewire_hdr_enabled()) {
++		build_format_params(builder, SPA_VIDEO_FORMAT_xBGR_210LE, params);
++	}
+ 	build_format_params(builder, SPA_VIDEO_FORMAT_BGRx, params);
+ 	build_format_params(builder, SPA_VIDEO_FORMAT_NV12, params);
+ 
+@@ -449,6 +465,7 @@ uint32_t spa_format_to_drm(uint32_t spa_format)
+ {
+ 	switch (spa_format)
+ 	{
++		case SPA_VIDEO_FORMAT_xBGR_210LE: return DRM_FORMAT_XBGR2101010;
+ 		case SPA_VIDEO_FORMAT_NV12: return DRM_FORMAT_NV12;
+ 		default:
+ 		case SPA_VIDEO_FORMAT_BGR: return DRM_FORMAT_XRGB8888;
+diff --git a/src/steamcompmgr.cpp b/src/steamcompmgr.cpp
+index 9b32e2b..889ddfb 100644
+--- a/src/steamcompmgr.cpp
++++ b/src/steamcompmgr.cpp
+@@ -459,6 +459,11 @@ bool g_bVRRInUse_CachedValue = false;
+ bool g_bSupportsHDR_CachedValue = false;
+ bool g_bForceHDR10OutputDebug = false;
+ gamescope::ConVar<bool> cv_hdr_enabled{ "hdr_enabled", false, "Whether or not HDR is enabled if it is available." };
++
++bool steamcompmgr_pipewire_hdr_enabled()
++{
++	return cv_hdr_enabled;
++}
+ bool g_bHDRItmEnable = false;
+ int g_nCurrentRefreshRate_CachedValue = 0;
+ 
+@@ -2336,16 +2341,18 @@ static void paint_pipewire()
+ 		return;
+ 
+ 	struct FrameInfo_t frameInfo = {};
++	const bool bHDRPipeWire = steamcompmgr_pipewire_hdr_enabled();
+ 	frameInfo.applyOutputColorMgmt = true;
+-	frameInfo.outputEncodingEOTF   = EOTF_Gamma22;
++	frameInfo.outputEncodingEOTF   = bHDRPipeWire ? EOTF_PQ : EOTF_Gamma22;
+ 	frameInfo.allowVRR             = false;
+ 	frameInfo.bFadingOut           = false;
+ 
+ 	// Apply screenshot-style color management.
+ 	for ( uint32_t nInputEOTF = 0; nInputEOTF < EOTF_Count; nInputEOTF++ )
+ 	{
+-		frameInfo.lut3D[nInputEOTF]     = g_ScreenshotColorMgmtLuts[nInputEOTF].vk_lut3d;
+-		frameInfo.shaperLut[nInputEOTF] = g_ScreenshotColorMgmtLuts[nInputEOTF].vk_lut1d;
++		auto &luts = bHDRPipeWire ? g_ScreenshotColorMgmtLutsHDR : g_ScreenshotColorMgmtLuts;
++		frameInfo.lut3D[nInputEOTF]     = luts[nInputEOTF].vk_lut3d;
++		frameInfo.shaperLut[nInputEOTF] = luts[nInputEOTF].vk_lut1d;
+ 	}
+ 
+ 	const uint64_t ulFocusAppId = s_pPipewireBuffer->gamescope_info.focus_appid;
+diff --git a/src/steamcompmgr.hpp b/src/steamcompmgr.hpp
+index 6734c15..aea59e3 100644
+--- a/src/steamcompmgr.hpp
++++ b/src/steamcompmgr.hpp
+@@ -17,6 +17,16 @@ timespec nanos_to_timespec( uint64_t ulNanos );
+ 
+ void steamcompmgr_main(int argc, char **argv);
+ 
++/**
++ * @brief Return whether the command line selected HDR for the PipeWire canvas.
++ *
++ * The headless backend has no physical connector from which to infer output
++ * colorimetry, so PipeWire export follows the explicit --hdr-enabled policy.
++ *
++ * @return True when HDR PipeWire export is enabled.
++ */
++bool steamcompmgr_pipewire_hdr_enabled();
++
+ #include "rendervulkan.hpp"
+ #include "wlserver.hpp"
+ #include "vblankmanager.hpp"

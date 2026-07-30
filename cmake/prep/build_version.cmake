@@ -145,8 +145,13 @@ message("PROJECT_DAY: ${PROJECT_DAY}")
 
 list(APPEND SUNSHINE_DEFINITIONS PROJECT_FQDN="${PROJECT_FQDN}")
 list(APPEND SUNSHINE_DEFINITIONS PROJECT_NAME="${PROJECT_NAME}")
-list(APPEND SUNSHINE_DEFINITIONS PROJECT_VERSION="${PROJECT_VERSION}")
-list(APPEND SUNSHINE_DEFINITIONS PROJECT_VERSION_MAJOR="${PROJECT_VERSION_MAJOR}")
-list(APPEND SUNSHINE_DEFINITIONS PROJECT_VERSION_MINOR="${PROJECT_VERSION_MINOR}")
-list(APPEND SUNSHINE_DEFINITIONS PROJECT_VERSION_PATCH="${PROJECT_VERSION_PATCH}")
-list(APPEND SUNSHINE_DEFINITIONS PROJECT_VERSION_COMMIT="${GITHUB_COMMIT}")
+
+# Keep volatile version and commit values out of target-wide compile
+# definitions. A new PR head should rebuild only this generated translation
+# unit and relink, allowing compiler-cache hits for every unchanged source.
+configure_file(
+    "${CMAKE_SOURCE_DIR}/cmake/templates/build_info.cpp.in"
+    "${CMAKE_BINARY_DIR}/generated/build_info.cpp"
+    @ONLY
+)
+set(SUNSHINE_BUILD_INFO_SOURCE "${CMAKE_BINARY_DIR}/generated/build_info.cpp")

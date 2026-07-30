@@ -64,6 +64,8 @@ file(GLOB NVENC_SOURCES CONFIGURE_DEPENDS "src/nvenc/*.cpp" "src/nvenc/*.h")
 list(APPEND PLATFORM_TARGET_FILES ${NVENC_SOURCES})
 
 set(SUNSHINE_TARGET_FILES
+        "${SUNSHINE_BUILD_INFO_SOURCE}"
+        "${CMAKE_SOURCE_DIR}/src/build_info.h"
         "${CMAKE_SOURCE_DIR}/third-party/moonlight-common-c/src/Input.h"
         "${CMAKE_SOURCE_DIR}/third-party/moonlight-common-c/src/Rtsp.h"
         "${CMAKE_SOURCE_DIR}/third-party/moonlight-common-c/src/RtspParser.c"
@@ -106,6 +108,9 @@ set(SUNSHINE_TARGET_FILES
         "${CMAKE_SOURCE_DIR}/src/rtsp.h"
         "${CMAKE_SOURCE_DIR}/src/stream.cpp"
         "${CMAKE_SOURCE_DIR}/src/stream.h"
+        "${CMAKE_SOURCE_DIR}/src/stream_negotiation.h"
+        "${CMAKE_SOURCE_DIR}/src/stream_recording.cpp"
+        "${CMAKE_SOURCE_DIR}/src/stream_recording.h"
         "${CMAKE_SOURCE_DIR}/src/steamos_virtual_session.cpp"
         "${CMAKE_SOURCE_DIR}/src/steamos_virtual_session.h"
         "${CMAKE_SOURCE_DIR}/src/steamos_virtual_session_core.cpp"

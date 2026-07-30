@@ -35,6 +35,24 @@
 #define DEFAULT_APP_IMAGE_PATH SUNSHINE_ASSETS_DIR "/box.png"
 
 namespace proc {
+  inline constexpr int virtual_display_fallback_exit_code {75};  ///< Prep-command protocol requesting an owned virtual-display retry.
+
+  /**
+   * @brief Decide whether a prep-command result requests an owned virtual-display retry.
+   *
+   * @param exit_code Prep-command exit code.
+   * @param feature_enabled Whether SteamOS virtual display support is enabled.
+   * @param mode Configured virtual-display mode.
+   * @param origin Display origin used for the failed preparation attempt.
+   * @return True only for the explicit physical-to-owned fallback protocol in automatic mode.
+   */
+  bool should_retry_owned_virtual_display(
+    int exit_code,
+    bool feature_enabled,
+    steamos_virtual_session::virtual_display_mode_e mode,
+    steamos_virtual_session::session_origin_e origin
+  );
+
   /**
    * @brief Decide whether an application needs the owned private Desktop surface.
    *
@@ -44,6 +62,18 @@ namespace proc {
    * @return True only for a capture-only application inside an owned display.
    */
   bool should_launch_owned_virtual_desktop(std::string_view app_command, std::size_t detached_command_count, bool owned_virtual_display);
+
+  /**
+   * @brief Decide whether an application should prefer an owned Gamescope canvas.
+   *
+   * A Big Picture launch needs one stable display endpoint even when a physical
+   * KDE output happens to be capturable. Verified stock Game Mode remains a
+   * higher-priority attached source in the route selector.
+   *
+   * @param application Parsed application configuration.
+   * @return True when any configured launch command opens Steam Big Picture.
+   */
+  bool should_prefer_owned_virtual_display(const struct ctx_t &application);
 
   /**
    * @brief Restore the immutable application environment before a new launch.
@@ -205,6 +235,14 @@ namespace proc {
      * @return Name of the most recently launched application.
      */
     std::string get_last_run_app_name();
+
+    /**
+     * @brief Report whether one configured application prefers owned Gamescope.
+     *
+     * @param app_id Stable numeric application identifier from GameStream.
+     * @return True when the application exists and opens Steam Big Picture.
+     */
+    bool prefers_owned_virtual_display(int app_id) const;
     /**
      * @brief Terminate the launched application process.
      */

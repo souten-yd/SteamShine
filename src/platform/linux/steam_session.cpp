@@ -385,6 +385,10 @@ namespace steam_session {
     return command.find("steam://close/bigpicture") != std::string_view::npos;
   }
 
+  bool command_opens_big_picture(const std::string_view command) {
+    return command.find("steam://open/bigpicture") != std::string_view::npos;
+  }
+
   std::string cgroup_for_process(const int pid) {
 #if defined(__linux__)
     if (pid <= 0) {

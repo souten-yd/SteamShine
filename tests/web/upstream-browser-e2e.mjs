@@ -169,13 +169,14 @@ try {
 
   const steamshineContext = await browser.newContext({ ignoreHTTPSErrors: true });
   const steamshinePage = await steamshineContext.newPage();
-  const steamshineResponse = await steamshinePage.goto(`${baseUrl}/steamshine/monitor`, { waitUntil: 'domcontentloaded' });
+  const steamshineResponse = await steamshinePage.goto(`${baseUrl}/`, { waitUntil: 'domcontentloaded' });
   if (steamshineResponse?.status() !== 200) {
-    throw new Error(`SteamShine Monitor returned ${steamshineResponse?.status()}.`);
+    throw new Error(`SteamShine root returned ${steamshineResponse?.status()}.`);
   }
   await steamshinePage.locator('#login input[name="username"]').fill('web-e2e');
   await steamshinePage.locator('#login input[name="password"]').fill('web-e2e-password');
   await steamshinePage.locator('#login button').click();
+  await steamshinePage.waitForURL(`${baseUrl}/steamshine/monitor`, { timeout: 5000 });
   await waitForMonitor(steamshinePage);
   for (const viewport of [
     { name: 'desktop', width: 1440, height: 900 },
@@ -202,7 +203,7 @@ try {
     if (message.type() === 'error' && !/status of (400|401|429)/.test(message.text())) consoleErrors.push(message.text());
   });
   steamshinePage.on('requestfailed', (request) => {
-    if (request.url().startsWith(baseUrl) && !request.url().includes('/api/steamshine/v1/session') && !request.url().includes('/api/steamshine/v1/pairing/pin') && !request.url().includes('/api/steamshine/v1/config/virtual-display')) {
+    if (request.url().startsWith(baseUrl) && !request.url().includes('/api/steamshine/v1/session') && !request.url().includes('/api/steamshine/v1/pairing/pin') && !request.url().includes('/api/steamshine/v1/config/virtual-display') && !request.url().includes('/api/steamshine/v1/stream/profiles')) {
       failedRequests.push(`${request.method()} ${request.url()}`);
     }
   });
@@ -241,6 +242,67 @@ try {
     method: 'POST', headers: { 'Content-Type': 'application/json', 'X-SteamShine-CSRF-Token': 'invalid' }, body: JSON.stringify({ pin: '1234', name: 'test-client' }),
   })).status);
   const csrfValue = await steamshinePage.evaluate(async () => (await fetch('/api/steamshine/v1/session')).json().then((value) => value.csrf_token));
+  const streamResponse = await steamshinePage.goto(`${baseUrl}/steamshine/stream`, { waitUntil: 'domcontentloaded' });
+  if (streamResponse?.status() !== 200) throw new Error(`Steam negotiation page returned ${streamResponse?.status()}.`);
+  await steamshinePage.getByRole('heading', { name: 'Stream negotiation' }).waitFor({ timeout: 5000 });
+  const streamState = await steamshinePage.evaluate(async () => (await fetch('/api/steamshine/v1/status')).json().then((value) => value.stream_negotiation));
+  if (streamState?.schema_version !== 1 || streamState?.poll_interval_ms !== 2000) {
+    throw new Error(`Stream negotiation schema or polling bound changed: ${JSON.stringify(streamState)}`);
+  }
+  await steamshinePage.getByRole('heading', { name: 'Sender recording' }).waitFor({ timeout: 5000 });
+  const initialRecordingState = await steamshinePage.evaluate(async () => (await fetch('/api/steamshine/v1/stream/recordings')).json());
+  if (initialRecordingState.capacity_mb !== 500 || initialRecordingState.state !== 'idle' || !Array.isArray(initialRecordingState.recordings)) {
+    throw new Error(`Unexpected default sender recording state: ${JSON.stringify(initialRecordingState)}`);
+  }
+  securityResults.recording_capacity_status = await steamshinePage.evaluate(async (csrf) => {
+    const response = await fetch('/api/steamshine/v1/stream/recordings/settings', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-SteamShine-CSRF-Token': csrf }, body: JSON.stringify({ capacity_mb: 501 }),
+    });
+    await response.text();
+    return response.status;
+  }, csrfValue);
+  const savedRecordingState = await steamshinePage.evaluate(async () => (await fetch('/api/steamshine/v1/stream/recordings')).json());
+  if (securityResults.recording_capacity_status !== 200 || savedRecordingState.capacity_mb !== 501) {
+    throw new Error(`Sender recording capacity did not persist: ${JSON.stringify(savedRecordingState)}`);
+  }
+  const recordingToggleStatuses = [];
+  for (const enabled of [true, false]) {
+    recordingToggleStatuses.push(await steamshinePage.evaluate(async ({ csrf, value }) => {
+      const response = await fetch('/api/steamshine/v1/stream/recordings/toggle', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'X-SteamShine-CSRF-Token': csrf }, body: JSON.stringify({ enabled: value }),
+      });
+      await response.text();
+      return response.status;
+    }, { csrf: csrfValue, value: enabled }));
+  }
+  if (recordingToggleStatuses.some((status) => status !== 200)) throw new Error(`Sender recording toggle failed: ${recordingToggleStatuses.join(',')}`);
+  const profilePayload = {
+    client_id: 'browser-client', network_class: 'lan', capability_signature: 'v1-c0-d0-x0-h0', active: true,
+    geometry_policy: 'fit', fps_policy: 'custom', fps_ceiling: 60, codec_policy: 'h264', hdr_policy: 'off',
+    bitrate_ceiling_kbps: 15000, quality_preset: 'balanced', orientation: 'landscape', safe_area_percent: 5,
+    learned_start_kbps: 12000,
+  };
+  securityResults.stream_profile_save_status = await steamshinePage.evaluate(async ({ csrf, profile }) => (await fetch('/api/steamshine/v1/stream/profiles', {
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-SteamShine-CSRF-Token': csrf }, body: JSON.stringify(profile),
+  })).status, { csrf: csrfValue, profile: profilePayload });
+  const streamProfiles = await steamshinePage.evaluate(async () => (await fetch('/api/steamshine/v1/stream/profiles')).json());
+  if (securityResults.stream_profile_save_status !== 200 || streamProfiles.profiles?.length !== 1 || !streamProfiles.profiles[0].active) {
+    throw new Error(`Stream profile API did not persist the active profile: ${JSON.stringify(streamProfiles)}`);
+  }
+  const fallbackHref = await steamshinePage.getByRole('link', { name: 'Sunshine fallback settings' }).getAttribute('href');
+  if (fallbackHref !== '/sunshine/config') throw new Error(`Unexpected stream rollback route: ${fallbackHref}`);
+  const statusRoute = '**/api/steamshine/v1/status';
+  await steamshinePage.route(statusRoute, async (route) => route.fulfill({ status: 200, contentType: 'application/json', body: '{' }));
+  await steamshinePage.goto(`${baseUrl}/steamshine/stream`, { waitUntil: 'domcontentloaded' });
+  await steamshinePage.getByRole('heading', { name: 'Stream negotiation' }).waitFor({ timeout: 5000 });
+  await steamshinePage.unroute(statusRoute);
+  const upstreamAfterStreamUiFailure = await authenticatedPage.reload({ waitUntil: 'networkidle' });
+  if (upstreamAfterStreamUiFailure?.status() !== 200) throw new Error('Stream UI status failure affected the upstream recovery UI.');
+  securityResults.stream_profile_reset_status = await steamshinePage.evaluate(async ({ csrf, clientId, networkClass }) => (await fetch('/api/steamshine/v1/stream/profiles/reset', {
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-SteamShine-CSRF-Token': csrf },
+    body: JSON.stringify({ client_id: clientId, network_class: networkClass }),
+  })).status, { csrf: csrfValue, clientId: profilePayload.client_id, networkClass: profilePayload.network_class });
+  if (securityResults.stream_profile_reset_status !== 200) throw new Error('Stream profile reset failed.');
   await steamshinePage.goto(`${baseUrl}/steamshine/config`, { waitUntil: 'networkidle' });
   await steamshinePage.getByRole('heading', { name: 'Virtual Display' }).waitFor({ timeout: 5000 });
   await steamshinePage.locator('#virtual-display-config select[name="mode"]').waitFor({ timeout: 5000 });
@@ -258,6 +320,21 @@ try {
   if (!securityResults.csp_header.includes("style-src 'self'") || !securityResults.csp_header.includes("style-src-attr 'unsafe-inline'")) {
     throw new Error('SteamShine Monitor CSP does not narrowly permit required runtime style attributes.');
   }
+  if (!securityResults.csp_header.includes("connect-src 'self' wss://127.0.0.1:48991")) {
+    throw new Error('SteamShine Monitor CSP does not permit its same-host terminal WebSocket.');
+  }
+  const appAssetResponse = await steamshinePage.request.get(`${baseUrl}/steamshine/app.js`);
+  securityResults.app_asset_cache_control = appAssetResponse.headers()['cache-control'] || '';
+  if (securityResults.app_asset_cache_control !== 'no-store') {
+    throw new Error('SteamShine application assets may retain stale login code in the browser cache.');
+  }
+  const appAsset = await appAssetResponse.text();
+  securityResults.terminal_explanation_removed = !appAsset.includes('A real shell on the SteamShine host') && !appAsset.includes('The terminal connects over a separate port');
+  if (!securityResults.terminal_explanation_removed) throw new Error('The Terminal page still contains the removed subtitle or framed explanation.');
+  const appCssResponse = await steamshinePage.request.get(`${baseUrl}/steamshine/app.css`);
+  const appCss = await appCssResponse.text();
+  securityResults.monitor_fan_icon_sized = /\.metric-sub \.fan svg\s*\{[^}]*width:\s*0\.85rem;[^}]*height:\s*0\.85rem;[^}]*flex:\s*0 0 0\.85rem;/s.test(appCss);
+  if (!securityResults.monitor_fan_icon_sized) throw new Error('The Monitor fan icon can obscure or clip the GPU RPM readout.');
   securityResults.malformed_json_status = await steamshinePage.evaluate(async (csrf) => (await fetch('/api/steamshine/v1/pairing/pin', {
     method: 'POST', headers: { 'Content-Type': 'application/json', 'X-SteamShine-CSRF-Token': csrf }, body: '{',
   })).status, csrfValue);
@@ -334,8 +411,18 @@ try {
   securityResults.logout_session_status = await steamshinePage.evaluate(async () => (await fetch('/api/steamshine/v1/session')).status);
   if (securityResults.logout_session_status !== 401) throw new Error('Logout did not invalidate the SteamShine session.');
   const loginRateContext = await request.newContext({ ignoreHTTPSErrors: true, extraHTTPHeaders: { Origin: baseUrl } });
+  const successfulLoginStatuses = [];
+  for (let attempt = 0; attempt < 6; ++attempt) {
+    successfulLoginStatuses.push((await loginRateContext.post(`${baseUrl}/api/steamshine/v1/auth/login`, {
+      data: { username: 'web-e2e', password: 'web-e2e-password-2' },
+    })).status());
+  }
+  securityResults.successful_logins_not_rate_limited = successfulLoginStatuses.every((status) => status === 200);
+  if (!securityResults.successful_logins_not_rate_limited) {
+    throw new Error(`Successful SteamShine logins consumed the failure limit: ${successfulLoginStatuses.join(',')}`);
+  }
   const loginRateStatuses = [];
-  for (let attempt = 0; attempt < 4; ++attempt) {
+  for (let attempt = 0; attempt < 6; ++attempt) {
     loginRateStatuses.push((await loginRateContext.post(`${baseUrl}/api/steamshine/v1/auth/login`, {
       data: { username: 'web-e2e', password: 'wrong-password' },
     })).status());
@@ -374,6 +461,10 @@ try {
     steamshine_login: 'passed',
     steamshine_secure_session_cookie: true,
     steamshine_invalid_pin_rejected: true,
+    steamshine_stream_negotiation_status: 200,
+    stream_profile_save_reset: 'passed',
+    stream_ui_failure_isolated: true,
+    stream_poll_interval_ms: 2000,
     concurrent_upstream_and_steamshine_sessions: true,
     responsive_viewports: responsiveViewports,
     console_errors: consoleErrors,

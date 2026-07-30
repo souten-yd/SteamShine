@@ -5,11 +5,14 @@
 #pragma once
 
 // standard includes
+#include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <string>
+#include <string_view>
 
 // lib includes
+#include <boost/system/error_code.hpp>
 #include <nlohmann/json.hpp>
 #include <Simple-Web-Server/server_https.hpp>
 
@@ -25,6 +28,23 @@
 namespace confighttp {
   constexpr auto PORT_HTTPS = 1;  ///< GameStream port offset for port https.
   constexpr auto PORT_STEAMSHINE_TERMINAL = 2;  ///< GameStream port offset for the SteamShine Terminal WebSocket.
+
+  /**
+   * @brief Determine whether a non-blocking terminal accept should be retried.
+   *
+   * @param error Error returned by Boost.Asio's TCP accept operation.
+   * @return True only for temporary non-blocking readiness errors.
+   */
+  bool terminal_accept_is_retryable(const boost::system::error_code &error);
+
+  /**
+   * @brief Build the SteamShine page Content Security Policy for its terminal endpoint.
+   *
+   * @param host_header HTTP Host header used to select the browser-visible terminal host.
+   * @param terminal_ws_port HTTPS port of the dedicated terminal WebSocket server.
+   * @return Restrictive page policy that permits the terminal WebSocket only on the requested host.
+   */
+  std::string steamshine_page_content_security_policy(std::string_view host_header, std::uint16_t terminal_ws_port);
 
   // Type aliases for HTTPS server components
   using https_server_t = SimpleWeb::Server<SimpleWeb::HTTPS>;

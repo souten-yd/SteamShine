@@ -35,6 +35,9 @@ The active planning context is intentionally limited to the documents below. Loa
 - [`configuration.md`](./configuration.md)
   - configuration reference
 
+- [`STREAM_PROFILES_UI.md`](./STREAM_PROFILES_UI.md)
+  - exact client/network/capability profile matching and four-stage Stream UI
+
 Implementation records describe the code that exists. They do not override the canonical roadmap for future work.
 
 ## Documentation lifecycle

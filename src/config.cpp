@@ -674,6 +674,16 @@ namespace config {
     }
 
     /**
+     * @brief Parse the end-to-end SteamShine HDR policy.
+     *
+     * @param value Configuration text from the SteamShine HDR policy setting.
+     * @return Parsed policy, defaulting to automatic selection when invalid.
+     */
+    hdr_policy::policy_e steamshine_hdr_policy_from_view(const std::string_view value) {
+      return hdr_policy::parse_policy(value).value_or(hdr_policy::policy_e::auto_select);
+    }
+
+    /**
      * @brief Parse display-mode remapping rules from JSON configuration text.
      *
      * @param value JSON array text from the display-device mode-remapping setting.
@@ -715,6 +725,9 @@ namespace config {
 
     0,  // hevc_mode
     0,  // av1_mode
+    codec_policy::policy_e::automatic,  // codec_policy
+    codec_policy::fallback_e::strict,  // codec_fallback
+    false,  // codec_allow_software
 
     2,  // min_threads
     {
@@ -789,7 +802,9 @@ namespace config {
       {}  // wa
     },  // display_device
 
+    hdr_policy::policy_e::auto_select,  // steamshine_hdr_policy
     0,  // max_bitrate
+    false,  // adaptive_bitrate
     0  // minimum_fps_target (0 = framerate)
   };
 
@@ -1586,6 +1601,31 @@ namespace config {
     int_f(vars, "qp", video.qp);
     int_between_f(vars, "hevc_mode", video.hevc_mode, {0, 3});
     int_between_f(vars, "av1_mode", video.av1_mode, {0, 3});
+    {
+      std::string value;
+      string_f(vars, "steamshine_codec_policy", value);
+      if (!value.empty()) {
+        const auto parsed {codec_policy::parse_policy(value)};
+        if (!parsed) {
+          BOOST_LOG(error) << "config: invalid steamshine_codec_policy value: " << value << "; expected auto, h264, hevc, or av1";
+          throw std::invalid_argument {"invalid steamshine_codec_policy"};
+        }
+        video.codec_policy = *parsed;
+      }
+    }
+    {
+      std::string value;
+      string_f(vars, "steamshine_codec_fallback", value);
+      if (!value.empty()) {
+        const auto parsed {codec_policy::parse_fallback(value)};
+        if (!parsed) {
+          BOOST_LOG(error) << "config: invalid steamshine_codec_fallback value: " << value << "; expected strict or h264";
+          throw std::invalid_argument {"invalid steamshine_codec_fallback"};
+        }
+        video.codec_fallback = *parsed;
+      }
+    }
+    bool_f(vars, "steamshine_codec_allow_software", video.codec_allow_software);
     int_f(vars, "min_threads", video.min_threads);
     string_f(vars, "sw_preset", video.sw.sw_preset);
     if (!video.sw.sw_preset.empty()) {
@@ -1692,7 +1732,9 @@ namespace config {
       video.dd.wa.hdr_toggle_delay = std::chrono::milliseconds {value};
     }
 
+    generic_f(vars, "steamshine_hdr_policy", video.steamshine_hdr_policy, dd::steamshine_hdr_policy_from_view);
     int_f(vars, "max_bitrate", video.max_bitrate);
+    bool_f(vars, "steamshine_adaptive_bitrate", video.adaptive_bitrate);
     double_between_f(vars, "minimum_fps_target", video.minimum_fps_target, {0.0, 1000.0});
 
     bool_f(vars, "steamos_virtual_display_enabled", steamos_virtual_display.enabled);
@@ -1732,6 +1774,30 @@ namespace config {
         steamos_virtual_display.local_presentation = *presentation;
       }
     }
+    {
+      std::string alignment_value;
+      string_f(vars, "steamos_geometry_alignment", alignment_value);
+      if (!alignment_value.empty()) {
+        const auto alignment {steamos_virtual_session::parse_geometry_alignment_policy(alignment_value)};
+        if (!alignment) {
+          BOOST_LOG(error) << "config: invalid steamos_geometry_alignment value: " << alignment_value << "; expected auto or require_exact";
+          throw std::invalid_argument {"invalid steamos_geometry_alignment"};
+        }
+        steamos_virtual_display.geometry_alignment = *alignment;
+      }
+    }
+    {
+      std::string margin_value;
+      string_f(vars, "steamos_margin_input", margin_value);
+      if (!margin_value.empty()) {
+        const auto margin {steamos_virtual_session::parse_margin_input_policy(margin_value)};
+        if (!margin) {
+          BOOST_LOG(error) << "config: invalid steamos_margin_input value: " << margin_value << "; expected clamp or reject";
+          throw std::invalid_argument {"invalid steamos_margin_input"};
+        }
+        steamos_virtual_display.margin_input = *margin;
+      }
+    }
     bool_f(vars, "steamos_keep_session_alive", steamos_virtual_display.keep_session_alive);
     int_between_f(vars, "steamos_existing_gamescope_pid", steamos_virtual_display.existing_gamescope_pid, {0, INT_MAX});
     string_f(vars, "steamos_gamescope_path", steamos_virtual_display.gamescope_path);
@@ -1753,6 +1819,9 @@ namespace config {
     int_between_f(vars, "steamos_default_width", steamos_virtual_display.default_width, {640, 7680});
     int_between_f(vars, "steamos_default_height", steamos_virtual_display.default_height, {480, 4320});
     int_between_f(vars, "steamos_default_fps", steamos_virtual_display.default_fps, {30, 240});
+    int_between_f(vars, "steamos_max_frame_pixels", steamos_virtual_display.maximum_frame_pixels, {640 * 480, 7680 * 4320});
+    int_between_f(vars, "steamos_max_pixel_rate", steamos_virtual_display.maximum_pixel_rate, {640 * 480 * 30, 2000000000});
+    int_between_f(vars, "steamos_max_buffer_megabytes", steamos_virtual_display.maximum_buffer_megabytes, {64, 2048});
     bool_f(vars, "steamos_cleanup_orphan_sessions", steamos_virtual_display.cleanup_orphan_sessions);
 
     path_f(vars, "pkey", nvhttp.pkey);

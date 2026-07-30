@@ -24,6 +24,7 @@
 #include <rs.h>
 
 // local includes
+#include "build_info.h"
 #include "confighttp.h"
 #include "display_device.h"
 #include "entry_handler.h"
@@ -289,7 +290,7 @@ int main(int argc, char *argv[]) {
   // logging can begin at this point
   // if anything is logged prior to this point, it will appear in stdout, but not in the log viewer in the UI
   // the version should be printed to the log before anything else
-  BOOST_LOG(info) << PROJECT_NAME << " version: " << PROJECT_VERSION << " commit: " << PROJECT_VERSION_COMMIT;
+  BOOST_LOG(info) << PROJECT_NAME << " version: " << build_info::version() << " commit: " << build_info::commit();
 
 #if defined(__linux__)
   host_desktop_endpoint::capture();

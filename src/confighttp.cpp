@@ -8,6 +8,7 @@
 
 // standard includes
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cstdint>
 #include <deque>
@@ -50,6 +51,7 @@
 #endif
 
 // local includes
+#include "build_info.h"
 #include "config.h"
 #include "confighttp.h"
 #include "crypto.h"
@@ -66,6 +68,8 @@
 #include "steamshine_gpuctl.h"
 #include "steamshine_hwmonitor.h"
 #include "steamshine_terminal.h"
+#include "stream.h"
+#include "stream_recording.h"
 #include "utility.h"
 #include "uuid.h"
 #include "web_services.h"
@@ -78,9 +82,54 @@ namespace confighttp {
   web::SessionService session_service {};  ///< Server-side SteamShine Web session operations.
   const web::PairingService pairing_service {};  ///< Shared Web pairing operations.
   const web::ClientService client_service {};  ///< Shared Web paired-client operations.
+
+  std::string steamshine_page_content_security_policy(const std::string_view host_header, const std::uint16_t terminal_ws_port) {
+    constexpr std::string_view prefix {"default-src 'self'; connect-src 'self'"};
+    constexpr std::string_view suffix {"; style-src 'self'; style-src-attr 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'self';"};
+    std::string_view hostname {host_header};
+
+    if (hostname.starts_with('[')) {
+      const auto closing_bracket = hostname.find(']');
+      if (closing_bracket == std::string_view::npos) {
+        return std::format("{}{}", prefix, suffix);
+      }
+      const auto port = hostname.substr(closing_bracket + 1);
+      if (!port.empty() && (!port.starts_with(':') || port.size() == 1 || !std::ranges::all_of(port.substr(1), [](const unsigned char character) {
+            return std::isdigit(character);
+          }))) {
+        return std::format("{}{}", prefix, suffix);
+      }
+      hostname = hostname.substr(0, closing_bracket + 1);
+    } else if (const auto colon = hostname.rfind(':'); colon != std::string_view::npos) {
+      if (hostname.find(':') != colon) {
+        return std::format("{}{}", prefix, suffix);
+      }
+      const auto port = hostname.substr(colon + 1);
+      if (port.empty() || !std::ranges::all_of(port, [](const unsigned char character) {
+            return std::isdigit(character);
+          })) {
+        return std::format("{}{}", prefix, suffix);
+      }
+      hostname = hostname.substr(0, colon);
+    }
+
+    const auto valid_hostname_character = [](const unsigned char character) {
+      return std::isalnum(character) || character == '.' || character == '-' || character == ':' || character == '[' || character == ']' || character == '%' || character == '_';
+    };
+    if (hostname.empty() || !std::ranges::all_of(hostname, valid_hostname_character)) {
+      return std::format("{}{}", prefix, suffix);
+    }
+
+    return std::format("{} wss://{}:{}{}", prefix, hostname, terminal_ws_port, suffix);
+  }
+
   const web::StatusSnapshotService status_snapshot_service {};  ///< Shared Web status operations.
   const web::DiagnosticService diagnostic_service {};  ///< Shared Web diagnostic operations.
   const web::ConfigurationService configuration_service {};  ///< Shared Web configuration operations.
+
+  bool terminal_accept_is_retryable(const boost::system::error_code &error) {
+    return error == boost::asio::error::would_block || error == boost::asio::error::try_again;
+  }
 
   /**
    * @brief HTTPS server type used for Sunshine's configuration UI.
@@ -165,6 +214,50 @@ namespace confighttp {
     }
     entry.emplace_back(now);
     return true;
+  }
+
+  /**
+   * @brief Check whether one remote address has exhausted a rolling request limit.
+   *
+   * Expired entries are removed while checking. The current request is not
+   * recorded, which allows callers to count only failed operations.
+   *
+   * @param attempts Request timestamps indexed by remote address.
+   * @param address Normalized remote address.
+   * @param maximum_attempts Maximum permitted failed requests in the window.
+   * @param window Rolling time window.
+   * @return True when the address must be rejected.
+   */
+  bool steamshine_rate_limit_exhausted(std::map<std::string, rate_limit_t, std::less<>> &attempts, const std::string_view address, const std::size_t maximum_attempts, const std::chrono::steady_clock::duration window) {
+    const auto now = std::chrono::steady_clock::now();
+    std::scoped_lock lock(steamshine_rate_limit_mutex);
+    auto &entry = attempts[std::string {address}].attempts;
+    while (!entry.empty() && entry.front() <= now - window) {
+      entry.pop_front();
+    }
+    return entry.size() >= maximum_attempts;
+  }
+
+  /**
+   * @brief Record one failed protected operation for a remote address.
+   *
+   * @param attempts Request timestamps indexed by remote address.
+   * @param address Normalized remote address.
+   */
+  void record_steamshine_rate_limit_failure(std::map<std::string, rate_limit_t, std::less<>> &attempts, const std::string_view address) {
+    std::scoped_lock lock(steamshine_rate_limit_mutex);
+    attempts[std::string {address}].attempts.emplace_back(std::chrono::steady_clock::now());
+  }
+
+  /**
+   * @brief Clear failed protected operations after successful authentication.
+   *
+   * @param attempts Request timestamps indexed by remote address.
+   * @param address Normalized remote address.
+   */
+  void clear_steamshine_rate_limit(std::map<std::string, rate_limit_t, std::less<>> &attempts, const std::string_view address) {
+    std::scoped_lock lock(steamshine_rate_limit_mutex);
+    attempts.erase(std::string {address});
   }
 
   /**
@@ -681,10 +774,15 @@ namespace confighttp {
     }
     print_req(request);
     const std::string content = file_handler::read_file((std::string(SUNSHINE_ASSETS_DIR) + "/steamshine/index.html").c_str());
+    const auto host = request->header.find("Host");
+    const auto content_security_policy = steamshine_page_content_security_policy(
+      host == request->header.end() ? std::string_view {} : std::string_view {host->second},
+      net::map_port(PORT_STEAMSHINE_TERMINAL)
+    );
     const SimpleWeb::CaseInsensitiveMultimap headers {
       {"Content-Type", "text/html; charset=utf-8"},
       {"X-Frame-Options", "DENY"},
-      {"Content-Security-Policy", "default-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'self';"},
+      {"Content-Security-Policy", content_security_policy},
       {"Cache-Control", "no-store"}
     };
     response->write(content, headers);
@@ -719,7 +817,8 @@ namespace confighttp {
     const SimpleWeb::CaseInsensitiveMultimap headers {
       {"Content-Type", mime_type->second},
       {"X-Frame-Options", "DENY"},
-      {"Content-Security-Policy", "default-src 'self'; frame-ancestors 'none'; base-uri 'none';"}
+      {"Content-Security-Policy", "default-src 'self'; frame-ancestors 'none'; base-uri 'none';"},
+      {"Cache-Control", "no-store"}
     };
     std::ifstream input {requested, std::ios::binary};
     response->write(SimpleWeb::StatusCode::success_ok, input, headers);
@@ -1153,7 +1252,7 @@ namespace confighttp {
     nlohmann::json output_tree;
     output_tree["status"] = true;
     output_tree["platform"] = SUNSHINE_PLATFORM;
-    output_tree["version"] = PROJECT_VERSION;
+    output_tree["version"] = build_info::version();
 
     auto vars = config::parse_config(file_handler::read_file(config::sunshine.config_file.c_str()));
 
@@ -1694,7 +1793,7 @@ namespace confighttp {
       return;
     }
     const auto address = net::addr_to_normalized_string(request->remote_endpoint().address());
-    if (!consume_steamshine_rate_limit(steamshine_login_attempts, address, 5U, std::chrono::minutes(5))) {
+    if (steamshine_rate_limit_exhausted(steamshine_login_attempts, address, 5U, std::chrono::minutes(5))) {
       response->write(SimpleWeb::StatusCode::client_error_too_many_requests);
       return;
     }
@@ -1704,9 +1803,11 @@ namespace confighttp {
     }
     const auto session = session_service.login(credential_service, input.value("username", ""), input.value("password", ""));
     if (!session.has_value()) {
+      record_steamshine_rate_limit_failure(steamshine_login_attempts, address);
       response->write(SimpleWeb::StatusCode::client_error_unauthorized);
       return;
     }
+    clear_steamshine_rate_limit(steamshine_login_attempts, address);
     SimpleWeb::CaseInsensitiveMultimap headers;
     headers.emplace("Set-Cookie", "steamshine_session=" + session->id + "; Path=/; Secure; HttpOnly; SameSite=Strict");
     send_steamshine_response(response, {{"status", true}, {"username", session->username}, {"csrf_token", session->csrf_token}}, std::move(headers));
@@ -1755,6 +1856,79 @@ namespace confighttp {
       return;
     }
     send_steamshine_response(response, status_snapshot_service.snapshot());
+  }
+
+  /**
+   * @brief Return bounded per-client and network stream profiles.
+   *
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   */
+  void steamshine_stream_profiles(const resp_https_t &response, const req_https_t &request) {
+    if (require_steamshine_session(response, request).empty()) {
+      return;
+    }
+    send_steamshine_response(response, web::stream_profile_service().snapshot());
+  }
+
+  /**
+   * @brief Validate and persist one stream negotiation profile.
+   *
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   */
+  void steamshine_save_stream_profile(const resp_https_t &response, const req_https_t &request) {
+    if (require_steamshine_mutation(response, request).empty()) {
+      return;
+    }
+    nlohmann::json input;
+    if (!read_steamshine_json(response, request, input)) {
+      return;
+    }
+    try {
+      const web::stream_profile_t profile {
+        .client_id = input.at("client_id").get<std::string>(),
+        .network_class = input.at("network_class").get<std::string>(),
+        .capability_signature = input.at("capability_signature").get<std::string>(),
+        .geometry_policy = input.value("geometry_policy", "fit"),
+        .fps_policy = input.value("fps_policy", "auto"),
+        .fps_ceiling = input.value("fps_ceiling", 0),
+        .codec_policy = input.value("codec_policy", "auto"),
+        .hdr_policy = input.value("hdr_policy", "auto"),
+        .bitrate_ceiling_kbps = input.value("bitrate_ceiling_kbps", 0),
+        .quality_preset = input.value("quality_preset", "balanced"),
+        .orientation = input.value("orientation", "auto"),
+        .safe_area_percent = input.value("safe_area_percent", 0),
+        .learned_start_kbps = input.value("learned_start_kbps", 0),
+        .active = input.value("active", false),
+      };
+      const auto result {web::stream_profile_service().save(profile)};
+      send_steamshine_response(response, {{"status", result.success}, {"code", result.code}, {"message", result.message}});
+    } catch (const nlohmann::json::exception &) {
+      bad_request(response, request, "Invalid stream profile payload");
+    }
+  }
+
+  /**
+   * @brief Reset one exact client/network stream profile.
+   *
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   */
+  void steamshine_reset_stream_profile(const resp_https_t &response, const req_https_t &request) {
+    if (require_steamshine_mutation(response, request).empty()) {
+      return;
+    }
+    nlohmann::json input;
+    if (!read_steamshine_json(response, request, input)) {
+      return;
+    }
+    try {
+      const auto result {web::stream_profile_service().reset(input.at("client_id").get<std::string>(), input.at("network_class").get<std::string>())};
+      send_steamshine_response(response, {{"status", result.success}, {"code", result.code}, {"message", result.message}});
+    } catch (const nlohmann::json::exception &) {
+      bad_request(response, request, "Invalid stream profile reset payload");
+    }
   }
 
   /**
@@ -2026,6 +2200,126 @@ namespace confighttp {
       return;
     }
     send_steamshine_response(response, result);
+  }
+
+  /**
+   * @brief Return sender recording state, capacity, usage, and completed files.
+   *
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   */
+  void steamshine_recordings(const resp_https_t &response, const req_https_t &request) {
+    if (require_steamshine_session(response, request).empty()) {
+      return;
+    }
+    send_steamshine_response(response, stream_recording::service().snapshot());
+  }
+
+  /**
+   * @brief Arm or stop lossless sender-side stream recording.
+   *
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   */
+  void steamshine_toggle_recording(const resp_https_t &response, const req_https_t &request) {
+    if (require_steamshine_mutation(response, request).empty()) {
+      return;
+    }
+    nlohmann::json input;
+    if (!read_steamshine_json(response, request, input)) {
+      return;
+    }
+    try {
+      const auto enabled {input.at("enabled").get<bool>()};
+      const auto result {stream_recording::service().set_enabled(enabled)};
+      if (!result.success) {
+        bad_request(response, request, result.message);
+        return;
+      }
+      if (enabled) {
+        stream::request_recording_key_frame();
+      }
+      send_steamshine_response(response, {{"status", true}, {"code", result.code}, {"message", result.message}});
+    } catch (const nlohmann::json::exception &) {
+      bad_request(response, request, "The enabled field must be a boolean.");
+    }
+  }
+
+  /**
+   * @brief Persist and enforce the total completed-recording capacity.
+   *
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   */
+  void steamshine_recording_settings(const resp_https_t &response, const req_https_t &request) {
+    if (require_steamshine_mutation(response, request).empty()) {
+      return;
+    }
+    nlohmann::json input;
+    if (!read_steamshine_json(response, request, input)) {
+      return;
+    }
+    try {
+      const auto result {stream_recording::service().set_capacity_megabytes(input.at("capacity_mb").get<std::uint64_t>())};
+      if (!result.success) {
+        bad_request(response, request, result.message);
+        return;
+      }
+      send_steamshine_response(response, {{"status", true}, {"code", result.code}, {"message", result.message}});
+    } catch (const nlohmann::json::exception &) {
+      bad_request(response, request, "Recording capacity must be an integer number of megabytes.");
+    }
+  }
+
+  /**
+   * @brief Delete one completed sender recording.
+   *
+   * @param response The HTTP response object.
+   * @param request The HTTP request object containing the generated recording identifier.
+   */
+  void steamshine_delete_recording(const resp_https_t &response, const req_https_t &request) {
+    if (require_steamshine_mutation(response, request).empty()) {
+      return;
+    }
+    const std::string id {request->path_match[1].str()};
+    const auto result {stream_recording::service().remove(id)};
+    if (!result.success) {
+      bad_request(response, request, result.message);
+      return;
+    }
+    send_steamshine_response(response, {{"status", true}, {"code", result.code}, {"message", result.message}});
+  }
+
+  /**
+   * @brief Serve one completed MP4 for inline playback or attachment download.
+   *
+   * @param response The HTTP response object.
+   * @param request The HTTP request object containing the identifier and disposition path.
+   */
+  void steamshine_recording_media(const resp_https_t &response, const req_https_t &request) {
+    if (require_steamshine_session(response, request).empty()) {
+      return;
+    }
+    const std::string id {request->path_match[1].str()};
+    const auto path {stream_recording::service().resolve(id)};
+    if (path.empty()) {
+      not_found(response, request, "Recording was not found.");
+      return;
+    }
+    std::ifstream input {path, std::ios::binary};
+    if (!input) {
+      not_found(response, request, "Recording was not found.");
+      return;
+    }
+    const bool download {request->path.ends_with("/download")};
+    SimpleWeb::CaseInsensitiveMultimap headers {
+      {"Content-Type", "video/mp4"},
+      {"Content-Disposition", std::format("{}; filename=\"{}.mp4\"", download ? "attachment" : "inline", id)},
+      {"Cache-Control", "no-store"},
+      {"X-Content-Type-Options", "nosniff"},
+      {"Content-Security-Policy", "default-src 'none'; frame-ancestors 'none';"},
+    };
+    response->write(SimpleWeb::StatusCode::success_ok, input, headers);
   }
 
   /**
@@ -2779,7 +3073,7 @@ namespace confighttp {
     server.resource["^/pin/?$"]["GET"] = page_handler("pin.html");
     server.resource["^/troubleshooting/?$"]["GET"] = page_handler("troubleshooting.html");
     server.resource["^/welcome/?$"]["GET"] = page_handler("welcome.html", false, true);
-    server.resource["^/steamshine/?(?:setup|login|monitor|applications|gpu|settings|config|pairing|clients|terminal)?/?$"]["GET"] = getSteamshinePage;
+    server.resource["^/steamshine/?(?:setup|login|monitor|stream|applications|gpu|settings|config|pairing|clients|terminal)?/?$"]["GET"] = getSteamshinePage;
 
     // rest api
     server.resource["^/api/browse$"]["GET"] = browseDirectory;
@@ -2811,6 +3105,14 @@ namespace confighttp {
     server.resource["^/api/steamshine/v1/auth/login$"]["POST"] = steamshine_handler(steamshine_login);
     server.resource["^/api/steamshine/v1/auth/logout$"]["POST"] = steamshine_handler(steamshine_logout);
     server.resource["^/api/steamshine/v1/status$"]["GET"] = steamshine_handler(steamshine_status);
+    server.resource["^/api/steamshine/v1/stream/profiles$"]["GET"] = steamshine_handler(steamshine_stream_profiles);
+    server.resource["^/api/steamshine/v1/stream/profiles$"]["POST"] = steamshine_handler(steamshine_save_stream_profile);
+    server.resource["^/api/steamshine/v1/stream/profiles/reset$"]["POST"] = steamshine_handler(steamshine_reset_stream_profile);
+    server.resource["^/api/steamshine/v1/stream/recordings$"]["GET"] = steamshine_handler(steamshine_recordings);
+    server.resource["^/api/steamshine/v1/stream/recordings/toggle$"]["POST"] = steamshine_handler(steamshine_toggle_recording);
+    server.resource["^/api/steamshine/v1/stream/recordings/settings$"]["POST"] = steamshine_handler(steamshine_recording_settings);
+    server.resource["^/api/steamshine/v1/stream/recordings/([A-Za-z0-9-]+)$"]["DELETE"] = steamshine_handler(steamshine_delete_recording);
+    server.resource["^/api/steamshine/v1/stream/recordings/([A-Za-z0-9-]+)/(?:video|download)$"]["GET"] = steamshine_handler(steamshine_recording_media);
     server.resource["^/api/steamshine/v1/system/metrics$"]["GET"] = steamshine_handler(steamshine_system_metrics);
     server.resource["^/api/steamshine/v1/apps$"]["GET"] = steamshine_handler(steamshine_get_apps);
     server.resource["^/api/steamshine/v1/apps$"]["POST"] = steamshine_handler(steamshine_save_app);
@@ -2893,13 +3195,18 @@ namespace confighttp {
         terminal_acceptor.set_option(boost::asio::ip::tcp::acceptor::reuse_address(true));
         terminal_acceptor.bind(endpoint);
         terminal_acceptor.listen();
+        terminal_acceptor.non_blocking(true);
 
-        while (true) {
+        while (!shutdown_event->peek()) {
           boost::asio::ip::tcp::socket socket {terminal_ioc};
           boost::system::error_code accept_error;
           terminal_acceptor.accept(socket, accept_error);
           if (accept_error) {
-            break;  // Acceptor was closed by stop(), or another fatal error.
+            if (terminal_accept_is_retryable(accept_error)) {
+              shutdown_event->view(50ms);
+              continue;
+            }
+            break;
           }
           std::thread {handle_terminal_ws_connection, std::move(socket), std::ref(terminal_ssl_ctx)}.detach();
         }

@@ -49,7 +49,7 @@ namespace {
     const auto executable {directory / "gamescope"};
     std::ofstream output {executable};
     output << "#!/bin/sh\n";
-    output << "if [ \"$1\" = \"--help\" ]; then echo '--backend headless --nested-width --nested-height --nested-refresh --expose-wayland --steam --scaler --hdr-enabled --prefer-vk-device'; exit 0; fi\n";
+    output << "if [ \"$1\" = \"--help\" ]; then echo '--backend headless --nested-width --nested-height --output-width --output-height --nested-refresh --expose-wayland --steam --scaler --hdr-enabled --prefer-vk-device'; exit 0; fi\n";
     output << "printf '%s\\n' \"$@\" > \"$XDG_RUNTIME_DIR/gamescope-arguments\"\n";
     output << "printf 'runtime=%s\\nremote=%s\\nsession_type=%s\\n' \"$PIPEWIRE_RUNTIME_DIR\" \"$PIPEWIRE_REMOTE\" \"${XDG_SESSION_TYPE-unset}\" > \"$XDG_RUNTIME_DIR/gamescope-pipewire-environment\"\n";
     if (mode == "crash-before-ready") {
@@ -288,6 +288,77 @@ TEST_F(SteamOSVirtualSessionTest, OffModePreservesNormalLaunch) {
 }
 
 /**
+ * @brief Verify physical-mode fallback forces one owned canvas only when explicitly requested.
+ */
+TEST_F(SteamOSVirtualSessionTest, PhysicalModeFallbackCreatesOwnedCanvas) {
+  config::steamos_virtual_display.mode = steamos_virtual_session::virtual_display_mode_e::auto_detect;
+  rtsp_stream::launch_session_t launch {};
+  std::string error;
+
+  ASSERT_TRUE(steamos_virtual_session::prepare(launch, error, true)) << error;
+  const auto snapshot {steamos_virtual_session::status_snapshot()};
+  EXPECT_EQ(snapshot.origin, steamos_virtual_session::session_origin_e::owned_private);
+  EXPECT_EQ(snapshot.selection_reason, "physical_mode_virtual_fallback");
+}
+
+/**
+ * @brief Verify malformed or unsafe partial geometry fails closed with a stable reason.
+ */
+TEST_F(SteamOSVirtualSessionTest, RejectsPartialClientGeometry) {
+  rtsp_stream::launch_session_t launch {};
+  launch.width = 1920;
+  std::string error;
+
+  EXPECT_FALSE(steamos_virtual_session::prepare(launch, error));
+  EXPECT_NE(error.find("invalid_nonpositive_geometry"), std::string::npos);
+  const auto snapshot {steamos_virtual_session::status_snapshot()};
+  EXPECT_EQ(snapshot.geometry_reason, "invalid_nonpositive_geometry");
+  EXPECT_EQ(snapshot.requested_width, 1920);
+  EXPECT_EQ(snapshot.requested_height, 0);
+}
+
+/**
+ * @brief Verify automatic alignment preserves the original request in diagnostics.
+ */
+TEST_F(SteamOSVirtualSessionTest, ReportsAlignedAndRequestedGeometrySeparately) {
+  rtsp_stream::launch_session_t launch {};
+  launch.width = 1921;
+  launch.height = 1081;
+  launch.fps = 75;
+  std::string error;
+
+  ASSERT_TRUE(steamos_virtual_session::prepare(launch, error)) << error;
+  const auto snapshot {steamos_virtual_session::status_snapshot()};
+  EXPECT_EQ(snapshot.requested_width, 1921);
+  EXPECT_EQ(snapshot.requested_height, 1081);
+  EXPECT_EQ(snapshot.width, 1922);
+  EXPECT_EQ(snapshot.height, 1082);
+  EXPECT_EQ(snapshot.refresh.numerator, 75U);
+  EXPECT_EQ(snapshot.geometry_reason, "geometry_minimally_aligned");
+}
+
+/**
+ * @brief Verify producer geometry records the aspect-preserving encoded content rectangle.
+ */
+TEST_F(SteamOSVirtualSessionTest, RecordsCaptureGeometryAndContentRectangle) {
+  rtsp_stream::launch_session_t launch {};
+  launch.width = 1920;
+  launch.height = 1080;
+  launch.fps = 60;
+  std::string error;
+
+  ASSERT_TRUE(steamos_virtual_session::prepare(launch, error)) << error;
+  steamos_virtual_session::record_capture_geometry(3440, 1440);
+  const auto snapshot {steamos_virtual_session::status_snapshot()};
+  EXPECT_EQ(snapshot.capture_width, 3440);
+  EXPECT_EQ(snapshot.capture_height, 1440);
+  EXPECT_EQ(snapshot.content_rectangle.x, 0);
+  EXPECT_EQ(snapshot.content_rectangle.y, 138);
+  EXPECT_EQ(snapshot.content_rectangle.width, 1920);
+  EXPECT_EQ(snapshot.content_rectangle.height, 802);
+}
+
+/**
  * @brief Verify an explicit resident-Gamescope policy fails closed without spawning one.
  */
 TEST_F(SteamOSVirtualSessionTest, ExistingGamescopePolicyDoesNotCreateOwnedFallback) {
@@ -350,9 +421,9 @@ TEST_F(SteamOSVirtualSessionTest, DoesNotCleanOrphansOutsideUserRuntime) {
 
 TEST_F(SteamOSVirtualSessionTest, GamescopeArgumentsUseAdvertisedHeadlessBackendAndFitPolicy) {
   std::string error;
-  const auto arguments {steamos_virtual_session::gamescope_arguments("--backend headless --nested-width --nested-height --nested-refresh --expose-wayland --steam --scaler --hdr-enabled --prefer-vk-device", 2560, 1440, 120, true, "1002:744c", error)};
+  const auto arguments {steamos_virtual_session::gamescope_arguments("--backend headless --nested-width --nested-height --output-width --output-height --nested-refresh --expose-wayland --steam --scaler --hdr-enabled --prefer-vk-device", 2560, 1440, 120, true, "1002:744c", error)};
   ASSERT_TRUE(error.empty());
-  EXPECT_EQ(arguments, (std::vector<std::string> {"--backend", "headless", "--nested-width", "2560", "--nested-height", "1440", "--nested-refresh", "120", "--expose-wayland", "--scaler", "fit", "--hdr-enabled", "--prefer-vk-device", "1002:744c"}));
+  EXPECT_EQ(arguments, (std::vector<std::string> {"--backend", "headless", "--nested-width", "2560", "--nested-height", "1440", "--output-width", "2560", "--output-height", "1440", "--nested-refresh", "120", "--expose-wayland", "--scaler", "fit", "--hdr-enabled", "--prefer-vk-device", "1002:744c"}));
 }
 
 TEST_F(SteamOSVirtualSessionTest, GamescopeArgumentsRejectMissingHeadlessBackend) {
@@ -507,6 +578,33 @@ TEST_F(SteamOSVirtualSessionTest, ReusesCompatibleOwnedDisplayOnReconnect) {
   EXPECT_EQ(reused.selection_reason, "retained_owned_private");
   EXPECT_EQ(reused.state, steamos_virtual_session::state_e::Ready);
   EXPECT_EQ(reused.display_endpoint.generation, retained_generation);
+}
+
+/**
+ * @brief Verify a changed canvas request replaces rather than mutates a retained owned display.
+ */
+TEST_F(SteamOSVirtualSessionTest, ReplacesRetainedOwnedDisplayWhenGeometryChanges) {
+  rtsp_stream::launch_session_t launch {};
+  launch.width = 1920;
+  launch.height = 1080;
+  launch.fps = 60;
+  std::string error;
+
+  ASSERT_TRUE(steamos_virtual_session::prepare(launch, error)) << error;
+  steamos_virtual_session::mark_capture_ready();
+  steamos_virtual_session::mark_streaming();
+  steamos_virtual_session::mark_streaming_disconnected();
+  const auto retained {steamos_virtual_session::status_snapshot()};
+
+  launch.width = 2560;
+  launch.height = 1600;
+  ASSERT_TRUE(steamos_virtual_session::prepare(launch, error)) << error;
+  const auto replaced {steamos_virtual_session::status_snapshot()};
+  EXPECT_NE(replaced.gamescope_pid, retained.gamescope_pid);
+  EXPECT_GT(replaced.display_endpoint.generation, retained.display_endpoint.generation);
+  EXPECT_EQ(replaced.width, 2560);
+  EXPECT_EQ(replaced.height, 1600);
+  EXPECT_EQ(replaced.selection_reason, "new_owned_private");
 }
 
 /**
@@ -1013,6 +1111,73 @@ TEST_F(SteamOSVirtualSessionTest, ForcedCleanupKillsOwnedChildAfterGamescopeExit
   // already been killed and cannot execute or retain the virtual session;
   // runner PID 1 owns the eventual reap timing.
   EXPECT_TRUE(kill_result == -1 || process_is_zombie(child));
+  if (kill_result == -1) {
+    EXPECT_EQ(kill_error, ESRCH);
+  }
+}
+
+/**
+ * @brief Verify explicit stop terminates detached descendants of the owned runtime.
+ */
+TEST_F(SteamOSVirtualSessionTest, StopTerminatesDetachedRuntimeDescendants) {
+  rtsp_stream::launch_session_t launch {};
+  launch.id = 13;
+  std::string error;
+  ASSERT_TRUE(steamos_virtual_session::prepare(launch, error)) << error;
+  const auto endpoint {steamos_virtual_session::application_environment()};
+  ASSERT_TRUE(endpoint);
+
+  const auto descendant_pid_file {root / "detached-runtime-descendant.pid"};
+  const pid_t runtime_process {::fork()};
+  ASSERT_GE(runtime_process, 0);
+  if (runtime_process == 0) {
+    (void) ::setsid();
+    (void) ::setenv("XDG_RUNTIME_DIR", endpoint->xdg_runtime_directory.c_str(), 1);
+    const std::string command {
+      "env -u XDG_RUNTIME_DIR setsid sh -c 'echo $$ > " + descendant_pid_file.string() +
+      "; trap \"exit 0\" TERM INT; while :; do sleep 1; done' & "
+      "trap 'exit 0' TERM INT; while :; do sleep 1; done"
+    };
+    ::execl("/bin/sh", "sh", "-c", command.c_str(), nullptr);
+    _exit(127);
+  }
+
+  const auto pid_deadline {std::chrono::steady_clock::now() + std::chrono::seconds {2}};
+  while (!std::filesystem::exists(descendant_pid_file) && std::chrono::steady_clock::now() < pid_deadline) {
+    std::this_thread::sleep_for(std::chrono::milliseconds {20});
+  }
+  if (!std::filesystem::exists(descendant_pid_file)) {
+    ::kill(runtime_process, SIGKILL);
+    ::waitpid(runtime_process, nullptr, 0);
+    FAIL() << "Detached runtime descendant did not publish its PID";
+  }
+  std::ifstream descendant_input {descendant_pid_file};
+  pid_t descendant {};
+  descendant_input >> descendant;
+  ASSERT_GT(descendant, 0);
+
+  steamos_virtual_session::stop();
+  int runtime_status {};
+  bool runtime_exited {false};
+  const auto runtime_deadline {std::chrono::steady_clock::now() + std::chrono::seconds {2}};
+  while (std::chrono::steady_clock::now() < runtime_deadline) {
+    if (::waitpid(runtime_process, &runtime_status, WNOHANG) == runtime_process) {
+      runtime_exited = true;
+      break;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds {20});
+  }
+  if (!runtime_exited) {
+    ::kill(runtime_process, SIGKILL);
+    ::waitpid(runtime_process, &runtime_status, 0);
+  }
+  EXPECT_TRUE(runtime_exited);
+  for (int attempt = 0; attempt < 20 && ::kill(descendant, 0) == 0 && !process_is_zombie(descendant); ++attempt) {
+    std::this_thread::sleep_for(std::chrono::milliseconds {50});
+  }
+  const int kill_result {::kill(descendant, 0)};
+  const int kill_error {errno};
+  EXPECT_TRUE(kill_result == -1 || process_is_zombie(descendant));
   if (kill_result == -1) {
     EXPECT_EQ(kill_error, ESRCH);
   }

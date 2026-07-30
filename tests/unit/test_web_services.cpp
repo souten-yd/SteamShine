@@ -7,16 +7,19 @@
 #include "../tests_common.h"
 
 // standard includes
+#include <algorithm>
 #include <chrono>
 #include <filesystem>
 #include <map>
 #include <memory>
 
 // local imports
+#include <src/build_info.h>
 #include <src/config.h>
 #include <src/crypto.h>
 #include <src/file_handler.h>
 #include <src/utility.h>
+#include <src/video.h>
 #include <src/web_services.h>
 
 namespace {
@@ -202,9 +205,38 @@ TEST(WebServicesTest, StatusSnapshotIncludesPipeWireDiagnostics) {
   web::StatusSnapshotService status;
   const auto snapshot = status.snapshot();
 
-  EXPECT_EQ(snapshot.at("service_binary_commit"), PROJECT_VERSION_COMMIT);
+  EXPECT_EQ(snapshot.at("service_binary_commit"), build_info::commit());
   EXPECT_EQ(snapshot.at("service_config_path"), config::sunshine.config_file);
   EXPECT_EQ(snapshot.at("service_launch_mode"), "manual");
+  ASSERT_TRUE(snapshot.contains("stream_negotiation"));
+  const auto &negotiation = snapshot.at("stream_negotiation");
+  EXPECT_EQ(negotiation.at("schema_version"), 1);
+  EXPECT_EQ(negotiation.at("poll_interval_ms"), 2000);
+  EXPECT_FALSE(negotiation.at("available"));
+  EXPECT_TRUE(negotiation.contains("requested"));
+  EXPECT_TRUE(negotiation.contains("selected"));
+  EXPECT_TRUE(negotiation.contains("active"));
+  EXPECT_TRUE(negotiation.contains("observed"));
+  EXPECT_TRUE(negotiation.contains("fallback_reasons"));
+  EXPECT_TRUE(negotiation.at("requested").contains("client_codec_mask"));
+  EXPECT_TRUE(negotiation.at("requested").contains("capability_signature"));
+  EXPECT_TRUE(negotiation.at("selected").contains("encode_geometry"));
+  EXPECT_TRUE(negotiation.at("selected").contains("reason"));
+  EXPECT_TRUE(negotiation.at("selected").contains("profile_selection_reason"));
+  EXPECT_TRUE(negotiation.at("active").contains("runtime_rate_update_supported"));
+  EXPECT_TRUE(negotiation.at("observed").contains("network_age_p99_ms"));
+  EXPECT_EQ(snapshot.at("codec_policy"), "auto");
+  EXPECT_EQ(snapshot.at("codec_fallback"), "strict");
+  EXPECT_FALSE(snapshot.at("codec_allow_software"));
+  ASSERT_TRUE(snapshot.contains("codec_state"));
+  EXPECT_TRUE(snapshot.at("codec_state").contains("requested"));
+  EXPECT_TRUE(snapshot.at("codec_state").contains("selected"));
+  EXPECT_TRUE(snapshot.at("codec_state").contains("active"));
+  EXPECT_TRUE(snapshot.at("codec_state").contains("profile"));
+  EXPECT_TRUE(snapshot.at("codec_state").contains("bit_depth"));
+  EXPECT_TRUE(snapshot.at("codec_state").contains("backend"));
+  EXPECT_TRUE(snapshot.at("codec_state").contains("hardware"));
+  EXPECT_TRUE(snapshot.at("codec_state").contains("reason"));
   EXPECT_TRUE(snapshot.contains("pipewire_runtime"));
   EXPECT_TRUE(snapshot.contains("virtual_display_origin"));
   EXPECT_TRUE(snapshot.contains("virtual_display_process_owned"));
@@ -216,8 +248,31 @@ TEST(WebServicesTest, StatusSnapshotIncludesPipeWireDiagnostics) {
   EXPECT_TRUE(snapshot.contains("app_launch_rejected_reason"));
   EXPECT_TRUE(snapshot.contains("app_launch_rejected_message"));
   EXPECT_TRUE(snapshot.contains("capture_selection_reason"));
+  EXPECT_TRUE(snapshot.contains("steamshine_hdr_policy"));
+  ASSERT_TRUE(snapshot.contains("hdr_state"));
+  const auto &hdr_state = snapshot.at("hdr_state");
+  EXPECT_TRUE(hdr_state.contains("requested"));
+  EXPECT_TRUE(hdr_state.contains("client_capable"));
+  EXPECT_TRUE(hdr_state.contains("selected"));
+  EXPECT_TRUE(hdr_state.contains("active"));
+  EXPECT_TRUE(hdr_state.contains("bit_depth"));
+  EXPECT_TRUE(hdr_state.contains("primaries"));
+  EXPECT_TRUE(hdr_state.contains("transfer"));
+  EXPECT_TRUE(hdr_state.contains("matrix"));
+  EXPECT_TRUE(hdr_state.contains("range"));
+  EXPECT_TRUE(hdr_state.contains("reason"));
   EXPECT_TRUE(snapshot.contains("presentation"));
   EXPECT_TRUE(snapshot.contains("local_presenter_active"));
+  EXPECT_TRUE(snapshot.contains("requested_stream_width"));
+  EXPECT_TRUE(snapshot.contains("requested_stream_height"));
+  EXPECT_TRUE(snapshot.at("requested_stream_refresh").contains("numerator"));
+  EXPECT_TRUE(snapshot.contains("selected_stream_width"));
+  EXPECT_TRUE(snapshot.contains("selected_stream_height"));
+  EXPECT_TRUE(snapshot.at("selected_stream_refresh").contains("denominator"));
+  EXPECT_TRUE(snapshot.contains("stream_geometry_reason"));
+  EXPECT_TRUE(snapshot.contains("capture_width"));
+  EXPECT_TRUE(snapshot.contains("capture_height"));
+  EXPECT_TRUE(snapshot.at("content_rectangle").contains("width"));
   EXPECT_TRUE(snapshot.contains("input_events_received"));
   EXPECT_TRUE(snapshot.contains("input_events_injected"));
   EXPECT_TRUE(snapshot.contains("input_motion_coalesced"));
@@ -259,6 +314,25 @@ TEST(WebServicesTest, StatusSnapshotIncludesPipeWireDiagnostics) {
   EXPECT_TRUE(snapshot.contains("network_queue_bytes"));
   EXPECT_TRUE(snapshot.contains("network_queue_frames"));
   EXPECT_TRUE(snapshot.contains("socket_outq_bytes"));
+  ASSERT_TRUE(snapshot.contains("adaptive_bitrate"));
+  const auto &adaptive {snapshot.at("adaptive_bitrate")};
+  EXPECT_TRUE(adaptive.contains("minimum_kbps"));
+  EXPECT_TRUE(adaptive.contains("initial_kbps"));
+  EXPECT_TRUE(adaptive.contains("target_kbps"));
+  EXPECT_TRUE(adaptive.contains("active_kbps"));
+  EXPECT_TRUE(adaptive.contains("maximum_kbps"));
+  EXPECT_TRUE(adaptive.contains("peak_kbps"));
+  EXPECT_TRUE(adaptive.contains("vbv_kbits"));
+  EXPECT_TRUE(adaptive.contains("actual_video_kbps"));
+  EXPECT_TRUE(adaptive.contains("learned_next_kbps"));
+  EXPECT_TRUE(adaptive.contains("state"));
+  EXPECT_TRUE(adaptive.contains("reason"));
+  EXPECT_TRUE(adaptive.contains("runtime_update_supported"));
+  EXPECT_TRUE(adaptive.contains("feedback_samples"));
+  EXPECT_TRUE(adaptive.contains("lost_packets"));
+  EXPECT_TRUE(adaptive.contains("updates_applied"));
+  EXPECT_TRUE(adaptive.contains("updates_unsupported"));
+  EXPECT_TRUE(adaptive.contains("updates_failed"));
   EXPECT_TRUE(snapshot.contains("idr_requests"));
   EXPECT_TRUE(snapshot.contains("idr_emitted"));
   EXPECT_TRUE(snapshot.contains("idr_reason_client_request"));
@@ -296,4 +370,170 @@ TEST(WebServicesTest, GamescopeSourceDiscoveryHasBoundedSchema) {
   EXPECT_TRUE(snapshot.contains("error"));
   ASSERT_TRUE(snapshot.contains("sources"));
   EXPECT_TRUE(snapshot.at("sources").is_array());
+}
+
+/**
+ * @brief Verify profile selection requires exact client, network, and capabilities.
+ */
+TEST(WebServicesTest, SelectsOnlyExactStreamCapabilityProfile) {
+  namespace fs = std::filesystem;
+  const auto path {fs::temp_directory_path() / "steamshine-stream-profile-selection.json"};
+  fs::remove(path);
+  web::StreamProfileService profiles {path};
+  web::stream_profile_t profile;
+  profile.client_id = "client-a";
+  profile.network_class = "lan";
+  profile.capability_signature = "h264-hevc-8bit";
+  profile.codec_policy = "hevc";
+  profile.active = true;
+  ASSERT_TRUE(profiles.save(profile).success);
+
+  const auto selected {profiles.select("client-a", "lan", "h264-hevc-8bit")};
+  ASSERT_TRUE(selected.profile.has_value());
+  EXPECT_EQ(selected.profile->codec_policy, "hevc");
+  EXPECT_EQ(selected.reason, "exact_client_network_capability_match");
+  EXPECT_FALSE(profiles.select("client-a", "wifi-5ghz", "h264-hevc-8bit").profile.has_value());
+  const auto changed {profiles.select("client-a", "lan", "h264-only")};
+  EXPECT_FALSE(changed.profile.has_value());
+  EXPECT_EQ(changed.reason, "capability_signature_changed");
+  EXPECT_TRUE(profiles.select_active("client-a", "h264-hevc-8bit").profile.has_value());
+  EXPECT_EQ(profiles.select_active("client-a", "h264-only").reason, "capability_signature_changed");
+  EXPECT_EQ(profiles.select_active("missing-client", "h264-hevc-8bit").reason, "active_network_profile_not_found");
+
+  fs::remove(path);
+}
+
+/**
+ * @brief Verify one active network wins and safe defaults never rewrite a requested codec.
+ */
+TEST(WebServicesTest, AppliesOnlyActiveSafeStreamProfileDefaults) {
+  namespace fs = std::filesystem;
+  const auto path {fs::temp_directory_path() / "steamshine-stream-profile-active.json"};
+  fs::remove(path);
+  web::StreamProfileService profiles {path};
+  web::stream_profile_t lan;
+  lan.client_id = "client-active";
+  lan.network_class = "lan";
+  lan.capability_signature = "v1-c1-d1-x0-h1";
+  lan.active = true;
+  ASSERT_TRUE(profiles.save(lan).success);
+  auto wifi {lan};
+  wifi.network_class = "wifi-5ghz";
+  wifi.active = true;
+  wifi.fps_policy = "custom";
+  wifi.fps_ceiling = 60;
+  wifi.codec_policy = "av1";
+  wifi.hdr_policy = "off";
+  wifi.bitrate_ceiling_kbps = 15000;
+  wifi.learned_start_kbps = 12000;
+  ASSERT_TRUE(profiles.save(wifi).success);
+  EXPECT_FALSE(profiles.select("client-active", "lan", lan.capability_signature).profile->active);
+  const auto selected {profiles.select_active("client-active", wifi.capability_signature)};
+  ASSERT_TRUE(selected.profile.has_value());
+  EXPECT_EQ(selected.profile->network_class, "wifi-5ghz");
+
+  video::config_t config {};
+  config.framerate = 120;
+  config.framerateX100 = 12000;
+  config.bitrate = 30000;
+  config.videoFormat = 1;
+  config.dynamicRange = 1;
+  config.requestedDynamicRange = 1;
+  const auto applied {web::apply_stream_profile(*selected.profile, config)};
+  EXPECT_TRUE(applied.applied);
+  EXPECT_EQ(config.framerate, 60);
+  EXPECT_EQ(config.framerateX100, 0);
+  EXPECT_EQ(config.bitrate, 12000);
+  EXPECT_EQ(config.videoFormat, 1);
+  EXPECT_EQ(config.dynamicRange, 0);
+  EXPECT_NE(std::find(applied.fallback_reasons.begin(), applied.fallback_reasons.end(), "profile_codec_yielded_to_client_request"), applied.fallback_reasons.end());
+  EXPECT_EQ(web::stream_capability_signature(config, true), "v1-c1-d1-x0-h1");
+  EXPECT_TRUE(profiles.update_learned_start("client-active", "wifi-5ghz", wifi.capability_signature, 9000).success);
+  EXPECT_EQ(profiles.select_active("client-active", wifi.capability_signature).profile->learned_start_kbps, 9000);
+
+  auto capability_limited {wifi};
+  capability_limited.hdr_policy = "require";
+  capability_limited.codec_policy = "hevc";
+  video::config_t sdr_request {};
+  sdr_request.videoFormat = 1;
+  sdr_request.dynamicRange = 0;
+  sdr_request.requestedDynamicRange = 0;
+  const auto preserved {web::apply_stream_profile(capability_limited, sdr_request)};
+  EXPECT_FALSE(preserved.applied);
+  EXPECT_NE(
+    std::find(preserved.fallback_reasons.begin(), preserved.fallback_reasons.end(), "profile_hdr_requirement_yielded_to_client_capability"),
+    preserved.fallback_reasons.end()
+  );
+  EXPECT_EQ(profiles.update_learned_start("client-active", "wifi-5ghz", "changed-capabilities", 8000).code, "profile_selection_changed");
+  fs::remove(path);
+}
+
+/**
+ * @brief Verify orientation, safe area, and policy values are bounded.
+ */
+TEST(WebServicesTest, ValidatesStreamProfileLayoutAndPolicies) {
+  namespace fs = std::filesystem;
+  const auto path {fs::temp_directory_path() / "steamshine-stream-profile-validation.json"};
+  fs::remove(path);
+  web::StreamProfileService profiles {path};
+  web::stream_profile_t profile;
+  profile.client_id = "portrait-client";
+  profile.network_class = "wifi-6ghz";
+  profile.capability_signature = "av1-main10-hdr";
+  profile.geometry_policy = "virtual_fallback";
+  profile.fps_policy = "custom";
+  profile.fps_ceiling = 120;
+  profile.codec_policy = "av1";
+  profile.hdr_policy = "require";
+  profile.bitrate_ceiling_kbps = 80000;
+  profile.quality_preset = "quality";
+  profile.orientation = "portrait";
+  profile.safe_area_percent = 10;
+  EXPECT_TRUE(profiles.save(profile).success);
+
+  profile.safe_area_percent = 26;
+  EXPECT_EQ(profiles.save(profile).code, "invalid_layout_policy");
+  profile.safe_area_percent = 10;
+  profile.codec_policy = "marketing-super-codec";
+  EXPECT_EQ(profiles.save(profile).code, "invalid_codec_policy");
+  profile.codec_policy = "av1";
+  profile.fps_ceiling = 241;
+  EXPECT_EQ(profiles.save(profile).code, "invalid_fps_policy");
+
+  fs::remove(path);
+}
+
+/**
+ * @brief Verify the persisted profile schema is bounded, private, reloadable, and resettable.
+ */
+TEST(WebServicesTest, PersistsAndResetsBoundedStreamProfiles) {
+  namespace fs = std::filesystem;
+  const auto path {fs::temp_directory_path() / "steamshine-stream-profile-persistence.json"};
+  fs::remove(path);
+  {
+    web::StreamProfileService profiles {path};
+    web::stream_profile_t profile;
+    profile.client_id = "client-b";
+    profile.network_class = "tailscale";
+    profile.capability_signature = "h264-8bit";
+    profile.learned_start_kbps = 12000;
+    profile.active = true;
+    ASSERT_TRUE(profiles.save(profile).success);
+    const auto snapshot = profiles.snapshot();
+    ASSERT_TRUE(snapshot.is_object()) << snapshot.dump();
+    EXPECT_EQ(snapshot.at("schema_version"), 1);
+    EXPECT_EQ(snapshot.at("maximum_profiles"), 64);
+    ASSERT_EQ(snapshot.at("profiles").size(), 1);
+  }
+  const auto permissions {fs::status(path).permissions()};
+  EXPECT_EQ(permissions & (fs::perms::group_all | fs::perms::others_all), fs::perms::none);
+
+  web::StreamProfileService reloaded {path};
+  EXPECT_TRUE(reloaded.select_active("client-b", "h264-8bit").profile.has_value());
+  EXPECT_EQ(reloaded.update_learned_start("client-b", "tailscale", "h264-8bit", 200001).code, "invalid_learned_start");
+  EXPECT_TRUE(reloaded.reset("client-b", "tailscale").success);
+  EXPECT_TRUE(reloaded.snapshot().at("profiles").empty());
+  EXPECT_EQ(reloaded.reset("client-b", "tailscale").code, "profile_not_found");
+
+  fs::remove(path);
 }

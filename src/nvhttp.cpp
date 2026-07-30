@@ -32,6 +32,7 @@
 #include "process.h"
 #include "rtsp.h"
 #include "steamos_virtual_session.h"
+#include "stream.h"
 #include "system_tray.h"
 #include "utility.h"
 #include "uuid.h"
@@ -393,7 +394,8 @@ namespace nvhttp {
     launch_session->surround_params = (get_arg(args, "surroundParams", ""));
     launch_session->continuous_audio = util::from_view(get_arg(args, "continuousAudio", "0"));
     launch_session->gcmap = (int) util::from_view(get_arg(args, "gcmap", "0"));
-    launch_session->enable_hdr = util::from_view(get_arg(args, "hdrMode", "0"));
+    launch_session->hdr_requested = util::from_view(get_arg(args, "hdrMode", "0"));
+    launch_session->enable_hdr = launch_session->hdr_requested && config::video.steamshine_hdr_policy != hdr_policy::policy_e::off;
 
     // Encrypted RTSP is enabled with client reported corever >= 1
     auto corever = util::from_view(get_arg(args, "corever", "0"));
@@ -406,6 +408,7 @@ namespace nvhttp {
     }
     launch_session->rtsp_url_scheme = launch_session->rtsp_cipher ? "rtspenc://"s : "rtsp://"s;
     launch_session->client_cert = last_verified_client_cert;
+    stream::initialize_launch_negotiation(*launch_session);
 
     // Generate the unique identifiers for this connection that we will send later during RTSP handshake
     unsigned char raw_payload[8];
@@ -1037,13 +1040,20 @@ namespace nvhttp {
 
     host_audio = util::from_view(get_arg(args, "localAudioPlayMode"));
     auto launch_session = make_launch_session(host_audio, args);
+    if (config::video.steamshine_hdr_policy == hdr_policy::policy_e::require && !launch_session->hdr_requested) {
+      tree.put("root.<xmlattr>.status_code", 400);
+      tree.put("root.<xmlattr>.status_message", "hdr_required_but_not_requested");
+      tree.put("root.gamesession", 0);
+      return;
+    }
 
 #if defined(__linux__)
     platf::refresh_capture_environment();
 #endif
 
     std::string virtual_session_error;
-    if (!steamos_virtual_session::prepare(*launch_session, virtual_session_error)) {
+    const bool prefer_owned_session {appid > 0 && proc::proc.prefers_owned_virtual_display(static_cast<int>(appid))};
+    if (!steamos_virtual_session::prepare(*launch_session, virtual_session_error, false, prefer_owned_session)) {
       BOOST_LOG(error) << "SteamOS virtual session preparation failed: " << virtual_session_error;
       tree.put("root.<xmlattr>.status_code", 503);
       tree.put("root.<xmlattr>.status_message", virtual_session_error);
@@ -1088,6 +1098,22 @@ namespace nvhttp {
 
     if (appid > 0) {
       auto err = proc::proc.execute((int) appid, launch_session);
+      if (err == proc::virtual_display_fallback_exit_code) {
+        BOOST_LOG(info) << "Physical display mode is incompatible; retrying launch on an owned virtual display"sv;
+        std::string fallback_error;
+        if (!steamos_virtual_session::prepare(*launch_session, fallback_error, true)) {
+          err = 503;
+          BOOST_LOG(error) << "Owned virtual-display fallback failed: " << fallback_error;
+        } else {
+          display_device::configure_display(config::video, *launch_session);
+          if (video::probe_encoders()) {
+            steamos_virtual_session::stop();
+            err = 503;
+          } else {
+            err = proc::proc.execute((int) appid, launch_session);
+          }
+        }
+      }
       if (err) {
         const auto virtual_status {steamos_virtual_session::status_snapshot()};
         steamos_virtual_session::stop();
@@ -1183,6 +1209,12 @@ namespace nvhttp {
       host_audio = util::from_view(get_arg(args, "localAudioPlayMode"));
     }
     const auto launch_session = make_launch_session(host_audio, args);
+    if (config::video.steamshine_hdr_policy == hdr_policy::policy_e::require && !launch_session->hdr_requested) {
+      tree.put("root.resume", 0);
+      tree.put("root.<xmlattr>.status_code", 400);
+      tree.put("root.<xmlattr>.status_message", "hdr_required_but_not_requested");
+      return;
+    }
 
     if (no_active_sessions) {
 #if defined(__linux__)

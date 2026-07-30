@@ -52,12 +52,36 @@ namespace proc {
 
   proc_t proc;  ///< Global process registry used to track and terminate child processes.
 
+  bool should_retry_owned_virtual_display(
+    const int exit_code,
+    const bool feature_enabled,
+    const steamos_virtual_session::virtual_display_mode_e mode,
+    const steamos_virtual_session::session_origin_e origin
+  ) {
+    return exit_code == virtual_display_fallback_exit_code &&
+           feature_enabled &&
+           mode == steamos_virtual_session::virtual_display_mode_e::auto_detect &&
+           origin == steamos_virtual_session::session_origin_e::none;
+  }
+
   bool should_launch_owned_virtual_desktop(
     const std::string_view app_command,
     const std::size_t detached_command_count,
     const bool owned_virtual_display
   ) {
     return owned_virtual_display && app_command.empty() && detached_command_count == 0;
+  }
+
+  bool should_prefer_owned_virtual_display(const ctx_t &application) {
+    if (steam_session::command_opens_big_picture(application.cmd)) {
+      return true;
+    }
+    if (std::ranges::any_of(application.detached, steam_session::command_opens_big_picture)) {
+      return true;
+    }
+    return std::ranges::any_of(application.prep_cmds, [](const cmd_t &command) {
+      return steam_session::command_opens_big_picture(command.do_cmd);
+    });
   }
 
   void reset_launch_environment(
@@ -355,6 +379,17 @@ namespace proc {
       auto ret = child.exit_code();
       if (ret != 0) {
         BOOST_LOG(error) << '[' << cmd.do_cmd << "] exited with code ["sv << ret << ']';
+        if (should_retry_owned_virtual_display(
+              ret,
+              config::steamos_virtual_display.enabled,
+              config::steamos_virtual_display.mode,
+              virtual_status.origin
+            )) {
+          // The failed display-mode helper may already have saved or changed physical state.
+          // Treat its matching undo command as active so fail_guard restores it before retry.
+          ++_app_prep_it;
+          return virtual_display_fallback_exit_code;
+        }
         return -1;
       }
     }
@@ -396,6 +431,13 @@ namespace proc {
     fg.disable();
 
     return 0;
+  }
+
+  bool proc_t::prefers_owned_virtual_display(const int app_id) const {
+    const auto application {std::ranges::find_if(_apps, [app_id](const ctx_t &candidate) {
+      return candidate.id == std::to_string(app_id);
+    })};
+    return application != _apps.end() && should_prefer_owned_virtual_display(*application);
   }
 
   int proc_t::running() {

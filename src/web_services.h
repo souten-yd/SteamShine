@@ -6,15 +6,22 @@
 
 // standard includes
 #include <chrono>
+#include <filesystem>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <vector>
 
 // lib includes
 #include <nlohmann/json.hpp>
+
+namespace video {
+  struct config_t;
+}
 
 namespace web {
   /**
@@ -310,6 +317,154 @@ namespace web {
      */
     nlohmann::json snapshot() const;
   };
+
+  /**
+   * @brief Bounded per-client and network stream negotiation defaults.
+   */
+  struct stream_profile_t {
+    std::string client_id;  ///< Stable paired-client identifier, never a marketing name.
+    std::string network_class;  ///< User-selected network class such as lan or wifi-5ghz.
+    std::string capability_signature;  ///< Stable signature of current protocol capabilities.
+    std::string geometry_policy {"fit"};  ///< Geometry policy: exact, fit, or virtual_fallback.
+    std::string fps_policy {"auto"};  ///< FPS policy: auto or custom.
+    int fps_ceiling {0};  ///< Custom FPS ceiling, or zero for automatic.
+    std::string codec_policy {"auto"};  ///< Codec policy: auto, h264, hevc, or av1.
+    std::string hdr_policy {"auto"};  ///< HDR policy: off, auto, or require.
+    int bitrate_ceiling_kbps {0};  ///< Custom video bitrate ceiling, or zero for automatic.
+    std::string quality_preset {"balanced"};  ///< Existing-setting preset: low_latency, balanced, or quality.
+    std::string orientation {"auto"};  ///< Content orientation: auto, landscape, or portrait.
+    int safe_area_percent {0};  ///< Symmetric safe-area inset from zero through twenty-five percent.
+    int learned_start_kbps {0};  ///< Learned next-session start target, or zero when unknown.
+    bool active {false};  ///< Whether this network class is selected for the client's next connection.
+  };
+
+  /**
+   * @brief Result of resolving a profile against current client capabilities.
+   */
+  struct stream_profile_selection_t {
+    std::optional<stream_profile_t> profile;  ///< Matching profile, if its capability signature is current.
+    std::string reason;  ///< Stable selection or rejection reason.
+  };
+
+  /**
+   * @brief Result of applying safe profile defaults to one RTSP video request.
+   */
+  struct stream_profile_application_t {
+    bool applied {false};  ///< Whether at least one safe per-session value changed.
+    std::vector<std::string> fallback_reasons;  ///< Stable reasons for policies that yielded to the client request.
+  };
+
+  /**
+   * @brief Atomically persists a bounded client/network stream profile set.
+   */
+  class StreamProfileService {
+  public:
+    /**
+     * @brief Construct a profile store and load any valid persisted document.
+     *
+     * @param path Explicit test/production path, or an empty path for the default user state path.
+     */
+    explicit StreamProfileService(std::filesystem::path path = {});
+
+    /**
+     * @brief Return the bounded profile document exposed to authenticated clients.
+     *
+     * @return Schema-versioned profile array without secrets.
+     */
+    nlohmann::json snapshot() const;
+
+    /**
+     * @brief Validate and atomically save one client/network profile.
+     *
+     * @param profile Candidate profile.
+     * @return Stable validation or persistence result.
+     */
+    service_result_t save(const stream_profile_t &profile);
+
+    /**
+     * @brief Remove one exact client/network profile.
+     *
+     * @param client_id Stable paired-client identifier.
+     * @param network_class Exact network class.
+     * @return Stable reset result.
+     */
+    service_result_t reset(std::string_view client_id, std::string_view network_class);
+
+    /**
+     * @brief Resolve an exact profile without overriding changed capabilities.
+     *
+     * @param client_id Stable paired-client identifier.
+     * @param network_class Current network class.
+     * @param capability_signature Current protocol capability signature.
+     * @return Matching profile or a stable reason it was ignored.
+     */
+    stream_profile_selection_t select(std::string_view client_id, std::string_view network_class, std::string_view capability_signature) const;
+
+    /**
+     * @brief Resolve the one explicitly active network profile for a client.
+     *
+     * @param client_id Stable paired-client identifier.
+     * @param capability_signature Current protocol capability signature.
+     * @return Active matching profile or a stable reason it was ignored.
+     */
+    stream_profile_selection_t select_active(std::string_view client_id, std::string_view capability_signature) const;
+
+    /**
+     * @brief Persist a bounded learned start rate into an exact active profile.
+     *
+     * @param client_id Stable paired-client identifier.
+     * @param network_class Exact selected network class.
+     * @param capability_signature Capability signature used by the completed stream.
+     * @param learned_start_kbps Bounded aggregate next-session target.
+     * @return Stable update, mismatch, or persistence result.
+     */
+    service_result_t update_learned_start(std::string_view client_id, std::string_view network_class, std::string_view capability_signature, int learned_start_kbps);
+
+  private:
+    /**
+     * @brief Validate every bounded field in a profile.
+     *
+     * @param profile Candidate profile.
+     * @return Empty string when valid, otherwise a stable error code.
+     */
+    static std::string validate(const stream_profile_t &profile);
+
+    /**
+     * @brief Write the complete bounded document through atomic replacement.
+     *
+     * @return True when persistence completed.
+     */
+    bool persist_locked() const;
+
+    std::filesystem::path path_;  ///< Owner-private JSON profile path.
+    mutable std::mutex mutex_;  ///< Protects profile reads and atomic replacement.
+    std::map<std::pair<std::string, std::string>, stream_profile_t> profiles_;  ///< Profiles keyed by client and network class.
+  };
+
+  /**
+   * @brief Return the process-wide profile service shared by media policy and Web handlers.
+   *
+   * @return Owner-private bounded profile service.
+   */
+  StreamProfileService &stream_profile_service();
+
+  /**
+   * @brief Build a stable signature only from current protocol request facts.
+   *
+   * @param request Parsed RTSP video request before host policy changes.
+   * @param hdr_requested Original NVHTTP HDR intent.
+   * @return Bounded signature suitable for exact profile matching.
+   */
+  std::string stream_capability_signature(const video::config_t &request, bool hdr_requested);
+
+  /**
+   * @brief Apply only safe, bounded profile defaults without inventing client capabilities.
+   *
+   * @param profile Exact active profile selected for this request.
+   * @param config Mutable per-session video configuration.
+   * @return Applied state and stable reasons for policies that yielded to the request.
+   */
+  stream_profile_application_t apply_stream_profile(const stream_profile_t &profile, video::config_t &config);
 
   /**
    * @brief Reads a bounded diagnostic log snapshot for Web clients.

@@ -5,6 +5,7 @@
 #include <array>
 #include <cstdlib>
 #include <gtest/gtest.h>
+#include <limits>
 #include <src/platform/linux/gamescope_presenter.h>
 #include <src/platform/linux/gamescope_source.h>
 #include <src/platform/linux/host_desktop_endpoint.h>
@@ -17,18 +18,172 @@
 
 namespace {
   /**
-   * @brief Verify missing and out-of-range client values use safe display bounds.
+   * @brief Verify missing values use defaults while malformed values fail closed.
    */
   TEST(SteamOSVirtualSessionCore, NormalizesDisplayRequest) {
     const auto defaults {steamos_virtual_session::normalize_display_request(0, -1, 0, 1920, 1080, 60)};
-    EXPECT_EQ(defaults.width, 1920);
-    EXPECT_EQ(defaults.height, 1080);
-    EXPECT_EQ(defaults.fps, 60);
+    EXPECT_FALSE(defaults.valid);
+    EXPECT_EQ(defaults.reason, "invalid_nonpositive_geometry");
+
+    const auto missing {steamos_virtual_session::normalize_display_request(0, 0, 0, 1920, 1080, 60)};
+    EXPECT_TRUE(missing.valid);
+    EXPECT_EQ(missing.width, 1920);
+    EXPECT_EQ(missing.height, 1080);
+    EXPECT_EQ(missing.fps, 60);
+    EXPECT_EQ(missing.reason, "default_geometry_selected");
 
     const auto bounds {steamos_virtual_session::normalize_display_request(1, 9000, 999, 1920, 1080, 60)};
-    EXPECT_EQ(bounds.width, 640);
-    EXPECT_EQ(bounds.height, 4320);
-    EXPECT_EQ(bounds.fps, 240);
+    EXPECT_FALSE(bounds.valid);
+    EXPECT_EQ(bounds.reason, "geometry_out_of_bounds");
+  }
+
+  /**
+   * @brief Verify alignment policy records minimal adjustment or rejects exact mode.
+   */
+  TEST(SteamOSVirtualSessionCore, AppliesExplicitGeometryAlignmentPolicy) {
+    using steamos_virtual_session::geometry_alignment_policy_e;
+    using steamos_virtual_session::margin_input_policy_e;
+    using steamos_virtual_session::select_display_request;
+
+    EXPECT_EQ(steamos_virtual_session::parse_geometry_alignment_policy("auto"), geometry_alignment_policy_e::auto_align);
+    EXPECT_EQ(steamos_virtual_session::parse_geometry_alignment_policy("require_exact"), geometry_alignment_policy_e::require_exact);
+    EXPECT_FALSE(steamos_virtual_session::parse_geometry_alignment_policy("exact").has_value());
+    EXPECT_EQ(steamos_virtual_session::parse_margin_input_policy("clamp"), margin_input_policy_e::clamp);
+    EXPECT_EQ(steamos_virtual_session::parse_margin_input_policy("reject"), margin_input_policy_e::reject);
+    EXPECT_FALSE(steamos_virtual_session::parse_margin_input_policy("drop").has_value());
+
+    const auto automatic {select_display_request(1921, 1081, 60, 0, 1920, 1080, 60, geometry_alignment_policy_e::auto_align)};
+    ASSERT_TRUE(automatic.valid);
+    EXPECT_EQ(automatic.requested_width, 1921);
+    EXPECT_EQ(automatic.requested_height, 1081);
+    EXPECT_EQ(automatic.width, 1922);
+    EXPECT_EQ(automatic.height, 1082);
+    EXPECT_TRUE(automatic.adjusted);
+    EXPECT_EQ(automatic.reason, "geometry_minimally_aligned");
+
+    const auto exact {select_display_request(1921, 1081, 60, 0, 1920, 1080, 60, geometry_alignment_policy_e::require_exact)};
+    EXPECT_FALSE(exact.valid);
+    EXPECT_EQ(exact.reason, "exact_geometry_unaligned");
+  }
+
+  /**
+   * @brief Verify exact rational refresh values across the required 30-240 FPS matrix.
+   */
+  TEST(SteamOSVirtualSessionCore, PreservesSafeRationalRefreshMatrix) {
+    using steamos_virtual_session::geometry_alignment_policy_e;
+    using steamos_virtual_session::select_display_request;
+
+    for (const int fps : {30, 50, 60, 75, 90, 100, 120, 144, 165, 240}) {
+      const auto selected {select_display_request(1920, 1080, fps, 0, 1920, 1080, 60, geometry_alignment_policy_e::auto_align)};
+      ASSERT_TRUE(selected.valid) << fps;
+      EXPECT_EQ(selected.refresh.numerator, static_cast<std::uint32_t>(fps));
+      EXPECT_EQ(selected.refresh.denominator, 1U);
+    }
+    const auto ntsc {select_display_request(1920, 1080, 60, 5994, 1920, 1080, 60, geometry_alignment_policy_e::auto_align)};
+    ASSERT_TRUE(ntsc.valid);
+    EXPECT_EQ(ntsc.refresh.numerator, 2997U);
+    EXPECT_EQ(ntsc.refresh.denominator, 50U);
+    EXPECT_EQ(ntsc.fps, 60);
+  }
+
+  /**
+   * @brief Verify extent, pixel-rate, and buffer overflow checks fail with stable reasons.
+   */
+  TEST(SteamOSVirtualSessionCore, RejectsUnsafeGeometryBudgets) {
+    using steamos_virtual_session::display_constraints_t;
+    using steamos_virtual_session::geometry_alignment_policy_e;
+    using steamos_virtual_session::select_display_request;
+
+    display_constraints_t pixel_rate_limits;
+    pixel_rate_limits.maximum_pixel_rate = 1920ULL * 1080ULL * 60ULL;
+    const auto too_fast {select_display_request(3840, 2160, 60, 0, 1920, 1080, 60, geometry_alignment_policy_e::auto_align, pixel_rate_limits)};
+    EXPECT_FALSE(too_fast.valid);
+    EXPECT_EQ(too_fast.reason, "pixel_rate_exceeded");
+
+    display_constraints_t coded_limits;
+    coded_limits.maximum_frame_pixels = 1920ULL * 1080ULL;
+    const auto too_large {select_display_request(2560, 1440, 60, 0, 1920, 1080, 60, geometry_alignment_policy_e::auto_align, coded_limits)};
+    EXPECT_FALSE(too_large.valid);
+    EXPECT_EQ(too_large.reason, "coded_extent_exceeded");
+
+    display_constraints_t overflow_limits {
+      .minimum_width = 1,
+      .maximum_width = std::numeric_limits<int>::max(),
+      .minimum_height = 1,
+      .maximum_height = std::numeric_limits<int>::max(),
+      .width_alignment = 1,
+      .height_alignment = 1,
+      .minimum_fps = 1,
+      .maximum_fps = 1,
+      .maximum_frame_pixels = std::numeric_limits<std::uint64_t>::max(),
+      .maximum_pixel_rate = std::numeric_limits<std::uint64_t>::max(),
+      .maximum_buffer_bytes = std::numeric_limits<std::uint64_t>::max(),
+      .buffer_count = 4,
+      .bytes_per_pixel = 4,
+    };
+    const auto overflow {select_display_request(std::numeric_limits<int>::max(), std::numeric_limits<int>::max(), 1, 0, 1, 1, 1, geometry_alignment_policy_e::auto_align, overflow_limits)};
+    EXPECT_FALSE(overflow.valid);
+    EXPECT_EQ(overflow.reason, "buffer_size_overflow");
+  }
+
+  /**
+   * @brief Verify retained reuse includes geometry, rational refresh, color, GPU, and source format.
+   */
+  TEST(SteamOSVirtualSessionCore, ComparesCompleteRetainedSessionKey) {
+    using steamos_virtual_session::retained_session_compatible;
+    using steamos_virtual_session::retained_session_key_t;
+
+    const retained_session_key_t retained {
+      .width = 2560,
+      .height = 1600,
+      .refresh = {2997, 25},
+      .hdr = false,
+      .render_node = "/dev/dri/renderD128",
+      .source_identity = "/usr/bin/gamescope",
+      .capture_pixel_format = "NV12",
+    };
+    EXPECT_TRUE(retained_session_compatible(retained, retained));
+    for (auto changed : {
+           retained_session_key_t {retained.width + 2, retained.height, retained.refresh, retained.hdr, retained.render_node, retained.source_identity, retained.capture_pixel_format},
+           retained_session_key_t {retained.width, retained.height, {120, 1}, retained.hdr, retained.render_node, retained.source_identity, retained.capture_pixel_format},
+           retained_session_key_t {retained.width, retained.height, retained.refresh, true, retained.render_node, retained.source_identity, "P010"},
+           retained_session_key_t {retained.width, retained.height, retained.refresh, retained.hdr, "/dev/dri/renderD129", retained.source_identity, retained.capture_pixel_format},
+           retained_session_key_t {retained.width, retained.height, retained.refresh, retained.hdr, retained.render_node, "/opt/gamescope", retained.capture_pixel_format},
+         }) {
+      EXPECT_FALSE(retained_session_compatible(retained, changed));
+    }
+  }
+
+  /**
+   * @brief Verify fitted rectangles and margin input policy preserve source aspect ratio.
+   */
+  TEST(SteamOSVirtualSessionCore, FitsContentAndMapsMargins) {
+    using steamos_virtual_session::fit_content_rectangle;
+    using steamos_virtual_session::map_content_coordinate;
+    using steamos_virtual_session::margin_input_policy_e;
+
+    const auto letterbox {fit_content_rectangle(3440, 1440, 1920, 1080)};
+    EXPECT_EQ(letterbox.x, 0);
+    EXPECT_EQ(letterbox.y, 138);
+    EXPECT_EQ(letterbox.width, 1920);
+    EXPECT_EQ(letterbox.height, 802);
+
+    const auto pillarbox {fit_content_rectangle(1920, 1080, 3440, 1440)};
+    EXPECT_EQ(pillarbox.x, 440);
+    EXPECT_EQ(pillarbox.y, 0);
+    EXPECT_EQ(pillarbox.width, 2560);
+    EXPECT_EQ(pillarbox.height, 1440);
+
+    const auto center {map_content_coordinate(960.0, 539.0, letterbox, margin_input_policy_e::reject)};
+    ASSERT_TRUE(center.accepted);
+    EXPECT_DOUBLE_EQ(center.x, 0.5);
+    EXPECT_DOUBLE_EQ(center.y, 0.5);
+
+    EXPECT_FALSE(map_content_coordinate(960.0, 20.0, letterbox, margin_input_policy_e::reject).accepted);
+    const auto clamped {map_content_coordinate(960.0, 20.0, letterbox, margin_input_policy_e::clamp)};
+    ASSERT_TRUE(clamped.accepted);
+    EXPECT_DOUBLE_EQ(clamped.x, 0.5);
+    EXPECT_DOUBLE_EQ(clamped.y, 0.0);
   }
 
   /**
@@ -124,6 +279,7 @@ namespace {
         .feature_enabled = true,
         .mode = mode,
         .source_policy = source_policy,
+        .prefer_owned_session = false,
         .capturable_output_present = false,
         .retained_owned_session = false,
         .host_supported = true,
@@ -139,6 +295,20 @@ namespace {
     EXPECT_EQ(select_session_route(request).route, session_route_e::attached_existing);
     request.retained_owned_session = true;
     EXPECT_EQ(select_session_route(request).route, session_route_e::attached_existing);
+
+    request.verified_existing_gamescope_present = false;
+    request.retained_owned_session = false;
+    request.prefer_owned_session = true;
+    request.capturable_output_present = true;
+    EXPECT_EQ(select_session_route(request).route, session_route_e::new_owned_private);
+    EXPECT_EQ(select_session_route(request).reason, "application_owned_private");
+    request.retained_owned_session = true;
+    EXPECT_EQ(select_session_route(request).route, session_route_e::retained_owned_private);
+    EXPECT_EQ(select_session_route(request).reason, "application_retained_owned_private");
+    request.retained_owned_session = false;
+    request.host_supported = false;
+    EXPECT_EQ(select_session_route(request).route, session_route_e::reject);
+    EXPECT_EQ(select_session_route(request).reason, "application_owned_private_host_unsupported");
 
     request = input(virtual_display_mode_e::auto_detect, session_source_policy_e::owned_private);
     request.capturable_output_present = true;
@@ -197,6 +367,7 @@ namespace {
       .feature_enabled = true,
       .mode = virtual_display_mode_e::auto_detect,
       .source_policy = session_source_policy_e::auto_select,
+      .prefer_owned_session = false,
       .capturable_output_present = false,
       .retained_owned_session = false,
       .host_supported = true,
@@ -212,6 +383,7 @@ namespace {
       .feature_enabled = true,
       .mode = virtual_display_mode_e::auto_detect,
       .source_policy = session_source_policy_e::auto_select,
+      .prefer_owned_session = false,
       .capturable_output_present = true,
       .retained_owned_session = false,
       .host_supported = true,
@@ -274,7 +446,7 @@ namespace {
    */
   TEST(SteamOSVirtualSessionCore, BuildsGeneralApplicationHeadlessGamescopeCommand) {
     std::string error;
-    const auto arguments {steamos_virtual_session::gamescope_arguments("--backend headless --nested-width --nested-height --nested-refresh --expose-wayland --steam --scaler --hdr-enabled --prefer-vk-device", 2560, 1440, 120, true, "1002:744c", error)};
+    const auto arguments {steamos_virtual_session::gamescope_arguments("--backend headless --nested-width --nested-height --output-width --output-height --nested-refresh --expose-wayland --steam --scaler --hdr-enabled --prefer-vk-device", 2560, 1440, 120, true, "1002:744c", error)};
     EXPECT_TRUE(error.empty());
     const std::vector<std::string> expected {
       "--backend",
@@ -282,6 +454,10 @@ namespace {
       "--nested-width",
       "2560",
       "--nested-height",
+      "1440",
+      "--output-width",
+      "2560",
+      "--output-height",
       "1440",
       "--nested-refresh",
       "120",
@@ -300,7 +476,7 @@ namespace {
    */
   TEST(SteamOSVirtualSessionCore, OmitsSteamControlledFocusForGeneralApplications) {
     std::string error;
-    const auto arguments {steamos_virtual_session::gamescope_arguments("--backend headless --nested-width --nested-height --nested-refresh --expose-wayland --steam", 1920, 1080, 60, false, {}, error)};
+    const auto arguments {steamos_virtual_session::gamescope_arguments("--backend headless --nested-width --nested-height --output-width --output-height --nested-refresh --expose-wayland --steam", 1920, 1080, 60, false, {}, error)};
 
     EXPECT_TRUE(error.empty());
     EXPECT_EQ(std::ranges::find(arguments, "--steam"), arguments.end());
@@ -313,6 +489,15 @@ namespace {
     std::string error;
     EXPECT_TRUE(steamos_virtual_session::gamescope_arguments("--nested-width --nested-height", 1920, 1080, 60, false, {}, error).empty());
     EXPECT_FALSE(error.empty());
+  }
+
+  /**
+   * @brief Verify modern headless Gamescope cannot silently use its 1280x720 output default.
+   */
+  TEST(SteamOSVirtualSessionCore, RejectsModernHeadlessWithoutOutputSizeOptions) {
+    std::string error;
+    EXPECT_TRUE(steamos_virtual_session::gamescope_arguments("--backend headless --nested-width --nested-height --nested-refresh --expose-wayland", 1920, 1080, 60, false, {}, error).empty());
+    EXPECT_EQ(error, "Installed Gamescope does not advertise headless output size options");
   }
 
   /**
@@ -662,6 +847,8 @@ namespace {
     EXPECT_TRUE(steam_session::command_references_steam("steam -tenfoot"));
     EXPECT_TRUE(steam_session::command_references_steam("/usr/bin/steam steam://open/bigpicture"));
     EXPECT_TRUE(steam_session::command_references_steam("xdg-open steam://open/bigpicture"));
+    EXPECT_TRUE(steam_session::command_opens_big_picture("setsid steam steam://open/bigpicture"));
+    EXPECT_FALSE(steam_session::command_opens_big_picture("setsid steam steam://close/bigpicture"));
     EXPECT_FALSE(steam_session::command_references_steam("steamwebhelper --type=renderer"));
     EXPECT_FALSE(steam_session::command_references_steam("/usr/bin/gamescope --steamcompmgr"));
   }

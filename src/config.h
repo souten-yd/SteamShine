@@ -13,6 +13,8 @@
 #include <vector>
 
 // local includes
+#include "codec_policy.h"
+#include "hdr_policy.h"
 #include "nvenc/nvenc_config.h"
 #include "steamos_virtual_session_core.h"
 
@@ -54,6 +56,9 @@ namespace config {
 
     int hevc_mode;  ///< HEVC support mode advertised to clients.
     int av1_mode;  ///< AV1 support mode advertised to clients.
+    codec_policy::policy_e codec_policy {codec_policy::policy_e::automatic};  ///< Administrator codec-selection policy.
+    codec_policy::fallback_e codec_fallback {codec_policy::fallback_e::strict};  ///< Explicit manual-codec fallback behavior.
+    bool codec_allow_software {false};  ///< Permit explicitly requested diagnostic software codec use.
 
     int min_threads;  ///< Minimum number of threads or slices for CPU encoding.
 
@@ -202,7 +207,9 @@ namespace config {
       workarounds_t wa;  ///< Display-device compatibility workarounds.
     } dd;  ///< Display-device integration settings.
 
+    hdr_policy::policy_e steamshine_hdr_policy;  ///< End-to-end HDR selection and fallback policy.
     int max_bitrate;  ///< Maximum bitrate ceiling in kbps for bitrate requested from the client.
+    bool adaptive_bitrate;  ///< Allow bounded runtime video bitrate adaptation from network feedback.
     double minimum_fps_target;  ///< Lowest framerate that will be used when streaming. Range 0-1000, 0 = half of client's requested framerate.
   };
 
@@ -300,6 +307,8 @@ namespace config {
     steamos_virtual_session::virtual_display_mode_e mode {steamos_virtual_session::virtual_display_mode_e::auto_detect};  ///< Virtual display policy parsed once during configuration loading.
     steamos_virtual_session::session_source_policy_e session_source {steamos_virtual_session::session_source_policy_e::auto_select};  ///< Gamescope source selection policy.
     steamos_virtual_session::local_presentation_policy_e local_presentation {steamos_virtual_session::local_presentation_policy_e::auto_select};  ///< Local presentation policy for owned private sessions.
+    steamos_virtual_session::geometry_alignment_policy_e geometry_alignment {steamos_virtual_session::geometry_alignment_policy_e::auto_align};  ///< Odd coded-extent handling policy.
+    steamos_virtual_session::margin_input_policy_e margin_input {steamos_virtual_session::margin_input_policy_e::clamp};  ///< Absolute-input behavior in fitted-output margins.
     bool keep_session_alive {true};  ///< Retain a prepared owned session after Moonlight disconnect.
     int existing_gamescope_pid {0};  ///< Optional administrator-selected resident Gamescope PID; zero selects automatically.
     std::string gamescope_path {"gamescope"};  ///< Gamescope executable used for owned sessions.
@@ -316,6 +325,9 @@ namespace config {
     int default_width {1920};  ///< Fallback virtual display width.
     int default_height {1080};  ///< Fallback virtual display height.
     int default_fps {60};  ///< Fallback virtual display refresh rate.
+    int maximum_frame_pixels {33177600};  ///< Administrator coded-extent ceiling.
+    int maximum_pixel_rate {1990656000};  ///< Administrator/probed pixels-per-second ceiling.
+    int maximum_buffer_megabytes {512};  ///< Conservative capture/encode frame-buffer budget.
     bool cleanup_orphan_sessions {true};  ///< Remove only runtime directories owned by this instance.
   };
 

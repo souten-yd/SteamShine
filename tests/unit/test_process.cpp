@@ -27,6 +27,20 @@ TEST(ProcessCommandSelectionTest, LaunchesConfiguredOwnedVirtualDesktop) {
 }
 
 /**
+ * @brief Verify only the explicit automatic physical-display protocol requests fallback.
+ */
+TEST(ProcessCommandSelectionTest, RecognizesOwnedVirtualDisplayFallbackProtocol) {
+  using steamos_virtual_session::session_origin_e;
+  using steamos_virtual_session::virtual_display_mode_e;
+
+  EXPECT_TRUE(proc::should_retry_owned_virtual_display(75, true, virtual_display_mode_e::auto_detect, session_origin_e::none));
+  EXPECT_FALSE(proc::should_retry_owned_virtual_display(1, true, virtual_display_mode_e::auto_detect, session_origin_e::none));
+  EXPECT_FALSE(proc::should_retry_owned_virtual_display(75, false, virtual_display_mode_e::auto_detect, session_origin_e::none));
+  EXPECT_FALSE(proc::should_retry_owned_virtual_display(75, true, virtual_display_mode_e::off, session_origin_e::none));
+  EXPECT_FALSE(proc::should_retry_owned_virtual_display(75, true, virtual_display_mode_e::auto_detect, session_origin_e::attached_existing));
+}
+
+/**
  * @brief Verify the packaged KDE surface uses Gamescope's cursor-capable XWayland path.
  */
 TEST(ProcessCommandSelectionTest, ConstrainsPackagedVirtualDesktopToXwayland) {
@@ -175,6 +189,32 @@ TEST(ProcessCommandSelectionTest, SelectsOwnedDesktopOnlyForCaptureOnlyApplicati
   EXPECT_FALSE(proc::should_launch_owned_virtual_desktop("", 1, true));
   EXPECT_FALSE(proc::should_launch_owned_virtual_desktop("game --launch", 0, true));
   EXPECT_FALSE(proc::should_launch_owned_virtual_desktop("", 0, false));
+}
+
+/**
+ * @brief Verify Big Picture launch commands request an owned canvas without name matching.
+ */
+TEST(ProcessCommandSelectionTest, PrefersOwnedCanvasForBigPictureLaunch) {
+  proc::ctx_t application {};
+  application.name = "Localized Steam label";
+  application.cmd = "steam steam://open/bigpicture";
+  EXPECT_TRUE(proc::should_prefer_owned_virtual_display(application));
+
+  application.cmd.clear();
+  application.detached = {"setsid steam steam://open/bigpicture"};
+  EXPECT_TRUE(proc::should_prefer_owned_virtual_display(application));
+
+  application.detached = {"game --launch"};
+  EXPECT_FALSE(proc::should_prefer_owned_virtual_display(application));
+
+  application.prep_cmds.emplace_back("xdg-open steam://open/bigpicture", "", false);
+  EXPECT_TRUE(proc::should_prefer_owned_virtual_display(application));
+
+  application.id = "42";
+  boost::process::v1::environment environment;
+  proc::proc_t process_manager {std::move(environment), std::vector<proc::ctx_t> {application}};
+  EXPECT_TRUE(process_manager.prefers_owned_virtual_display(42));
+  EXPECT_FALSE(process_manager.prefers_owned_virtual_display(43));
 }
 
 TEST(ProcessEnvironmentTest, RestoresBaselineBetweenLaunches) {
