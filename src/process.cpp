@@ -72,6 +72,18 @@ namespace proc {
     return owned_virtual_display && app_command.empty() && detached_command_count == 0;
   }
 
+  bool should_prefer_owned_virtual_display(const ctx_t &application) {
+    if (steam_session::command_opens_big_picture(application.cmd)) {
+      return true;
+    }
+    if (std::ranges::any_of(application.detached, steam_session::command_opens_big_picture)) {
+      return true;
+    }
+    return std::ranges::any_of(application.prep_cmds, [](const cmd_t &command) {
+      return steam_session::command_opens_big_picture(command.do_cmd);
+    });
+  }
+
   void reset_launch_environment(
     boost::process::v1::environment &environment,
     const boost::process::v1::environment &baseline
@@ -419,6 +431,13 @@ namespace proc {
     fg.disable();
 
     return 0;
+  }
+
+  bool proc_t::prefers_owned_virtual_display(const int app_id) const {
+    const auto application {std::ranges::find_if(_apps, [app_id](const ctx_t &candidate) {
+      return candidate.id == std::to_string(app_id);
+    })};
+    return application != _apps.end() && should_prefer_owned_virtual_display(*application);
   }
 
   int proc_t::running() {

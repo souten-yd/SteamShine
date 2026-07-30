@@ -10,6 +10,7 @@
 #include <string>
 
 // lib includes
+#include <boost/system/error_code.hpp>
 #include <nlohmann/json.hpp>
 #include <Simple-Web-Server/server_https.hpp>
 
@@ -25,6 +26,14 @@
 namespace confighttp {
   constexpr auto PORT_HTTPS = 1;  ///< GameStream port offset for port https.
   constexpr auto PORT_STEAMSHINE_TERMINAL = 2;  ///< GameStream port offset for the SteamShine Terminal WebSocket.
+
+  /**
+   * @brief Determine whether a non-blocking terminal accept should be retried.
+   *
+   * @param error Error returned by Boost.Asio's TCP accept operation.
+   * @return True only for temporary non-blocking readiness errors.
+   */
+  bool terminal_accept_is_retryable(const boost::system::error_code &error);
 
   // Type aliases for HTTPS server components
   using https_server_t = SimpleWeb::Server<SimpleWeb::HTTPS>;

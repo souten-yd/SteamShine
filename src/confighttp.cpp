@@ -82,6 +82,10 @@ namespace confighttp {
   const web::DiagnosticService diagnostic_service {};  ///< Shared Web diagnostic operations.
   const web::ConfigurationService configuration_service {};  ///< Shared Web configuration operations.
 
+  bool terminal_accept_is_retryable(const boost::system::error_code &error) {
+    return error == boost::asio::error::would_block || error == boost::asio::error::try_again;
+  }
+
   /**
    * @brief HTTPS server type used for Sunshine's configuration UI.
    */
@@ -2969,13 +2973,18 @@ namespace confighttp {
         terminal_acceptor.set_option(boost::asio::ip::tcp::acceptor::reuse_address(true));
         terminal_acceptor.bind(endpoint);
         terminal_acceptor.listen();
+        terminal_acceptor.non_blocking(true);
 
-        while (true) {
+        while (!shutdown_event->peek()) {
           boost::asio::ip::tcp::socket socket {terminal_ioc};
           boost::system::error_code accept_error;
           terminal_acceptor.accept(socket, accept_error);
           if (accept_error) {
-            break;  // Acceptor was closed by stop(), or another fatal error.
+            if (terminal_accept_is_retryable(accept_error)) {
+              shutdown_event->view(50ms);
+              continue;
+            }
+            break;
           }
           std::thread {handle_terminal_ws_connection, std::move(socket), std::ref(terminal_ssl_ctx)}.detach();
         }

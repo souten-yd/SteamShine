@@ -64,6 +64,18 @@ namespace proc {
   bool should_launch_owned_virtual_desktop(std::string_view app_command, std::size_t detached_command_count, bool owned_virtual_display);
 
   /**
+   * @brief Decide whether an application should prefer an owned Gamescope canvas.
+   *
+   * A Big Picture launch needs one stable display endpoint even when a physical
+   * KDE output happens to be capturable. Verified stock Game Mode remains a
+   * higher-priority attached source in the route selector.
+   *
+   * @param application Parsed application configuration.
+   * @return True when any configured launch command opens Steam Big Picture.
+   */
+  bool should_prefer_owned_virtual_display(const struct ctx_t &application);
+
+  /**
    * @brief Restore the immutable application environment before a new launch.
    *
    * @param environment Mutable child-process environment from a preceding launch.
@@ -223,6 +235,14 @@ namespace proc {
      * @return Name of the most recently launched application.
      */
     std::string get_last_run_app_name();
+
+    /**
+     * @brief Report whether one configured application prefers owned Gamescope.
+     *
+     * @param app_id Stable numeric application identifier from GameStream.
+     * @return True when the application exists and opens Steam Big Picture.
+     */
+    bool prefers_owned_virtual_display(int app_id) const;
     /**
      * @brief Terminate the launched application process.
      */

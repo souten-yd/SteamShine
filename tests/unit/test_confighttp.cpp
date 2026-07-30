@@ -1402,3 +1402,12 @@ TEST_F(BrowseDirectoryTest, GetWindowsDrives_EntriesHaveCorrectFormat) {
   }
 }
 #endif
+/**
+ * @brief Verify terminal accept retries only transient non-blocking errors.
+ */
+TEST(ConfigHttpTerminalTest, ClassifiesNonBlockingAcceptErrors) {
+  EXPECT_TRUE(confighttp::terminal_accept_is_retryable(boost::asio::error::would_block));
+  EXPECT_TRUE(confighttp::terminal_accept_is_retryable(boost::asio::error::try_again));
+  EXPECT_FALSE(confighttp::terminal_accept_is_retryable(boost::asio::error::operation_aborted));
+  EXPECT_FALSE(confighttp::terminal_accept_is_retryable({}));
+}

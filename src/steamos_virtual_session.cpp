@@ -1259,7 +1259,7 @@ namespace steamos_virtual_session {
 #endif
   }  // namespace
 
-  bool prepare(const rtsp_stream::launch_session_t &launch_session, std::string &error, const bool force_owned_fallback) {
+  bool prepare(const rtsp_stream::launch_session_t &launch_session, std::string &error, const bool force_owned_fallback, const bool prefer_owned_session) {
     std::scoped_lock lock {manager.mutex};
     manager.migration_required = false;
     manager.app_launch_rejected_reason.clear();
@@ -1372,6 +1372,7 @@ namespace steamos_virtual_session {
       .feature_enabled = config::steamos_virtual_display.enabled,
       .mode = force_owned_fallback ? virtual_display_mode_e::force : config::steamos_virtual_display.mode,
       .source_policy = force_owned_fallback ? session_source_policy_e::owned_private : config::steamos_virtual_display.session_source,
+      .prefer_owned_session = prefer_owned_session,
       .capturable_output_present = capturable_output_present,
       .retained_owned_session = retained_owned_session,
       .host_supported = true,
@@ -1385,6 +1386,7 @@ namespace steamos_virtual_session {
                     << " active_crtc_present=" << (active_crtc_present ? "true" : "false")
                     << " capturable_output_present=" << (capturable_output_present ? "true" : "false")
                     << " retained_owned_session=" << (retained_owned_session ? "true" : "false")
+                    << " prefer_owned_session=" << (prefer_owned_session ? "true" : "false")
                     << " verified_existing_gamescope=" << (verified_existing_gamescope ? "true" : "false");
     if (decision.route == session_route_e::physical_desktop) {
       if (manager.origin != session_origin_e::none) {

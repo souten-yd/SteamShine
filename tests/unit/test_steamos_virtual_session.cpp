@@ -49,7 +49,7 @@ namespace {
     const auto executable {directory / "gamescope"};
     std::ofstream output {executable};
     output << "#!/bin/sh\n";
-    output << "if [ \"$1\" = \"--help\" ]; then echo '--backend headless --nested-width --nested-height --nested-refresh --expose-wayland --steam --scaler --hdr-enabled --prefer-vk-device'; exit 0; fi\n";
+    output << "if [ \"$1\" = \"--help\" ]; then echo '--backend headless --nested-width --nested-height --output-width --output-height --nested-refresh --expose-wayland --steam --scaler --hdr-enabled --prefer-vk-device'; exit 0; fi\n";
     output << "printf '%s\\n' \"$@\" > \"$XDG_RUNTIME_DIR/gamescope-arguments\"\n";
     output << "printf 'runtime=%s\\nremote=%s\\nsession_type=%s\\n' \"$PIPEWIRE_RUNTIME_DIR\" \"$PIPEWIRE_REMOTE\" \"${XDG_SESSION_TYPE-unset}\" > \"$XDG_RUNTIME_DIR/gamescope-pipewire-environment\"\n";
     if (mode == "crash-before-ready") {
@@ -421,9 +421,9 @@ TEST_F(SteamOSVirtualSessionTest, DoesNotCleanOrphansOutsideUserRuntime) {
 
 TEST_F(SteamOSVirtualSessionTest, GamescopeArgumentsUseAdvertisedHeadlessBackendAndFitPolicy) {
   std::string error;
-  const auto arguments {steamos_virtual_session::gamescope_arguments("--backend headless --nested-width --nested-height --nested-refresh --expose-wayland --steam --scaler --hdr-enabled --prefer-vk-device", 2560, 1440, 120, true, "1002:744c", error)};
+  const auto arguments {steamos_virtual_session::gamescope_arguments("--backend headless --nested-width --nested-height --output-width --output-height --nested-refresh --expose-wayland --steam --scaler --hdr-enabled --prefer-vk-device", 2560, 1440, 120, true, "1002:744c", error)};
   ASSERT_TRUE(error.empty());
-  EXPECT_EQ(arguments, (std::vector<std::string> {"--backend", "headless", "--nested-width", "2560", "--nested-height", "1440", "--nested-refresh", "120", "--expose-wayland", "--scaler", "fit", "--hdr-enabled", "--prefer-vk-device", "1002:744c"}));
+  EXPECT_EQ(arguments, (std::vector<std::string> {"--backend", "headless", "--nested-width", "2560", "--nested-height", "1440", "--output-width", "2560", "--output-height", "1440", "--nested-refresh", "120", "--expose-wayland", "--scaler", "fit", "--hdr-enabled", "--prefer-vk-device", "1002:744c"}));
 }
 
 TEST_F(SteamOSVirtualSessionTest, GamescopeArgumentsRejectMissingHeadlessBackend) {

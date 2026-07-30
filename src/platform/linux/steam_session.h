@@ -126,6 +126,14 @@ namespace steam_session {
   bool command_references_steam(std::string_view command);
 
   /**
+   * @brief Determine whether a command asks Steam to enter Big Picture mode.
+   *
+   * @param command Configured application, prep, or detached command.
+   * @return True when the command contains the canonical Big Picture open URI.
+   */
+  bool command_opens_big_picture(std::string_view command);
+
+  /**
    * @brief Determine whether a command asks Steam to leave Big Picture mode.
    *
    * @param command Configured application or undo command.

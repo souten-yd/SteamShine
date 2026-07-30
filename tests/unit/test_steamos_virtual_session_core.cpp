@@ -279,6 +279,7 @@ namespace {
         .feature_enabled = true,
         .mode = mode,
         .source_policy = source_policy,
+        .prefer_owned_session = false,
         .capturable_output_present = false,
         .retained_owned_session = false,
         .host_supported = true,
@@ -294,6 +295,20 @@ namespace {
     EXPECT_EQ(select_session_route(request).route, session_route_e::attached_existing);
     request.retained_owned_session = true;
     EXPECT_EQ(select_session_route(request).route, session_route_e::attached_existing);
+
+    request.verified_existing_gamescope_present = false;
+    request.retained_owned_session = false;
+    request.prefer_owned_session = true;
+    request.capturable_output_present = true;
+    EXPECT_EQ(select_session_route(request).route, session_route_e::new_owned_private);
+    EXPECT_EQ(select_session_route(request).reason, "application_owned_private");
+    request.retained_owned_session = true;
+    EXPECT_EQ(select_session_route(request).route, session_route_e::retained_owned_private);
+    EXPECT_EQ(select_session_route(request).reason, "application_retained_owned_private");
+    request.retained_owned_session = false;
+    request.host_supported = false;
+    EXPECT_EQ(select_session_route(request).route, session_route_e::reject);
+    EXPECT_EQ(select_session_route(request).reason, "application_owned_private_host_unsupported");
 
     request = input(virtual_display_mode_e::auto_detect, session_source_policy_e::owned_private);
     request.capturable_output_present = true;
@@ -352,6 +367,7 @@ namespace {
       .feature_enabled = true,
       .mode = virtual_display_mode_e::auto_detect,
       .source_policy = session_source_policy_e::auto_select,
+      .prefer_owned_session = false,
       .capturable_output_present = false,
       .retained_owned_session = false,
       .host_supported = true,
@@ -367,6 +383,7 @@ namespace {
       .feature_enabled = true,
       .mode = virtual_display_mode_e::auto_detect,
       .source_policy = session_source_policy_e::auto_select,
+      .prefer_owned_session = false,
       .capturable_output_present = true,
       .retained_owned_session = false,
       .host_supported = true,
@@ -429,7 +446,7 @@ namespace {
    */
   TEST(SteamOSVirtualSessionCore, BuildsGeneralApplicationHeadlessGamescopeCommand) {
     std::string error;
-    const auto arguments {steamos_virtual_session::gamescope_arguments("--backend headless --nested-width --nested-height --nested-refresh --expose-wayland --steam --scaler --hdr-enabled --prefer-vk-device", 2560, 1440, 120, true, "1002:744c", error)};
+    const auto arguments {steamos_virtual_session::gamescope_arguments("--backend headless --nested-width --nested-height --output-width --output-height --nested-refresh --expose-wayland --steam --scaler --hdr-enabled --prefer-vk-device", 2560, 1440, 120, true, "1002:744c", error)};
     EXPECT_TRUE(error.empty());
     const std::vector<std::string> expected {
       "--backend",
@@ -437,6 +454,10 @@ namespace {
       "--nested-width",
       "2560",
       "--nested-height",
+      "1440",
+      "--output-width",
+      "2560",
+      "--output-height",
       "1440",
       "--nested-refresh",
       "120",
@@ -455,7 +476,7 @@ namespace {
    */
   TEST(SteamOSVirtualSessionCore, OmitsSteamControlledFocusForGeneralApplications) {
     std::string error;
-    const auto arguments {steamos_virtual_session::gamescope_arguments("--backend headless --nested-width --nested-height --nested-refresh --expose-wayland --steam", 1920, 1080, 60, false, {}, error)};
+    const auto arguments {steamos_virtual_session::gamescope_arguments("--backend headless --nested-width --nested-height --output-width --output-height --nested-refresh --expose-wayland --steam", 1920, 1080, 60, false, {}, error)};
 
     EXPECT_TRUE(error.empty());
     EXPECT_EQ(std::ranges::find(arguments, "--steam"), arguments.end());
@@ -468,6 +489,15 @@ namespace {
     std::string error;
     EXPECT_TRUE(steamos_virtual_session::gamescope_arguments("--nested-width --nested-height", 1920, 1080, 60, false, {}, error).empty());
     EXPECT_FALSE(error.empty());
+  }
+
+  /**
+   * @brief Verify modern headless Gamescope cannot silently use its 1280x720 output default.
+   */
+  TEST(SteamOSVirtualSessionCore, RejectsModernHeadlessWithoutOutputSizeOptions) {
+    std::string error;
+    EXPECT_TRUE(steamos_virtual_session::gamescope_arguments("--backend headless --nested-width --nested-height --nested-refresh --expose-wayland", 1920, 1080, 60, false, {}, error).empty());
+    EXPECT_EQ(error, "Installed Gamescope does not advertise headless output size options");
   }
 
   /**
@@ -817,6 +847,8 @@ namespace {
     EXPECT_TRUE(steam_session::command_references_steam("steam -tenfoot"));
     EXPECT_TRUE(steam_session::command_references_steam("/usr/bin/steam steam://open/bigpicture"));
     EXPECT_TRUE(steam_session::command_references_steam("xdg-open steam://open/bigpicture"));
+    EXPECT_TRUE(steam_session::command_opens_big_picture("setsid steam steam://open/bigpicture"));
+    EXPECT_FALSE(steam_session::command_opens_big_picture("setsid steam steam://close/bigpicture"));
     EXPECT_FALSE(steam_session::command_references_steam("steamwebhelper --type=renderer"));
     EXPECT_FALSE(steam_session::command_references_steam("/usr/bin/gamescope --steamcompmgr"));
   }

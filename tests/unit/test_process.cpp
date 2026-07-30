@@ -191,6 +191,32 @@ TEST(ProcessCommandSelectionTest, SelectsOwnedDesktopOnlyForCaptureOnlyApplicati
   EXPECT_FALSE(proc::should_launch_owned_virtual_desktop("", 0, false));
 }
 
+/**
+ * @brief Verify Big Picture launch commands request an owned canvas without name matching.
+ */
+TEST(ProcessCommandSelectionTest, PrefersOwnedCanvasForBigPictureLaunch) {
+  proc::ctx_t application {};
+  application.name = "Localized Steam label";
+  application.cmd = "steam steam://open/bigpicture";
+  EXPECT_TRUE(proc::should_prefer_owned_virtual_display(application));
+
+  application.cmd.clear();
+  application.detached = {"setsid steam steam://open/bigpicture"};
+  EXPECT_TRUE(proc::should_prefer_owned_virtual_display(application));
+
+  application.detached = {"game --launch"};
+  EXPECT_FALSE(proc::should_prefer_owned_virtual_display(application));
+
+  application.prep_cmds.emplace_back("xdg-open steam://open/bigpicture", "", false);
+  EXPECT_TRUE(proc::should_prefer_owned_virtual_display(application));
+
+  application.id = "42";
+  boost::process::v1::environment environment;
+  proc::proc_t process_manager {std::move(environment), std::vector<proc::ctx_t> {application}};
+  EXPECT_TRUE(process_manager.prefers_owned_virtual_display(42));
+  EXPECT_FALSE(process_manager.prefers_owned_virtual_display(43));
+}
+
 TEST(ProcessEnvironmentTest, RestoresBaselineBetweenLaunches) {
   boost::process::v1::environment baseline;
   baseline["STEAMSHINE_PROCESS_TEST_BASELINE"] = "configured";

@@ -280,6 +280,15 @@ namespace steamos_virtual_session {
     if (input.source_policy == session_source_policy_e::existing_gamescope) {
       return {session_route_e::reject, "existing_gamescope_unavailable"};
     }
+    if (input.prefer_owned_session) {
+      if (input.retained_owned_session) {
+        return {session_route_e::retained_owned_private, "application_retained_owned_private"};
+      }
+      return {
+        input.host_supported ? session_route_e::new_owned_private : session_route_e::reject,
+        input.host_supported ? "application_owned_private" : "application_owned_private_host_unsupported"
+      };
+    }
     if (input.capturable_output_present) {
       return {session_route_e::physical_desktop, "capturable_output_present"};
     }
@@ -515,7 +524,12 @@ namespace steamos_virtual_session {
       return {};
     }
     std::vector<std::string> arguments;
-    if (has_option("--backend") && help_text.find("headless") != std::string::npos) {
+    const bool modern_headless {has_option("--backend") && help_text.find("headless") != std::string::npos};
+    if (modern_headless) {
+      if (!has_option("--output-width") || !has_option("--output-height")) {
+        error = "Installed Gamescope does not advertise headless output size options";
+        return {};
+      }
       arguments.emplace_back("--backend");
       arguments.emplace_back("headless");
     } else if (has_option("--headless")) {
@@ -528,6 +542,12 @@ namespace steamos_virtual_session {
     arguments.emplace_back(std::to_string(width));
     arguments.emplace_back("--nested-height");
     arguments.emplace_back(std::to_string(height));
+    if (modern_headless) {
+      arguments.emplace_back("--output-width");
+      arguments.emplace_back(std::to_string(width));
+      arguments.emplace_back("--output-height");
+      arguments.emplace_back(std::to_string(height));
+    }
     arguments.emplace_back("--nested-refresh");
     arguments.emplace_back(std::to_string(fps));
     arguments.emplace_back("--expose-wayland");

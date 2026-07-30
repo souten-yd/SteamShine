@@ -137,9 +137,10 @@ namespace steamos_virtual_session {
    * @param launch_session Moonlight request containing width, height, FPS, and HDR intent.
    * @param error Human-readable failure reason for the GameStream response.
    * @param force_owned_fallback Force an owned private canvas after physical-mode preparation fails.
+   * @param prefer_owned_session Prefer an owned canvas for the selected application while retaining verified Game Mode attachment.
    * @return True only after a Wayland readiness signal is observed.
    */
-  bool prepare(const rtsp_stream::launch_session_t &launch_session, std::string &error, bool force_owned_fallback = false);
+  bool prepare(const rtsp_stream::launch_session_t &launch_session, std::string &error, bool force_owned_fallback = false, bool prefer_owned_session = false);
 
   /**
    * @brief Report whether SteamOS virtual-display capture is enabled.

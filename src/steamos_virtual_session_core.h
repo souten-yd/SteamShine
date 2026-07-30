@@ -157,6 +157,7 @@ namespace steamos_virtual_session {
     bool feature_enabled;  ///< Whether the SteamOS virtual-display feature is enabled.
     virtual_display_mode_e mode;  ///< Requested virtual-display policy.
     session_source_policy_e source_policy;  ///< Configured Gamescope source policy.
+    bool prefer_owned_session;  ///< Whether the selected application prefers an owned canvas over physical Desktop.
     bool capturable_output_present;  ///< Whether a normal capture target is available.
     bool retained_owned_session;  ///< Whether SteamShine owns a compatible retained session.
     bool host_supported;  ///< Whether the host can create an owned Gamescope session.
@@ -174,9 +175,11 @@ namespace steamos_virtual_session {
   /**
    * @brief Select the capture route for one launch from current observations.
    *
-   * Automatic policy always prefers a verified stock Game Mode source, then a
-   * capturable physical Desktop, then a compatible retained owned source, and
-   * finally a new owned source. Explicit source policies remain authoritative.
+   * Automatic policy always prefers a verified stock Game Mode source. A
+   * Big Picture application preference then selects compatible retained or new
+   * owned Gamescope before physical Desktop. Other applications retain the
+   * PR #12 order: physical Desktop, retained owned, then new owned. Explicit
+   * source policies remain authoritative.
    *
    * @param input Immutable policy and host-observation inputs.
    * @return Deterministic route and diagnostic reason.
@@ -464,8 +467,12 @@ namespace steamos_virtual_session {
    * applications without a Steam AppID remain eligible for focus and capture.
    *
    * @param help_text Output captured from `gamescope --help`.
-   * @param width Normalized nested display width.
-   * @param height Normalized nested display height.
+   * Modern headless Gamescope receives both nested game dimensions and output
+   * canvas dimensions. Omitting the latter silently selects its 1280x720
+   * default and forces an unintended encode upscale.
+   *
+   * @param width Normalized nested and output-canvas width.
+   * @param height Normalized nested and output-canvas height.
    * @param fps Normalized nested display refresh rate.
    * @param enable_hdr Whether the client requested HDR output.
    * @param gpu_device PCI vendor/device identifier accepted by Gamescope, if selected.
