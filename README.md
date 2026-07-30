@@ -1,57 +1,72 @@
 <div align="center">
-  <img src="steamshine.png" alt="SteamShine" width="160" />
+  <img src="steamshine.png" alt="SteamShine" width="150" />
   <h1>SteamShine</h1>
-  <p><strong>A game-streaming host for SteamOS that doesn't need a monitor attached.</strong></p>
+  <p><strong>Your Steam Deck, running headless, streaming at <em>your</em> screen's resolution.</strong></p>
   <p>
     <img alt="Platform" src="https://img.shields.io/badge/platform-SteamOS%20%2F%20Linux-1b1b1f" />
     <img alt="GPU" src="https://img.shields.io/badge/GPU-AMD-1b1b1f" />
     <img alt="Clients" src="https://img.shields.io/badge/clients-Moonlight%20%2F%20Artemis-1b1b1f" />
+    <img alt="Install" src="https://img.shields.io/badge/install-no%20sudo-1b1b1f" />
     <img alt="License" src="https://img.shields.io/badge/license-GPL--3.0-1b1b1f" />
   </p>
 </div>
 
 ---
 
-## What it is
+No monitor. No dummy HDMI plug. No `sudo`. Close the lid on your Deck, pick it up in Moonlight from
+the couch, and the game starts in a display that was created *for the device in your hands* — the
+right resolution, the right refresh rate, encoded on the GPU and never drawn on a physical panel.
 
-SteamShine is a self-hosted game-stream host, compatible with [Moonlight](https://moonlight-stream.org/)
-and Artemis clients. It's a fork of [Sunshine](https://github.com/LizardByte/Sunshine) reworked around
-one specific machine: **a Steam Deck or SteamOS box acting as a headless streaming console.**
-
-If you've tried to use a Deck (or any SteamOS machine) as a stream host, you already know the two
-annoyances. Without a monitor or a dummy HDMI plug, there's often nothing to capture. And when there
-*is* a display, you stream at *its* resolution rather than your client's — so a tablet gets a
-letterboxed Deck screen, and a 4K TV gets an upscaled one.
-
-SteamShine addresses both, and adds a control panel you can drive from the phone or tablet you're
-about to play on.
+SteamShine is a fork of [Sunshine](https://github.com/LizardByte/Sunshine) rebuilt around one machine:
+**a SteamOS box acting as a headless streaming console.**
 
 ---
 
-## Why you might like it
+## 60 seconds to your first stream
 
-- **No monitor, no dummy plug.** SteamShine can build the display it streams from, in memory.
-- **The session matches your client.** Your handheld asks for 3040×1904 at 90 Hz; that's the display
-  the game actually runs on — not a rescale of something else.
-- **It won't fight with Game Mode.** If Steam is already running in Game Mode, SteamShine attaches to
-  that session and streams it. It never terminates a session it doesn't own.
-- **A control panel built for a touchscreen.** Live telemetry, GPU power profiles, pairing, apps, and
-  a real shell — in a dark, single-column layout that works on a phone held one-handed.
-- **Everything stays in your home directory.** The SteamOS installer writes only under `~/.local` and
-  `~/.config`. No `sudo`, no `pacman`, and SteamOS read-only mode is never disabled.
-- **It's still Sunshine underneath.** Pairing, transport, encoders, and the original web UI all work
-  the way you expect.
+```bash
+./steamshine.sh install     # download the verified release, install, autostart, and run
+```
+
+Then open **`https://<host>:47990/steamshine/`** on the phone, tablet or TV you're about to play on,
+create your login, and enter the PIN from the **Pin** page into Moonlight.
+
+That's it. No compiler, no package manager, nothing outside your home directory.
+
+```bash
+./steamshine.sh status      # is it running?
+./steamshine.sh logs        # what did it say?
+./steamshine.sh diagnose    # something's off — start here
+```
+
+Run `./steamshine.sh` with no arguments for a menu instead.
 
 ---
 
-## The virtual display, in plain terms
+## Why this instead of stock Sunshine
+
+|  | Sunshine | SteamShine |
+| --- | --- | --- |
+| Needs a display or dummy plug | Yes | **No** — it can build the display in memory |
+| Session resolution | Whatever the real screen is | **Exactly what your client asked for** |
+| Steam already in Game Mode | Captures the panel | **Attaches to that session** and streams it |
+| Install on SteamOS | Package manager, unlock the FS | **`~/.local` only** — no `sudo`, no `pacman`, FS stays read-only |
+| Control from a phone | Desktop web UI | **Touch-first panel** with live telemetry, GPU profiles, and a shell |
+| Connection tuning | Fixed bitrate + FEC | **Adaptive bitrate, frame pacing, per-client profiles, loss diagnostics** |
+
+Everything Sunshine already did well — pairing, transport, gamepad emulation, audio, the original web
+UI — is still here and still works the way you expect.
+
+---
+
+## The virtual display
 
 This is the heart of the fork, and it's simpler than the name suggests.
 
 A streaming host normally captures whatever is on a real screen. SteamShine can instead start a
 **private Gamescope session** — a compositor with no monitor behind it — created at exactly the size
 and refresh rate your client asked for. The game runs in there, frames go straight to the GPU encoder
-without ever being drawn on a physical panel, and Moonlight receives them.
+without ever touching a physical panel, and Moonlight receives them.
 
 ```
    Moonlight asks for 1920×1080 @ 60
@@ -69,165 +84,145 @@ without ever being drawn on a physical panel, and Moonlight receives them.
         Moonlight / Artemis
 ```
 
-You choose the policy; the default is the middle one:
+Two dials, and the defaults are the ones you want:
 
-| Mode | What happens |
+| `steamos_virtual_display_mode` | What happens |
 | --- | --- |
-| `off` | Behaves like stock Sunshine. Captures a real display. |
-| `auto` | Uses a real display when one is genuinely capturable; otherwise creates the private session. |
-| `force` | Always uses a private session, even with a monitor plugged in. Never falls back. |
+| `off` | Stock Sunshine behaviour. Captures a real display. |
+| **`auto`** *(default)* | Real display when one is genuinely capturable; otherwise a private session. |
+| `force` | Always private, even with a monitor plugged in. Never falls back. |
 
-And you choose where that session comes from:
-
-| Source | What happens |
+| `steamos_session_source` | What happens |
 | --- | --- |
-| `auto` | Attach to a verified Game Mode session if there is one, otherwise create a private one. |
+| **`auto`** *(default)* | Attach to a verified Game Mode session if there is one, otherwise create a private one. |
 | `existing_gamescope` | Only ever attach to the running Game Mode session. |
 | `owned_private` | Always create a fresh private session. |
 
-A few behaviours worth knowing, because they're the ones that bite:
+Requests from 640×480 to 7680×4320 and 30–240 Hz are negotiated, with exact rational refresh handling
+(59.94 is not silently rounded to 60), and **HDR10 carries through** the headless session to the
+client. If a screen *is* attached, an owned session can be mirrored to it so you can watch locally
+what the remote client sees.
 
-- **Attached is not owned.** When SteamShine attaches to your Game Mode session, it never signals that
-  process or removes its runtime directory. Only sessions it created itself are ever torn down.
-- **A brief disconnect doesn't kill your game.** By default the session is retained so Moonlight's
-  resume lands you back where you were. Turn `steamos_keep_session_alive` off if you'd rather it stop.
-- **Steam stays a single instance.** If Steam is already running outside the session SteamShine owns,
-  launch requests that would start a second copy are refused with an explanation instead of quietly
-  creating a mess. SteamShine will never stop your Steam for you.
-- **It fails closed, on purpose.** If the private session's socket goes missing mid-stream, capture
-  stops. It does not silently reconnect to your desktop and start broadcasting that instead.
-- **Optional local mirror.** If a screen *is* attached, an owned session can be mirrored to it, so you
-  can see on the Deck what the remote client sees.
+---
+
+## Connection quality and stability
+
+A stream that looks great for ten seconds and then falls apart is worse than one that never wobbles.
+This is where most of the recent work went.
+
+- **Adaptive bitrate that doesn't oscillate.** A fixed-memory controller samples every 500 ms and
+  decides every 2 s, using real client loss and sender-queue pressure. Cuts are bounded (20% / 10%),
+  recovery is gentle (5%), and hysteresis plus an IDR/reconnect cooldown stop it from hunting. It
+  adjusts the running encoder — no recreation, no stall.
+- **It remembers what worked.** The learned rate is written back into that client's profile, so the
+  *next* session starts where the last one settled instead of ramping from scratch.
+- **Nothing queues up behind you.** Input, capture, encoder and network queues are all bounded and
+  latest-frame-wins. Under pressure you lose a frame, not half a second of latency.
+- **Frames land on a clock.** Rational FPS scheduling against monotonic deadlines, with bounded
+  duplicate output and per-stage interarrival statistics. A measured 60 FPS session runs ~59 FPS with
+  p99 encode interarrival near 18 ms.
+- **You can see the loss, per frame.** SteamShine parses Moonlight's per-frame FEC status reports —
+  data and parity packets sent versus received, holes before the highest sequence number, block index.
+  Guessing about "it felt laggy" is optional now.
+- **When it drops, it tells you why.** Every teardown records its first cause: control ping timeout,
+  protocol error, the client never establishing its video or audio endpoint, remote disconnect, local
+  cleanup, service shutdown. Addresses are classified by scope (including carrier-grade NAT and
+  overlay ranges) without pretending to know your network topology.
+- **A blip doesn't kill your game.** By default an owned session is retained across a disconnect, so
+  Moonlight's resume lands you back exactly where you were.
+- **Per-client, per-network profiles.** Save one profile per paired client *and* network class — LAN,
+  Wi-Fi, overlay VPN — covering geometry, FPS ceiling, codec, HDR, bitrate ceiling, quality preset,
+  orientation and safe area. You choose the network class explicitly; SteamShine never guesses it from
+  an IP address, and a changed client capability signature always wins over a saved preference.
+- **Record what was actually sent.** The Stream page can capture the exact encoded video that went to
+  the client, into a bounded capacity you set. No second encoder, no extra load — just the bitstream,
+  for when you want to prove what happened.
+- **Codecs are probed, not assumed.** H.264, HEVC and AV1 are advertised only after the host actually
+  opens them, filtered through geometry, bit depth, latency and policy gates — with the reason visible
+  when something is refused.
+- **HDR10, end to end.** `off` / `auto` / `require` policy, with the requested dynamic range kept
+  separate from the selected bit depth so you can always see what was asked for versus what was sent.
+  Client, source, display, capture, metadata, conversion, encoder and signalling are each gated
+  explicitly, and an unsafe late fallback fails closed rather than quietly handing you Main10 SDR and
+  calling it HDR.
+
+The **Stream** page shows all of it live in four honest stages — *Requested* (what the client asked
+for), *Selected* (what SteamShine chose, and why), *Active* (what the capture and encoder are really
+doing), *Observed* (FPS, queues, latency) — polling every 2 s without ever owning the media path.
 
 ---
 
 ## The control panel
 
-The original Sunshine web UI is still there and unchanged. SteamShine adds a second one at
+The original Sunshine web UI is still there, unchanged. SteamShine adds a second one at
 `https://<host>:47990/steamshine/`, designed for the device in your hands rather than a desktop browser.
 
 | Page | What it does |
 | --- | --- |
 | **Monitor** | CPU, RAM, GPU and VRAM tiles with rolling sparklines, per-core bars, load average and uptime, plus GPU hotspot, fan RPM and power draw against its cap. Refreshes every 2 s. |
+| **Stream** | The four-stage negotiation view above, per-client profiles, and sender recording. |
 | **Apps** | The list Moonlight clients can launch — add, edit, delete, and stop whatever is running now. |
-| **GPU** | AMD power profiles. Four built-ins (Silent / Balanced / Performance / OC) scaled from what your hardware actually reports, plus custom profiles: power limit, CPU governor and max clock, and GPU clock/voltage offsets where the driver exposes them. |
-| **Settings** | The handful of options people actually change, plus a **Virtual display** page for the policies above. |
-| **Pin** | Four-digit Moonlight pairing. |
-| **Clients** | Paired clients, and revoking them. |
+| **GPU** | AMD power profiles. Four built-ins (Silent / Balanced / Performance / OC) scaled from what your hardware actually reports, plus custom power limit, CPU governor and clock, and GPU clock/voltage offsets where the driver exposes them. |
+| **Settings** | The handful of options people actually change, plus a **Virtual display** page. |
+| **Pin** / **Clients** | Four-digit pairing, and revoking clients you've paired. |
 | **Terminal** | A real shell on the host, in the browser, over its own WebSocket. |
 
-Telemetry is read straight from `/proc` and `/sys` — no `amd-smi` or `sensors` subprocess is spawned
-every second, and simply having the panel open creates no extra capture or encoder session. The
-control plane is deliberately kept out of the video path: if the web server stalls, the stream doesn't.
-
-The panel has its own login, session cookie and CSRF tokens. It can be turned off entirely
-(`steamshine_web_ui_enabled`) or promoted to the root URL (`steamshine_web_ui_default`); configuration
-validation won't let you disable both UIs and lock yourself out.
-
-**Two features deserve a straight word.** The GPU page writes to root-owned sysfs files, which it does
-by raising a single capability (`CAP_DAC_OVERRIDE`) around each individual write and dropping it
-immediately after — against an allow-list of paths resolved from real sysfs enumeration, with every
-value clamped to the range the hardware reports. The Terminal is a genuine shell running as the same
-unprivileged user as the service: convenient, and roughly equivalent to leaving SSH open. Both sit
-behind the same authentication as everything else, but decide for yourself whether you want them
-reachable on your network.
+Telemetry is read straight from `/proc` and `/sys` — no `amd-smi` or `sensors` subprocess spawned
+every second, and having the panel open creates no extra capture or encoder session. The control
+plane is deliberately kept out of the video path: **if the web server stalls, the stream doesn't.**
 
 ---
 
-## What comes from Sunshine
+## Safe by default
 
-The parts that aren't SteamOS-specific are Sunshine's, and they work as they always have: Moonlight
-pairing and transport, gamepad emulation, audio, HDR signalling, the configuration store, and the
-original web UI. On the SteamOS path, encoding uses **Vulkan Video** (H.264, HEVC, AV1) or **VA-API**
-on your AMD GPU, importing DMA-BUF frames directly rather than copying through system memory.
+The parts worth knowing before you put this on your network:
 
-A few streaming-side additions live here too: bounded input, capture, encoder and network queues that
-keep the newest work rather than growing a latency backlog; input routed into the Gamescope session
-over EIS/libei so it lands in the game and not on your desktop; and a packaged
-`Input Latency Visualizer` app for measuring end-to-end responsiveness yourself.
+- **It never touches what it doesn't own.** When SteamShine attaches to your Game Mode session, it
+  never signals that process or removes its runtime directory. Only sessions it created are torn down.
+  It will never stop your Steam for you, and it refuses launches that would start a second Steam
+  instance instead of quietly making a mess.
+- **It fails closed.** If a private session's socket disappears mid-stream, capture stops. It does not
+  silently reconnect to your desktop and start broadcasting that instead.
+- **Your system stays yours.** The installer writes only under `~/.local`, `~/.config/steamshine`,
+  `~/.local/state/steamshine` and `~/.cache/steamshine`. No `sudo`, no `pacman`, SteamOS read-only
+  mode is never disabled, and login lingering is deliberately not enabled. `uninstall` removes only
+  what it created.
+- **Releases are verified, not trusted.** `install` fetches the SteamOS x86_64 archive and its SHA-256
+  from this repo's latest GitHub Release, checks the asset shape and checksum, rejects unsafe or
+  linked archive entries, and installs through an immutable version store. Repeat installs are
+  idempotent and the previous version stays available for `./steamshine.sh rollback`.
+- **The panel is locked down.** Its own login with throttling, session cookies, CSRF tokens and a CSP.
+  Config validation won't let you disable both UIs and lock yourself out. Profiles are stored
+  owner-readable-only and replaced atomically.
+- **Two features deserve a straight word.** The **GPU** page writes to root-owned sysfs, which it does
+  by raising a single capability (`CAP_DAC_OVERRIDE`) around each individual write and dropping it
+  immediately after — against an allow-list resolved from real sysfs enumeration, with every value
+  clamped to the range the hardware reports. The **Terminal** is a genuine shell running as the same
+  unprivileged user as the service: convenient, and roughly equivalent to leaving SSH open. Both sit
+  behind the same authentication as everything else, but decide for yourself whether you want them
+  reachable on your network. The panel can be turned off entirely with `steamshine_web_ui_enabled`.
 
 ---
 
 ## Requirements
 
-- **SteamOS 3.8, or a comparable Arch-based Linux**, on x86_64. SteamOS 3.8.16 is the measured baseline.
-- **An AMD GPU.** Capture, encode and the GPU profile page are all built around `amdgpu`.
-- **Gamescope** with `--backend headless` and `--prefer-vk-device` (SteamOS 3.8 ships this), and
+- **SteamOS 3.8**, or a comparable Arch-based Linux, on x86_64. SteamOS 3.8.16 is the measured baseline.
+- **An AMD GPU.** Capture, encode and the GPU page are all built around `amdgpu`.
+- **Gamescope** (with `--backend headless` and `--prefer-vk-device`, which SteamOS 3.8 ships) and
   **PipeWire**, for the virtual display. Without them the rest still runs.
 - **A Moonlight or Artemis client** on whatever you plan to play on.
 
-`./steamshine.sh compatibility-check` verifies all of the above, and is worth running after any
-SteamOS update.
+`./steamshine.sh compatibility-check` verifies all of the above — worth running after any SteamOS update.
 
 ---
 
-## Getting started
+## The settings that matter
 
-Everything is driven by one script. Run it with no arguments in a terminal and it opens a menu.
-
-```bash
-./steamshine.sh install     # download the latest GitHub release, install, and start automatically
-./steamshine.sh start
-./steamshine.sh status
-./steamshine.sh logs
-```
-
-`install` applies the recommended virtual-display settings (`enabled=true`, display mode `auto`, and
-session source `auto`), enables the systemd user service at login, and starts it immediately. It
-preserves unrelated Sunshine settings and keeps the original configuration at
-`~/.config/steamshine/backups/sunshine.conf.before-recommended-settings`. Repeated installation is
-safe. Use `--no-start` to install and enable autostart without starting the service in the current
-session, or `--no-service` to omit unit creation, enablement, and startup entirely.
-
-```bash
-./steamshine.sh install
-./steamshine.sh status                         # confirm that the service is running
-./steamshine.sh autostart-status               # inspect unit, process, binary, and boot health
-./steamshine.sh check                          # check the host environment
-./steamshine.sh compatibility-check            # check SteamOS and Gamescope compatibility
-./steamshine.sh logs                           # show recent service logs
-./steamshine.sh restart                        # restart and retain autostart
-./steamshine.sh uninstall                      # remove it and disable autostart; keep configuration
-```
-
-Then open `https://<host>:47990/steamshine/`, create your login, and pair your client from the **Pin**
-page.
-
-On SteamOS the recommended install uses a prebuilt CI artifact, so no compiler or build tooling is
-needed on the Deck itself:
-
-```bash
-./steamshine.sh install
-```
-
-With no artifact-selection option, `install` queries this repository's latest GitHub Release,
-downloads the single SteamOS x86_64 archive and its matching SHA-256 file into
-`~/.cache/steamshine/releases`, verifies both the release asset shape and checksum, then installs
-through the same immutable version store. `-a` and `--latest-release` remain accepted as compatibility
-aliases but are no longer required.
-
-The installer verifies the archive checksum, rejects unsafe or linked archive entries, and writes only
-under `~/.local`, `~/.config/steamshine`, `~/.local/state/steamshine` and `~/.cache/steamshine`.
-Repeat installs are idempotent, the previous version is kept for `./steamshine.sh rollback`, and
-`uninstall` removes only what it created.
-
-The installer atomically writes `~/.config/systemd/user/steamshine.service`, reloads the user manager,
-and enables it for `default.target`. SteamOS starts that target when the Game Mode login creates the
-user manager, so neither Desktop Autostart nor `sudo` is involved. The unit supplies `%t` as the core
-runtime, PipeWire, and D-Bus location; display-specific values are discovered later and are not
-hard-coded startup dependencies. The installer deliberately does not enable login lingering.
-
-Other useful commands: `check`, `compatibility-check`, `build`, `configure`, `restart`, `diagnose`,
-`autostart-status`, `update`, `repair`, `rollback`, `hardware-test`. Every modifying command accepts
-`--dry-run`.
-
-### The settings that matter
-
-Set these in your Sunshine config file, or from the panel's **Virtual display** page:
+Set these from the panel's **Virtual display** page, or in your Sunshine config file:
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `steamos_virtual_display_enabled` | `true` from `steamshine.sh install` | Master switch for everything above. The application-level fallback is `false`. |
+| `steamos_virtual_display_enabled` | `true` after `install` | Master switch for everything above. |
 | `steamos_virtual_display_mode` | `auto` | `off` / `auto` / `force`. |
 | `steamos_session_source` | `auto` | `auto` / `existing_gamescope` / `owned_private`. |
 | `steamos_local_presentation` | `auto` | Mirror an owned session to an attached screen. |
@@ -236,10 +231,12 @@ Set these in your Sunshine config file, or from the panel's **Virtual display** 
 | `steamshine_web_ui_default` | `false` | Put the panel at `/` instead of Sunshine's UI. |
 
 GPU selection (`steamos_game_gpu`, `steamos_capture_gpu`, `steamos_encoder_gpu`), the Gamescope path,
-timeouts and default display size are configurable too; see
-[docs/STEAMOS_AUTO_VIRTUAL_DISPLAY_IMPLEMENTATION.md](docs/STEAMOS_AUTO_VIRTUAL_DISPLAY_IMPLEMENTATION.md)
-for the full list. Left blank, GPU selection picks the AMD render node with the most dedicated VRAM,
-and refuses to guess when two candidates are ambiguous.
+timeouts and default display size are configurable too. Left blank, GPU selection picks the AMD render
+node with the most dedicated VRAM and refuses to guess when two candidates are ambiguous.
+
+Other commands: `check`, `compatibility-check`, `autostart-status`, `build`, `configure`, `restart`,
+`update`, `repair`, `rollback`, `hardware-test`, `uninstall`. Every modifying command accepts
+`--dry-run`. Full reference in [STEAMOS_SETUP_SCRIPT.md](docs/STEAMOS_SETUP_SCRIPT.md).
 
 ---
 
@@ -247,21 +244,21 @@ and refuses to guess when two candidates are ambiguous.
 
 An honest summary, because it should affect whether you install this today.
 
-SteamShine works. The virtual-display pipeline — headless Gamescope, PipeWire discovery, DMA-BUF
+**SteamShine works.** The virtual-display pipeline — headless Gamescope, PipeWire discovery, DMA-BUF
 capture, Vulkan encoding, video, audio, touch and mouse input, and session retention across
 disconnects — has been validated end to end on real hardware (SteamOS 3.8.16, RX 9070 XT), including
-ten cable disconnect/reconnect cycles. CI covers formatting, linting, build, lifecycle tests, packaging
-and installer smoke tests on every change.
+ten cable disconnect/reconnect cycles. CI covers formatting, linting, build, lifecycle tests,
+packaging and installer smoke tests on every change.
 
-What is still outstanding, stated plainly:
+Still outstanding, stated plainly:
 
 - Keyboard and gamepad input, fully monitorless operation, and explicit-stop cleanup are pending a
   final hardware acceptance pass.
 - Attaching to a **Game Mode** session needs its own acceptance run; the Desktop Mode result doesn't
   substitute for it.
-- HDR is a firm release target, not a shipped one. SDR is what's validated today.
-- The redesigned control panel is verified in a browser against a running binary, but its GPU *write*
-  path and the Terminal WebSocket have not yet been exercised on live hardware.
+- Adaptive bitrate, per-client profiles and the Stream page are implemented and unit/CI tested, but
+  their controlled-loss and live-browser acceptance runs are still pending.
+- The GPU *write* path and the Terminal WebSocket haven't yet been exercised on live hardware.
 - Testing has concentrated on one host and one GPU. Other AMD hardware should work; nobody has proven
   it yet.
 
@@ -277,13 +274,12 @@ exactly that, and reports from other hardware are genuinely useful.
 | --- | --- |
 | [INSTALLATION.md](docs/INSTALLATION.md) | Install paths and artifact verification. |
 | [STEAMOS_SETUP_SCRIPT.md](docs/STEAMOS_SETUP_SCRIPT.md) | Every `steamshine.sh` command and exit code. |
-| [STEAMOS_AUTO_VIRTUAL_DISPLAY_IMPLEMENTATION.md](docs/STEAMOS_AUTO_VIRTUAL_DISPLAY_IMPLEMENTATION.md) | How the virtual display actually works. |
-| [PROJECT_ROADMAP.md](docs/PROJECT_ROADMAP.md) | Post-PR12 feature order, independent PR boundaries, hardware gates, and rollback. |
-| [STREAM_NEGOTIATION_HDR_QUALITY_DESIGN.md](docs/STREAM_NEGOTIATION_HDR_QUALITY_DESIGN.md) | Requested/selected/active/observed state, geometry, codecs, HDR, VBR, and Adaptive Bitrate. |
-| [CODEX_GOAL_MODE_STREAMING.md](docs/CODEX_GOAL_MODE_STREAMING.md) | Per-PR implementation contract and evidence requirements. |
-| [IMPLEMENTATION_STATUS.md](docs/IMPLEMENTATION_STATUS.md) | Per-feature status, in more detail than above. |
-| [STREAM_PROFILES_UI.md](docs/STREAM_PROFILES_UI.md) | Exact stream-profile matching and the four-stage Stream UI. |
 | [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | When it doesn't come up cleanly. |
+| [STEAMOS_AUTO_VIRTUAL_DISPLAY_IMPLEMENTATION.md](docs/STEAMOS_AUTO_VIRTUAL_DISPLAY_IMPLEMENTATION.md) | How the virtual display actually works. |
+| [STREAM_NEGOTIATION_HDR_QUALITY_DESIGN.md](docs/STREAM_NEGOTIATION_HDR_QUALITY_DESIGN.md) | Negotiation state, geometry, codecs, HDR, VBR and adaptive bitrate. |
+| [STREAM_PROFILES_UI.md](docs/STREAM_PROFILES_UI.md) | Exact stream-profile matching and the four-stage Stream UI. |
+| [IMPLEMENTATION_STATUS.md](docs/IMPLEMENTATION_STATUS.md) | Per-feature status, in more detail than above. |
+| [PROJECT_ROADMAP.md](docs/PROJECT_ROADMAP.md) | Feature order, PR boundaries, hardware gates, rollback. |
 
 ---
 
@@ -294,11 +290,11 @@ a great deal of it. It is developed independently at
 [souten-yd/SteamShine](https://github.com/souten-yd/SteamShine) and does not currently track upstream
 releases.
 
-If you want to pull a specific upstream change in yourself: the files most likely to conflict are the
-ones this fork modified heavily (`src/confighttp.cpp`, `src/config.*`, `src/platform/linux/misc.cpp`,
-the Linux packaging scripts). The SteamOS-specific files (`src/steamos_virtual_session*`,
-`src/steamshine_*`, and the `src_assets/common/assets/steamshine/` panel) don't exist upstream and
-won't conflict at all.
+To pull a specific upstream change in yourself: the files most likely to conflict are the ones this
+fork modified heavily (`src/confighttp.cpp`, `src/config.*`, `src/stream.*`,
+`src/platform/linux/misc.cpp`, the Linux packaging scripts). The SteamOS-specific files
+(`src/steamos_virtual_session*`, `src/steamshine_*`, `src/adaptive_bitrate.*`, and the
+`src_assets/common/assets/steamshine/` panel) don't exist upstream and won't conflict at all.
 
 Sincere thanks to the Sunshine and Moonlight projects — none of this would exist without them.
 
