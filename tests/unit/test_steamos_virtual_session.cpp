@@ -1116,6 +1116,73 @@ TEST_F(SteamOSVirtualSessionTest, ForcedCleanupKillsOwnedChildAfterGamescopeExit
   }
 }
 
+/**
+ * @brief Verify explicit stop terminates detached descendants of the owned runtime.
+ */
+TEST_F(SteamOSVirtualSessionTest, StopTerminatesDetachedRuntimeDescendants) {
+  rtsp_stream::launch_session_t launch {};
+  launch.id = 13;
+  std::string error;
+  ASSERT_TRUE(steamos_virtual_session::prepare(launch, error)) << error;
+  const auto endpoint {steamos_virtual_session::application_environment()};
+  ASSERT_TRUE(endpoint);
+
+  const auto descendant_pid_file {root / "detached-runtime-descendant.pid"};
+  const pid_t runtime_process {::fork()};
+  ASSERT_GE(runtime_process, 0);
+  if (runtime_process == 0) {
+    (void) ::setsid();
+    (void) ::setenv("XDG_RUNTIME_DIR", endpoint->xdg_runtime_directory.c_str(), 1);
+    const std::string command {
+      "env -u XDG_RUNTIME_DIR setsid sh -c 'echo $$ > " + descendant_pid_file.string() +
+      "; trap \"exit 0\" TERM INT; while :; do sleep 1; done' & "
+      "trap 'exit 0' TERM INT; while :; do sleep 1; done"
+    };
+    ::execl("/bin/sh", "sh", "-c", command.c_str(), nullptr);
+    _exit(127);
+  }
+
+  const auto pid_deadline {std::chrono::steady_clock::now() + std::chrono::seconds {2}};
+  while (!std::filesystem::exists(descendant_pid_file) && std::chrono::steady_clock::now() < pid_deadline) {
+    std::this_thread::sleep_for(std::chrono::milliseconds {20});
+  }
+  if (!std::filesystem::exists(descendant_pid_file)) {
+    ::kill(runtime_process, SIGKILL);
+    ::waitpid(runtime_process, nullptr, 0);
+    FAIL() << "Detached runtime descendant did not publish its PID";
+  }
+  std::ifstream descendant_input {descendant_pid_file};
+  pid_t descendant {};
+  descendant_input >> descendant;
+  ASSERT_GT(descendant, 0);
+
+  steamos_virtual_session::stop();
+  int runtime_status {};
+  bool runtime_exited {false};
+  const auto runtime_deadline {std::chrono::steady_clock::now() + std::chrono::seconds {2}};
+  while (std::chrono::steady_clock::now() < runtime_deadline) {
+    if (::waitpid(runtime_process, &runtime_status, WNOHANG) == runtime_process) {
+      runtime_exited = true;
+      break;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds {20});
+  }
+  if (!runtime_exited) {
+    ::kill(runtime_process, SIGKILL);
+    ::waitpid(runtime_process, &runtime_status, 0);
+  }
+  EXPECT_TRUE(runtime_exited);
+  for (int attempt = 0; attempt < 20 && ::kill(descendant, 0) == 0 && !process_is_zombie(descendant); ++attempt) {
+    std::this_thread::sleep_for(std::chrono::milliseconds {50});
+  }
+  const int kill_result {::kill(descendant, 0)};
+  const int kill_error {errno};
+  EXPECT_TRUE(kill_result == -1 || process_is_zombie(descendant));
+  if (kill_result == -1) {
+    EXPECT_EQ(kill_error, ESRCH);
+  }
+}
+
 TEST_F(SteamOSVirtualSessionTest, ForcedCleanupStopsGamescopeThatIgnoresTerm) {
   config::steamos_virtual_display.gamescope_path = make_fake_gamescope(root, "ignore-term").string();
   config::steamos_virtual_display.shutdown_timeout_seconds = 1;

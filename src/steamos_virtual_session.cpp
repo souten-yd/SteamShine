@@ -164,13 +164,76 @@ namespace steamos_virtual_session {
 
 #if defined(__linux__)
     /**
+     * @brief Stable identity and parent relationship for one current-user process.
+     */
+    struct owned_process_identity_t {
+      pid_t pid {-1};  ///< Process identifier observed in procfs.
+      pid_t parent_pid {-1};  ///< Parent process identifier from `/proc/<pid>/stat`.
+      std::uint64_t start_time {0};  ///< Field 22 from `/proc/<pid>/stat` for PID-reuse protection.
+    };
+
+    /**
+     * @brief Read a current-user process identity from one numeric procfs directory.
+     *
+     * @param process_directory Numeric `/proc/<pid>` directory.
+     * @return Stable identity, or std::nullopt when ownership or stat data cannot be verified.
+     */
+    std::optional<owned_process_identity_t> read_owned_process_identity(const std::filesystem::path &process_directory) {
+      struct stat process_stat {};
+      if (::stat(process_directory.c_str(), &process_stat) != 0 || process_stat.st_uid != ::getuid()) {
+        return std::nullopt;
+      }
+      pid_t pid {-1};
+      try {
+        pid = static_cast<pid_t>(std::stol(process_directory.filename().string()));
+      } catch (const std::exception &) {
+        return std::nullopt;
+      }
+      std::ifstream stat_file {process_directory / "stat"};
+      const std::string contents {std::istreambuf_iterator<char> {stat_file}, {}};
+      const auto command_end {contents.rfind(')')};
+      if (command_end == std::string::npos || command_end + 2 >= contents.size()) {
+        return std::nullopt;
+      }
+      std::istringstream fields {contents.substr(command_end + 2)};
+      std::string field;
+      pid_t parent_pid {-1};
+      for (int index {}; index < 20; ++index) {
+        if (!(fields >> field)) {
+          return std::nullopt;
+        }
+        if (index == 1) {
+          try {
+            parent_pid = static_cast<pid_t>(std::stol(field));
+          } catch (const std::exception &) {
+            return std::nullopt;
+          }
+        }
+      }
+      try {
+        size_t consumed {};
+        const auto start_time {std::stoull(field, &consumed)};
+        if (consumed != field.size() || start_time == 0 || parent_pid <= 0) {
+          return std::nullopt;
+        }
+        return owned_process_identity_t {.pid = pid, .parent_pid = parent_pid, .start_time = start_time};
+      } catch (const std::exception &) {
+        return std::nullopt;
+      }
+    }
+
+    /**
      * @brief Find processes whose runtime environment exactly matches a session directory.
      *
+     * The returned set includes descendants of a matching process even when a
+     * sandbox made their environment unreadable or removed the runtime variable.
+     *
      * @param runtime_directory Marker-owned session directory.
-     * @return Process IDs that inherited the owned virtual-session runtime path.
+     * @return Stable identities for processes owned by the virtual session.
      */
-    std::vector<pid_t> processes_using_runtime_directory(const std::filesystem::path &runtime_directory) {
-      std::vector<pid_t> processes;
+    std::vector<owned_process_identity_t> processes_using_runtime_directory(const std::filesystem::path &runtime_directory) {
+      std::vector<owned_process_identity_t> current_user_processes;
+      std::vector<owned_process_identity_t> processes;
       const std::string needle {"XDG_RUNTIME_DIR=" + runtime_directory.string() + '\0'};
       std::error_code error;
       for (const auto &entry : std::filesystem::directory_iterator {"/proc", error}) {
@@ -183,6 +246,11 @@ namespace steamos_virtual_session {
             })) {
           continue;
         }
+        const auto identity {read_owned_process_identity(entry.path())};
+        if (!identity) {
+          continue;
+        }
+        current_user_processes.emplace_back(*identity);
         std::ifstream environment {entry.path() / "environ", std::ios::binary};
         if (!environment) {
           continue;
@@ -191,12 +259,36 @@ namespace steamos_virtual_session {
         if (contents.find(needle) == std::string::npos) {
           continue;
         }
-        try {
-          processes.emplace_back(static_cast<pid_t>(std::stol(name)));
-        } catch (const std::exception &) {
+        processes.emplace_back(*identity);
+      }
+      bool added {true};
+      while (added) {
+        added = false;
+        for (const auto &candidate : current_user_processes) {
+          const bool known {std::ranges::any_of(processes, [&candidate](const owned_process_identity_t &process) {
+            return process.pid == candidate.pid;
+          })};
+          const bool parent_owned {std::ranges::any_of(processes, [&candidate](const owned_process_identity_t &process) {
+            return process.pid == candidate.parent_pid;
+          })};
+          if (!known && parent_owned) {
+            processes.emplace_back(candidate);
+            added = true;
+          }
         }
       }
       return processes;
+    }
+
+    /**
+     * @brief Check whether a previously recorded process identity is still current.
+     *
+     * @param process Stable identity captured before shutdown began.
+     * @return True only while the same PID and start time still exist for this user.
+     */
+    bool owned_process_is_current(const owned_process_identity_t &process) {
+      const auto current {read_owned_process_identity("/proc/" + std::to_string(process.pid))};
+      return current && current->start_time == process.start_time;
     }
 
     /**
@@ -208,15 +300,17 @@ namespace steamos_virtual_session {
     void stop_processes_using_runtime_directory(const std::filesystem::path &runtime_directory, const std::chrono::seconds timeout) {
       auto processes {processes_using_runtime_directory(runtime_directory)};
       for (const auto process : processes) {
-        ::kill(process, SIGTERM);
+        ::kill(process.pid, SIGTERM);
       }
       const auto deadline {std::chrono::steady_clock::now() + timeout};
       while (!processes.empty() && std::chrono::steady_clock::now() < deadline) {
         std::this_thread::sleep_for(std::chrono::milliseconds {50});
-        processes = processes_using_runtime_directory(runtime_directory);
+        std::erase_if(processes, [](const owned_process_identity_t &process) {
+          return !owned_process_is_current(process);
+        });
       }
       for (const auto process : processes) {
-        ::kill(process, SIGKILL);
+        ::kill(process.pid, SIGKILL);
       }
     }
 
@@ -2428,6 +2522,9 @@ namespace steamos_virtual_session {
                       << " captured_frames=" << manager.captured_frames.load(std::memory_order_relaxed);
       stop_owned_process_group(manager.process_group, std::chrono::seconds {config::steamos_virtual_display.shutdown_timeout_seconds});
       manager.process_group = -1;
+      if (!manager.runtime_directory.empty()) {
+        stop_processes_using_runtime_directory(manager.runtime_directory, std::chrono::seconds {config::steamos_virtual_display.shutdown_timeout_seconds});
+      }
     } else if (manager.origin == session_origin_e::attached_existing) {
       BOOST_LOG(info) << "GAMESCOPE_SOURCE_DETACHED origin=attached_existing pid=" << manager.process_group << " process_owned=false runtime_owned=false";
     }

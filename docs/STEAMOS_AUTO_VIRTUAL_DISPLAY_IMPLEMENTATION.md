@@ -54,8 +54,11 @@ frame as HDR. The reproducible producer patch at
 an HDR10-capable headless connector, `xBGR_210LE`, BT.2020 primaries, SMPTE
 ST 2084 transfer metadata, and the HDR screenshot color-management LUT for
 explicit HDR sessions. Configure
-`steamos_gamescope_path` to a separately built patched binary; never replace
-`/usr/bin/gamescope`. SDR sessions retain the original BGRx/NV12 and Gamma 2.2
+`steamos_gamescope_path` to a separately built patched binary with the same
+`cap_sys_nice=eip` file capability as the SteamOS Gamescope package; a
+capability-free home-directory copy cannot request the real-time scheduling
+used for stable frame delivery under load. Never replace `/usr/bin/gamescope`.
+SDR sessions retain the original BGRx/NV12 and Gamma 2.2
 path. End-to-end HDR remains unaccepted until live negotiation selects that
 10-bit producer and the client confirms HDR output.
 
@@ -91,7 +94,7 @@ For the packaged commandless Desktop surface only, the canonical `plasmawindowed
 
 Gamescope input uses the EIS socket derived from the verified `GAMESCOPE_WAYLAND_DISPLAY`. SteamShine checks containment, socket type, and UID, connects once, and compares the kernel-provided `SO_PEERCRED` PID with the verified Gamescope PID/start-time identity. That exact connected descriptor is transferred to libei, so verification and input use one connection without a probe disconnect or a path-replacement window. The resulting path, device, inode, and producer identity are cached only for that active session. This remains available when a file-capability Gamescope process protects `/proc/<pid>/fd` from same-user inspection, without weakening the fail-closed source binding.
 
-If a verified Steam singleton is outside an owned private Gamescope session, Steam-referencing application, prep, and detached commands are rejected rather than creating a second instance; the dashboard asks the operator to migrate Steam explicitly and never stops it automatically. Failure is returned as GameStream 503 before application launch. Explicit `/cancel` or service stop kills only the owned process group and deletes only its owned directory. On SteamShine restart, the configured orphan base must first be inside the current `XDG_RUNTIME_DIR`; then an ownership marker plus an exact `XDG_RUNTIME_DIR` process-environment match is required before an orphan runtime or process is removed.
+If a verified Steam singleton is outside an owned private Gamescope session, Steam-referencing application, prep, and detached commands are rejected rather than creating a second instance; the dashboard asks the operator to migrate Steam explicitly and never stops it automatically. Failure is returned as GameStream 503 before application launch. Explicit `/cancel` or service stop kills the owned Gamescope process group, then terminates current-user processes that inherited the exact owned runtime plus their verified descendants before deleting the owned directory. Descendant expansion keeps sandboxed games in scope even when they remove the runtime variable or make their environment unreadable, while PID start times prevent signaling a reused PID. On SteamShine restart, the configured orphan base must first be inside the current `XDG_RUNTIME_DIR`; then an ownership marker plus an exact `XDG_RUNTIME_DIR` process-environment match is required before an orphan runtime or process is removed.
 
 ## Remaining hardware-gated work
 
