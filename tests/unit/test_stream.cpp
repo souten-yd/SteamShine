@@ -37,6 +37,102 @@ TEST(ConcatAndInsertTests, ConcatSmallStrideTest) {
 }
 
 /**
+ * @brief Verify modern Moonlight frame-FEC feedback is decoded from big-endian wire fields.
+ */
+TEST(StreamFecFeedbackTests, ParsesValidMoonlightStatus) {
+  const std::array<std::uint8_t, 21> wire {
+    0x01,
+    0x02,
+    0x03,
+    0x04,
+    0x10,
+    0x20,
+    0x10,
+    0x10,
+    0x00,
+    0x03,
+    0x00,
+    0x20,
+    0x00,
+    0x08,
+    0x00,
+    0x1d,
+    0x00,
+    0x06,
+    25,
+    1,
+    2,
+  };
+  const auto status {stream::parse_frame_fec_status({reinterpret_cast<const char *>(wire.data()), wire.size()})};
+
+  ASSERT_TRUE(status.has_value());
+  EXPECT_EQ(status->frame_index, 0x01020304U);
+  EXPECT_EQ(status->highest_received_sequence_number, 0x1020U);
+  EXPECT_EQ(status->next_contiguous_sequence_number, 0x1010U);
+  EXPECT_EQ(status->missing_packets_before_highest, 3U);
+  EXPECT_EQ(status->total_data_packets, 32U);
+  EXPECT_EQ(status->total_parity_packets, 8U);
+  EXPECT_EQ(status->received_data_packets, 29U);
+  EXPECT_EQ(status->received_parity_packets, 6U);
+  EXPECT_EQ(status->fec_percentage, 25U);
+  EXPECT_EQ(status->multi_fec_block_index, 1U);
+  EXPECT_EQ(status->multi_fec_block_count, 2U);
+}
+
+/**
+ * @brief Verify malformed or internally inconsistent frame-FEC reports are rejected.
+ */
+TEST(StreamFecFeedbackTests, RejectsInvalidMoonlightStatus) {
+  std::array<std::uint8_t, 21> wire {};
+  wire[10] = 0;
+  wire[11] = 1;
+  wire[14] = 0;
+  wire[15] = 2;
+  wire[20] = 1;
+
+  EXPECT_FALSE(stream::parse_frame_fec_status({reinterpret_cast<const char *>(wire.data()), wire.size()}).has_value());
+  EXPECT_FALSE(stream::parse_frame_fec_status("short").has_value());
+
+  wire[15] = 1;
+  wire[18] = 101;
+  EXPECT_FALSE(stream::parse_frame_fec_status({reinterpret_cast<const char *>(wire.data()), wire.size()}).has_value());
+
+  wire[18] = 25;
+  wire[19] = 1;
+  wire[20] = 1;
+  EXPECT_FALSE(stream::parse_frame_fec_status({reinterpret_cast<const char *>(wire.data()), wire.size()}).has_value());
+}
+
+/**
+ * @brief Verify transport diagnostics classify standard address scopes without product assumptions.
+ */
+TEST(StreamNetworkAddressTests, ClassifiesStandardAddressScopes) {
+  EXPECT_EQ(stream::classify_network_address("127.0.0.1"), "loopback");
+  EXPECT_EQ(stream::classify_network_address("192.168.68.71"), "private_lan");
+  EXPECT_EQ(stream::classify_network_address("172.31.2.4"), "private_lan");
+  EXPECT_EQ(stream::classify_network_address("100.126.135.93"), "shared_address_space");
+  EXPECT_EQ(stream::classify_network_address("8.8.8.8"), "public_network");
+  EXPECT_EQ(stream::classify_network_address("fd7a:115c:a1e0::1"), "private_lan");
+  EXPECT_EQ(stream::classify_network_address("not-an-address"), "unknown");
+}
+
+/**
+ * @brief Verify every disconnect cause has a stable diagnostics token.
+ */
+TEST(StreamDisconnectReasonTests, ProvidesStableTokens) {
+  EXPECT_EQ(stream::to_string(stream::disconnect_reason_e::unknown), "unknown");
+  EXPECT_EQ(stream::to_string(stream::disconnect_reason_e::remote_control_disconnect), "remote_control_disconnect");
+  EXPECT_EQ(stream::to_string(stream::disconnect_reason_e::control_ping_timeout), "control_ping_timeout");
+  EXPECT_EQ(stream::to_string(stream::disconnect_reason_e::control_protocol_error), "control_protocol_error");
+  EXPECT_EQ(stream::to_string(stream::disconnect_reason_e::initial_video_ping_timeout), "initial_video_ping_timeout");
+  EXPECT_EQ(stream::to_string(stream::disconnect_reason_e::initial_audio_ping_timeout), "initial_audio_ping_timeout");
+  EXPECT_EQ(stream::to_string(stream::disconnect_reason_e::video_worker_ended), "video_worker_ended");
+  EXPECT_EQ(stream::to_string(stream::disconnect_reason_e::audio_worker_ended), "audio_worker_ended");
+  EXPECT_EQ(stream::to_string(stream::disconnect_reason_e::local_session_cleanup), "local_session_cleanup");
+  EXPECT_EQ(stream::to_string(stream::disconnect_reason_e::service_shutdown), "service_shutdown");
+}
+
+/**
  * @brief Verify protocol refresh hints preserve exact rational rates.
  */
 TEST(StreamNegotiationTests, PreservesRationalRefreshRate) {

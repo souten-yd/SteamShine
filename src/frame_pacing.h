@@ -167,5 +167,6 @@ namespace frame_pacing {
     std::chrono::steady_clock::duration keepalive_interval_;  ///< Minimum interval between static outputs.
     std::chrono::steady_clock::time_point last_unique_ {};  ///< Most recent unique generation observation.
     std::chrono::steady_clock::time_point last_output_ {};  ///< Most recent encoder submission.
+    bool observed_unique_ {false};  ///< Whether a real producer frame has established static-content eligibility.
   };
 }  // namespace frame_pacing

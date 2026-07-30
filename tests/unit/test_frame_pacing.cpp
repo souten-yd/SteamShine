@@ -218,6 +218,7 @@ TEST(FramePacingDeadline, PreservesIrregularUniqueFrameOrder) {
 TEST(FramePacingOutputPolicy, SuppressesStaticDuplicates) {
   frame_pacing::output_policy_t policy {500ms, 1s};
   policy.reset(at(0ms));
+  policy.observe_unique(at(0ms));
 
   EXPECT_TRUE(policy.should_encode(at(499ms), false));
   policy.record_output(at(499ms));
@@ -232,6 +233,7 @@ TEST(FramePacingOutputPolicy, SuppressesStaticDuplicates) {
 TEST(FramePacingOutputPolicy, UniqueFrameRestoresActiveOutput) {
   frame_pacing::output_policy_t policy {500ms, 1s};
   policy.reset(at(0ms));
+  policy.observe_unique(at(0ms));
   policy.record_output(at(500ms));
   ASSERT_TRUE(policy.static_mode(at(900ms)));
 
@@ -246,10 +248,28 @@ TEST(FramePacingOutputPolicy, UniqueFrameRestoresActiveOutput) {
 TEST(FramePacingOutputPolicy, ForcedOutputBypassesStaticDelay) {
   frame_pacing::output_policy_t policy {500ms, 1s};
   policy.reset(at(0ms));
+  policy.observe_unique(at(0ms));
   policy.record_output(at(500ms));
 
   ASSERT_FALSE(policy.should_encode(at(600ms), false));
   EXPECT_TRUE(policy.should_encode(at(600ms), true));
+}
+
+/**
+ * @brief Verify startup dummy frames stay active until a producer frame exists.
+ */
+TEST(FramePacingOutputPolicy, KeepsActiveCadenceUntilFirstUniqueFrame) {
+  frame_pacing::output_policy_t policy {500ms, 1s};
+  policy.reset(at(0ms));
+
+  EXPECT_FALSE(policy.static_mode(at(10s)));
+  EXPECT_TRUE(policy.should_encode(at(10s), false));
+  policy.record_output(at(10s));
+  EXPECT_TRUE(policy.should_encode(at(10034ms), false));
+
+  policy.observe_unique(at(11s));
+  EXPECT_FALSE(policy.static_mode(at(11499ms)));
+  EXPECT_TRUE(policy.static_mode(at(11500ms)));
 }
 
 /**

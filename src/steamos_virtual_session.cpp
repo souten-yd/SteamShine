@@ -27,6 +27,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <limits>
 #include <mutex>
 #include <optional>
 #include <sstream>
@@ -40,6 +41,7 @@
   #include <signal.h>
   #include <sys/socket.h>
   #include <sys/stat.h>
+  #include <sys/syscall.h>
   #include <sys/types.h>
   #include <sys/un.h>
   #include <sys/wait.h>
@@ -47,6 +49,26 @@
 #endif
 
 namespace steamos_virtual_session {
+  void close_inherited_descriptors_for_exec(const int first_descriptor, const int descriptor_limit) {
+#if defined(__linux__)
+    const auto first {std::max(first_descriptor, 0)};
+    if (first >= descriptor_limit) {
+      return;
+    }
+  #if defined(SYS_close_range)
+    if (::syscall(SYS_close_range, static_cast<unsigned int>(first), static_cast<unsigned int>(descriptor_limit - 1), 0U) == 0) {
+      return;
+    }
+  #endif
+    for (int descriptor = first; descriptor < descriptor_limit; ++descriptor) {
+      ::close(descriptor);
+    }
+#else
+    (void) first_descriptor;
+    (void) descriptor_limit;
+#endif
+  }
+
   namespace {
     std::atomic_bool physical_compositor_capture_available {false};  ///< Latest host compositor capture observation.
 
@@ -1569,8 +1591,7 @@ namespace steamos_virtual_session {
       return false;
     }
     const auto base {runtime_base()};
-    if (decision.route == session_route_e::new_owned_private &&
-        (base.empty() || !path_is_within_runtime_root(base, runtime_root))) {
+    if (decision.route == session_route_e::new_owned_private && (base.empty() || !path_is_within_runtime_root(base, runtime_root))) {
       error = "The owned Gamescope runtime must remain inside XDG_RUNTIME_DIR";
       manager.current = state_e::Failed;
       return false;
@@ -1799,6 +1820,7 @@ namespace steamos_virtual_session {
     }
     const auto owner_pid_value {std::to_string(::getpid())};
     const auto owner_start_time_value {std::to_string(owner_identity->start_time)};
+    const auto descriptor_limit {std::max<long>(::sysconf(_SC_OPEN_MAX), 3)};
     const pid_t child {::fork()};
     if (child == 0) {
       ::setpgid(0, 0);
@@ -1836,6 +1858,7 @@ namespace steamos_virtual_session {
       argv.push_back(const_cast<char *>(owner_pid_value.c_str()));
       argv.push_back(const_cast<char *>(owner_start_time_value.c_str()));
       argv.push_back(nullptr);
+      close_inherited_descriptors_for_exec(3, static_cast<int>(std::min<long>(descriptor_limit, std::numeric_limits<int>::max())));
       ::execvp(path.c_str(), argv.data());
       _exit(127);
     }
@@ -1921,8 +1944,7 @@ namespace steamos_virtual_session {
     session_origin_e active_origin {session_origin_e::none};
     {
       std::scoped_lock lock {manager.mutex};
-      if (manager.process_group > 0 &&
-          (manager.current == state_e::WaitingForCapture || manager.current == state_e::Ready || manager.current == state_e::Streaming || manager.current == state_e::Failed)) {
+      if (manager.process_group > 0 && (manager.current == state_e::WaitingForCapture || manager.current == state_e::Ready || manager.current == state_e::Streaming || manager.current == state_e::Failed)) {
         active_origin = manager.origin;
       }
     }
@@ -2484,8 +2506,7 @@ namespace steamos_virtual_session {
   bool mark_capture_reinitializing() {
     std::scoped_lock lock {manager.mutex};
 #if defined(__linux__)
-    if (manager.process_group <= 0 || manager.source_process_start_time == 0 ||
-        (manager.current != state_e::Ready && manager.current != state_e::Streaming)) {
+    if (manager.process_group <= 0 || manager.source_process_start_time == 0 || (manager.current != state_e::Ready && manager.current != state_e::Streaming)) {
       return false;
     }
     const auto identity {gamescope_source::read_process_identity(manager.process_group)};
