@@ -357,7 +357,7 @@ jobs:
           cmake -S tests/steamos_lifecycle -B cmake-build-steamos-lifecycle -G Ninja -DCMAKE_BUILD_TYPE=Release
           cmake --build cmake-build-steamos-lifecycle --target test_steamos_virtual_session_lifecycle --parallel 4
           cmake-build-steamos-lifecycle/test_steamos_virtual_session_lifecycle --gtest_color=yes
-          cmake --build cmake-build-steamos --target test_sunshine --parallel 4
+          cmake --build cmake-build-steamos --target test_sunshine --parallel 2
           cmake-build-steamos/tests/test_sunshine --gtest_filter='AdaptiveBitrateEnvelope.*:AdaptiveBitrateController.*:AdaptiveBitrateBackend.*:CodecPolicyTest.*:HdrPolicyTest.*:StreamNegotiationTests.*:StreamRecordingTest.*:WebServicesTest.*:ImageFallbackTests.*:InputPacketQueue.*:GamescopeInputMappingTest.*:ProcessCommandSelectionTest.*:ProcessDisplayEnvironmentTest.*:ProcessEnvironmentTest.*:VideoPipelineDiagnostics.*:VideoPipelineBackpressure.*' --gtest_color=yes
           python3 -m unittest -v tests.integration.test_steamos_client_display
           tests/integration/test_steamshine_script.sh
@@ -399,6 +399,7 @@ jobs:
           smoke_home="$(mktemp -d)"; mkdir -p "${smoke_home}/run"
           HOME="${smoke_home}" XDG_RUNTIME_DIR="${smoke_home}/run" ./steamshine.sh install --artifact "${artifact}" --no-service --non-interactive --yes
           "${smoke_home}/.local/share/steamshine/current/scripts/test-steamos-web-http.sh" "${smoke_home}/.local/bin/steamshine" dist
+          npm ci --ignore-scripts
           STEAMSHINE_BINARY="${smoke_home}/.local/bin/steamshine" STEAMSHINE_BROWSER_REPORT_DIR=dist PLAYWRIGHT_CHROMIUM_EXECUTABLE=/usr/bin/chromium node tests/web/upstream-browser-e2e.mjs
       - uses: actions/upload-artifact@v4
         with:
