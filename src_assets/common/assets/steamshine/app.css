@@ -342,6 +342,16 @@ a {
   display: inline-flex;
   align-items: center;
   gap: 0.25rem;
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+/* Inline SVGs otherwise use the browser's 300x150 replaced-element default,
+   which pushes the RPM text outside the clipped metric sub-row. */
+.metric-sub .fan svg {
+  width: 0.85rem;
+  height: 0.85rem;
+  flex: 0 0 0.85rem;
 }
 
 .tone-ok { color: var(--ok); }

@@ -125,7 +125,7 @@ function metricTile({ label, value, percent, values, sub, temp, fan }) {
   return `<div class="metric-tile ${tone}">
     <div class="metric-tile-head"><span class="metric-label">${escapeHtml(label)}</span><span class="metric-value num">${value == null ? '—' : escapeHtml(value)}</span></div>
     ${sparkline(values || [])}
-    <div class="metric-sub num">${sub ? `<span>${escapeHtml(sub)}</span>` : ''}${temp ? `<span>${escapeHtml(temp)}</span>` : ''}${fan ? `<span class="fan">${icon('fan')}${escapeHtml(fan)} RPM</span>` : ''}</div>
+    <div class="metric-sub num">${sub ? `<span>${escapeHtml(sub)}</span>` : ''}${temp ? `<span class="metric-temp">${escapeHtml(temp)}</span>` : ''}${fan ? `<span class="fan">${icon('fan')}${escapeHtml(fan)} RPM</span>` : ''}</div>
   </div>`;
 }
 

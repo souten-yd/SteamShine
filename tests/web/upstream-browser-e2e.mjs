@@ -331,6 +331,10 @@ try {
   const appAsset = await appAssetResponse.text();
   securityResults.terminal_explanation_removed = !appAsset.includes('A real shell on the SteamShine host') && !appAsset.includes('The terminal connects over a separate port');
   if (!securityResults.terminal_explanation_removed) throw new Error('The Terminal page still contains the removed subtitle or framed explanation.');
+  const appCssResponse = await steamshinePage.request.get(`${baseUrl}/steamshine/app.css`);
+  const appCss = await appCssResponse.text();
+  securityResults.monitor_fan_icon_sized = /\.metric-sub \.fan svg\s*\{[^}]*width:\s*0\.85rem;[^}]*height:\s*0\.85rem;[^}]*flex:\s*0 0 0\.85rem;/s.test(appCss);
+  if (!securityResults.monitor_fan_icon_sized) throw new Error('The Monitor fan icon can obscure or clip the GPU RPM readout.');
   securityResults.malformed_json_status = await steamshinePage.evaluate(async (csrf) => (await fetch('/api/steamshine/v1/pairing/pin', {
     method: 'POST', headers: { 'Content-Type': 'application/json', 'X-SteamShine-CSRF-Token': csrf }, body: '{',
   })).status, csrfValue);
