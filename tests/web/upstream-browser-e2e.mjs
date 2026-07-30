@@ -254,18 +254,26 @@ try {
   if (initialRecordingState.capacity_mb !== 500 || initialRecordingState.state !== 'idle' || !Array.isArray(initialRecordingState.recordings)) {
     throw new Error(`Unexpected default sender recording state: ${JSON.stringify(initialRecordingState)}`);
   }
-  securityResults.recording_capacity_status = await steamshinePage.evaluate(async (csrf) => (await fetch('/api/steamshine/v1/stream/recordings/settings', {
-    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-SteamShine-CSRF-Token': csrf }, body: JSON.stringify({ capacity_mb: 501 }),
-  })).status, csrfValue);
+  securityResults.recording_capacity_status = await steamshinePage.evaluate(async (csrf) => {
+    const response = await fetch('/api/steamshine/v1/stream/recordings/settings', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-SteamShine-CSRF-Token': csrf }, body: JSON.stringify({ capacity_mb: 501 }),
+    });
+    await response.text();
+    return response.status;
+  }, csrfValue);
   const savedRecordingState = await steamshinePage.evaluate(async () => (await fetch('/api/steamshine/v1/stream/recordings')).json());
   if (securityResults.recording_capacity_status !== 200 || savedRecordingState.capacity_mb !== 501) {
     throw new Error(`Sender recording capacity did not persist: ${JSON.stringify(savedRecordingState)}`);
   }
   const recordingToggleStatuses = [];
   for (const enabled of [true, false]) {
-    recordingToggleStatuses.push(await steamshinePage.evaluate(async ({ csrf, value }) => (await fetch('/api/steamshine/v1/stream/recordings/toggle', {
-      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-SteamShine-CSRF-Token': csrf }, body: JSON.stringify({ enabled: value }),
-    })).status, { csrf: csrfValue, value: enabled }));
+    recordingToggleStatuses.push(await steamshinePage.evaluate(async ({ csrf, value }) => {
+      const response = await fetch('/api/steamshine/v1/stream/recordings/toggle', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'X-SteamShine-CSRF-Token': csrf }, body: JSON.stringify({ enabled: value }),
+      });
+      await response.text();
+      return response.status;
+    }, { csrf: csrfValue, value: enabled }));
   }
   if (recordingToggleStatuses.some((status) => status !== 200)) throw new Error(`Sender recording toggle failed: ${recordingToggleStatuses.join(',')}`);
   const profilePayload = {
