@@ -169,13 +169,14 @@ try {
 
   const steamshineContext = await browser.newContext({ ignoreHTTPSErrors: true });
   const steamshinePage = await steamshineContext.newPage();
-  const steamshineResponse = await steamshinePage.goto(`${baseUrl}/steamshine/monitor`, { waitUntil: 'domcontentloaded' });
+  const steamshineResponse = await steamshinePage.goto(`${baseUrl}/`, { waitUntil: 'domcontentloaded' });
   if (steamshineResponse?.status() !== 200) {
-    throw new Error(`SteamShine Monitor returned ${steamshineResponse?.status()}.`);
+    throw new Error(`SteamShine root returned ${steamshineResponse?.status()}.`);
   }
   await steamshinePage.locator('#login input[name="username"]').fill('web-e2e');
   await steamshinePage.locator('#login input[name="password"]').fill('web-e2e-password');
   await steamshinePage.locator('#login button').click();
+  await steamshinePage.waitForURL(`${baseUrl}/steamshine/monitor`, { timeout: 5000 });
   await waitForMonitor(steamshinePage);
   for (const viewport of [
     { name: 'desktop', width: 1440, height: 900 },
@@ -291,6 +292,14 @@ try {
   }
   if (!securityResults.csp_header.includes("style-src 'self'") || !securityResults.csp_header.includes("style-src-attr 'unsafe-inline'")) {
     throw new Error('SteamShine Monitor CSP does not narrowly permit required runtime style attributes.');
+  }
+  if (!securityResults.csp_header.includes("connect-src 'self' wss://127.0.0.1:48991")) {
+    throw new Error('SteamShine Monitor CSP does not permit its same-host terminal WebSocket.');
+  }
+  const appAssetResponse = await steamshinePage.request.get(`${baseUrl}/steamshine/app.js`);
+  securityResults.app_asset_cache_control = appAssetResponse.headers()['cache-control'] || '';
+  if (securityResults.app_asset_cache_control !== 'no-store') {
+    throw new Error('SteamShine application assets may retain stale login code in the browser cache.');
   }
   securityResults.malformed_json_status = await steamshinePage.evaluate(async (csrf) => (await fetch('/api/steamshine/v1/pairing/pin', {
     method: 'POST', headers: { 'Content-Type': 'application/json', 'X-SteamShine-CSRF-Token': csrf }, body: '{',

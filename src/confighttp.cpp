@@ -8,6 +8,7 @@
 
 // standard includes
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cstdint>
 #include <deque>
@@ -78,6 +79,47 @@ namespace confighttp {
   web::SessionService session_service {};  ///< Server-side SteamShine Web session operations.
   const web::PairingService pairing_service {};  ///< Shared Web pairing operations.
   const web::ClientService client_service {};  ///< Shared Web paired-client operations.
+
+  std::string steamshine_page_content_security_policy(const std::string_view host_header, const std::uint16_t terminal_ws_port) {
+    constexpr std::string_view prefix {"default-src 'self'; connect-src 'self'"};
+    constexpr std::string_view suffix {"; style-src 'self'; style-src-attr 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'self';"};
+    std::string_view hostname {host_header};
+
+    if (hostname.starts_with('[')) {
+      const auto closing_bracket = hostname.find(']');
+      if (closing_bracket == std::string_view::npos) {
+        return std::format("{}{}", prefix, suffix);
+      }
+      const auto port = hostname.substr(closing_bracket + 1);
+      if (!port.empty() && (!port.starts_with(':') || port.size() == 1 || !std::ranges::all_of(port.substr(1), [](const unsigned char character) {
+            return std::isdigit(character);
+          }))) {
+        return std::format("{}{}", prefix, suffix);
+      }
+      hostname = hostname.substr(0, closing_bracket + 1);
+    } else if (const auto colon = hostname.rfind(':'); colon != std::string_view::npos) {
+      if (hostname.find(':') != colon) {
+        return std::format("{}{}", prefix, suffix);
+      }
+      const auto port = hostname.substr(colon + 1);
+      if (port.empty() || !std::ranges::all_of(port, [](const unsigned char character) {
+            return std::isdigit(character);
+          })) {
+        return std::format("{}{}", prefix, suffix);
+      }
+      hostname = hostname.substr(0, colon);
+    }
+
+    const auto valid_hostname_character = [](const unsigned char character) {
+      return std::isalnum(character) || character == '.' || character == '-' || character == ':' || character == '[' || character == ']' || character == '%' || character == '_';
+    };
+    if (hostname.empty() || !std::ranges::all_of(hostname, valid_hostname_character)) {
+      return std::format("{}{}", prefix, suffix);
+    }
+
+    return std::format("{} wss://{}:{}{}", prefix, hostname, terminal_ws_port, suffix);
+  }
+
   const web::StatusSnapshotService status_snapshot_service {};  ///< Shared Web status operations.
   const web::DiagnosticService diagnostic_service {};  ///< Shared Web diagnostic operations.
   const web::ConfigurationService configuration_service {};  ///< Shared Web configuration operations.
@@ -685,10 +727,15 @@ namespace confighttp {
     }
     print_req(request);
     const std::string content = file_handler::read_file((std::string(SUNSHINE_ASSETS_DIR) + "/steamshine/index.html").c_str());
+    const auto host = request->header.find("Host");
+    const auto content_security_policy = steamshine_page_content_security_policy(
+      host == request->header.end() ? std::string_view {} : std::string_view {host->second},
+      net::map_port(PORT_STEAMSHINE_TERMINAL)
+    );
     const SimpleWeb::CaseInsensitiveMultimap headers {
       {"Content-Type", "text/html; charset=utf-8"},
       {"X-Frame-Options", "DENY"},
-      {"Content-Security-Policy", "default-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'self';"},
+      {"Content-Security-Policy", content_security_policy},
       {"Cache-Control", "no-store"}
     };
     response->write(content, headers);
@@ -723,7 +770,8 @@ namespace confighttp {
     const SimpleWeb::CaseInsensitiveMultimap headers {
       {"Content-Type", mime_type->second},
       {"X-Frame-Options", "DENY"},
-      {"Content-Security-Policy", "default-src 'self'; frame-ancestors 'none'; base-uri 'none';"}
+      {"Content-Security-Policy", "default-src 'self'; frame-ancestors 'none'; base-uri 'none';"},
+      {"Cache-Control", "no-store"}
     };
     std::ifstream input {requested, std::ios::binary};
     response->write(SimpleWeb::StatusCode::success_ok, input, headers);

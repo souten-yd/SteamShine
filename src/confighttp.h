@@ -5,9 +5,11 @@
 #pragma once
 
 // standard includes
+#include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <string>
+#include <string_view>
 
 // lib includes
 #include <boost/system/error_code.hpp>
@@ -34,6 +36,15 @@ namespace confighttp {
    * @return True only for temporary non-blocking readiness errors.
    */
   bool terminal_accept_is_retryable(const boost::system::error_code &error);
+
+  /**
+   * @brief Build the SteamShine page Content Security Policy for its terminal endpoint.
+   *
+   * @param host_header HTTP Host header used to select the browser-visible terminal host.
+   * @param terminal_ws_port HTTPS port of the dedicated terminal WebSocket server.
+   * @return Restrictive page policy that permits the terminal WebSocket only on the requested host.
+   */
+  std::string steamshine_page_content_security_policy(std::string_view host_header, std::uint16_t terminal_ws_port);
 
   // Type aliases for HTTPS server components
   using https_server_t = SimpleWeb::Server<SimpleWeb::HTTPS>;

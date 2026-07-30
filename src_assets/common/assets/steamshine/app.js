@@ -198,11 +198,19 @@ function renderLogin() {
     </div>`);
   document.querySelector('#login').onsubmit = async (event) => {
     event.preventDefault();
+    const button = event.currentTarget.querySelector('button[type="submit"], button:not([type])');
+    const notice = event.currentTarget.querySelector('.notice');
+    button.disabled = true;
+    notice.textContent = '';
+    notice.className = 'notice';
     try {
-      const data = await json(await api('/auth/login', { method: 'POST', body: JSON.stringify(Object.fromEntries(new FormData(event.currentTarget))) }));
-      csrfToken = data.csrf_token;
-      navigate(`/steamshine/${DEFAULT_PAGE}`);
-    } catch (error) { event.currentTarget.querySelector('.notice').textContent = error.message; }
+      await json(await api('/auth/login', { method: 'POST', body: JSON.stringify(Object.fromEntries(new FormData(event.currentTarget))) }));
+      window.location.assign(`/steamshine/${DEFAULT_PAGE}`);
+    } catch (error) {
+      notice.textContent = error.message;
+      notice.className = 'notice error';
+      button.disabled = false;
+    }
   };
 }
 
