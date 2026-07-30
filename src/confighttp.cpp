@@ -67,6 +67,8 @@
 #include "steamshine_gpuctl.h"
 #include "steamshine_hwmonitor.h"
 #include "steamshine_terminal.h"
+#include "stream.h"
+#include "stream_recording.h"
 #include "utility.h"
 #include "uuid.h"
 #include "web_services.h"
@@ -2154,6 +2156,126 @@ namespace confighttp {
   }
 
   /**
+   * @brief Return sender recording state, capacity, usage, and completed files.
+   *
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   */
+  void steamshine_recordings(const resp_https_t &response, const req_https_t &request) {
+    if (require_steamshine_session(response, request).empty()) {
+      return;
+    }
+    send_steamshine_response(response, stream_recording::service().snapshot());
+  }
+
+  /**
+   * @brief Arm or stop lossless sender-side stream recording.
+   *
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   */
+  void steamshine_toggle_recording(const resp_https_t &response, const req_https_t &request) {
+    if (require_steamshine_mutation(response, request).empty()) {
+      return;
+    }
+    nlohmann::json input;
+    if (!read_steamshine_json(response, request, input)) {
+      return;
+    }
+    try {
+      const auto enabled {input.at("enabled").get<bool>()};
+      const auto result {stream_recording::service().set_enabled(enabled)};
+      if (!result.success) {
+        bad_request(response, request, result.message);
+        return;
+      }
+      if (enabled) {
+        stream::request_recording_key_frame();
+      }
+      send_steamshine_response(response, {{"status", true}, {"code", result.code}, {"message", result.message}});
+    } catch (const nlohmann::json::exception &) {
+      bad_request(response, request, "The enabled field must be a boolean.");
+    }
+  }
+
+  /**
+   * @brief Persist and enforce the total completed-recording capacity.
+   *
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   */
+  void steamshine_recording_settings(const resp_https_t &response, const req_https_t &request) {
+    if (require_steamshine_mutation(response, request).empty()) {
+      return;
+    }
+    nlohmann::json input;
+    if (!read_steamshine_json(response, request, input)) {
+      return;
+    }
+    try {
+      const auto result {stream_recording::service().set_capacity_megabytes(input.at("capacity_mb").get<std::uint64_t>())};
+      if (!result.success) {
+        bad_request(response, request, result.message);
+        return;
+      }
+      send_steamshine_response(response, {{"status", true}, {"code", result.code}, {"message", result.message}});
+    } catch (const nlohmann::json::exception &) {
+      bad_request(response, request, "Recording capacity must be an integer number of megabytes.");
+    }
+  }
+
+  /**
+   * @brief Delete one completed sender recording.
+   *
+   * @param response The HTTP response object.
+   * @param request The HTTP request object containing the generated recording identifier.
+   */
+  void steamshine_delete_recording(const resp_https_t &response, const req_https_t &request) {
+    if (require_steamshine_mutation(response, request).empty()) {
+      return;
+    }
+    const std::string id {request->path_match[1].str()};
+    const auto result {stream_recording::service().remove(id)};
+    if (!result.success) {
+      bad_request(response, request, result.message);
+      return;
+    }
+    send_steamshine_response(response, {{"status", true}, {"code", result.code}, {"message", result.message}});
+  }
+
+  /**
+   * @brief Serve one completed MP4 for inline playback or attachment download.
+   *
+   * @param response The HTTP response object.
+   * @param request The HTTP request object containing the identifier and disposition path.
+   */
+  void steamshine_recording_media(const resp_https_t &response, const req_https_t &request) {
+    if (require_steamshine_session(response, request).empty()) {
+      return;
+    }
+    const std::string id {request->path_match[1].str()};
+    const auto path {stream_recording::service().resolve(id)};
+    if (path.empty()) {
+      not_found(response, request, "Recording was not found.");
+      return;
+    }
+    std::ifstream input {path, std::ios::binary};
+    if (!input) {
+      not_found(response, request, "Recording was not found.");
+      return;
+    }
+    const bool download {request->path.ends_with("/download")};
+    SimpleWeb::CaseInsensitiveMultimap headers {
+      {"Content-Type", "video/mp4"},
+      {"Content-Disposition", std::format("{}; filename=\"{}.mp4\"", download ? "attachment" : "inline", id)},
+      {"Cache-Control", "no-store"},
+      {"X-Content-Type-Options", "nosniff"},
+      {"Content-Security-Policy", "default-src 'none'; frame-ancestors 'none';"},
+    };
+    response->write(SimpleWeb::StatusCode::success_ok, input, headers);
+  }
+
+  /**
    * @brief Report whether a Terminal shell session is currently running.
    *
    * @param response The HTTP response object.
@@ -2939,6 +3061,11 @@ namespace confighttp {
     server.resource["^/api/steamshine/v1/stream/profiles$"]["GET"] = steamshine_handler(steamshine_stream_profiles);
     server.resource["^/api/steamshine/v1/stream/profiles$"]["POST"] = steamshine_handler(steamshine_save_stream_profile);
     server.resource["^/api/steamshine/v1/stream/profiles/reset$"]["POST"] = steamshine_handler(steamshine_reset_stream_profile);
+    server.resource["^/api/steamshine/v1/stream/recordings$"]["GET"] = steamshine_handler(steamshine_recordings);
+    server.resource["^/api/steamshine/v1/stream/recordings/toggle$"]["POST"] = steamshine_handler(steamshine_toggle_recording);
+    server.resource["^/api/steamshine/v1/stream/recordings/settings$"]["POST"] = steamshine_handler(steamshine_recording_settings);
+    server.resource["^/api/steamshine/v1/stream/recordings/([A-Za-z0-9-]+)$"]["DELETE"] = steamshine_handler(steamshine_delete_recording);
+    server.resource["^/api/steamshine/v1/stream/recordings/([A-Za-z0-9-]+)/(?:video|download)$"]["GET"] = steamshine_handler(steamshine_recording_media);
     server.resource["^/api/steamshine/v1/system/metrics$"]["GET"] = steamshine_handler(steamshine_system_metrics);
     server.resource["^/api/steamshine/v1/apps$"]["GET"] = steamshine_handler(steamshine_get_apps);
     server.resource["^/api/steamshine/v1/apps$"]["POST"] = steamshine_handler(steamshine_save_app);

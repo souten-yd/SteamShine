@@ -126,6 +126,14 @@ namespace stream {
   );
 
   /**
+   * @brief Request an immediate independently decodable frame for a newly armed recording.
+   *
+   * The request is raised on every running stream mailbox so recording does not
+   * have to wait for an encoder's optional periodic key-frame policy.
+   */
+  void request_recording_key_frame();
+
+  /**
    * @brief Serialize one canonical stream negotiation snapshot.
    *
    * @param snapshot Session snapshot to serialize.

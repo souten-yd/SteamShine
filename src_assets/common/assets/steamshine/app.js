@@ -298,9 +298,30 @@ function streamStage(title, values) {
   return `<div class="section stream-stage"><h3>${escapeHtml(title)}</h3><div class="rows">${rows || '<div class="empty">Unavailable</div>'}</div></div>`;
 }
 
+/** @brief Format a byte count for recording capacity and completed-file rows. */
+function formatBytes(bytes) {
+  const value = Number(bytes) || 0;
+  if (value < 1024) return `${value} B`;
+  const units = ['KB', 'MB', 'GB', 'TB'];
+  let scaled = value / 1024;
+  let unit = units[0];
+  for (let index = 1; index < units.length && scaled >= 1024; index += 1) { scaled /= 1024; unit = units[index]; }
+  return `${scaled.toFixed(scaled >= 10 ? 1 : 2)} ${unit}`;
+}
+
 /** @brief Render live four-stage negotiation state and bounded client/network profiles. */
 async function renderStreamNegotiation() {
   shell(`<div class="page-header"><div><h2>Stream negotiation</h2><p>Requested, selected, active, and observed state. Live data refreshes every 2 seconds without owning the media path.</p></div><a class="btn-ghost btn-sm" href="/sunshine/config">Sunshine fallback settings</a></div>
+    <div class="section stack">
+      <div class="metric-tile-head"><div><h3 style="margin:0">Sender recording</h3><p class="field-hint">Stores the exact encoded video sent to the client without running another encoder. Audio is not included.</p></div><button id="recording-toggle" class="btn-primary" type="button">Loading…</button></div>
+      <div id="recording-status" class="status-line">Loading recording state…</div>
+      <form id="recording-capacity-form" class="btn-row">
+        <label style="max-width:16rem">Recording capacity (MB)<input name="capacity_mb" type="number" min="1" max="102400" value="500" required></label>
+        <button class="btn-ghost" type="submit">Save capacity</button>
+      </form>
+      <video id="recording-player" class="recording-player" controls preload="metadata" hidden></video>
+      <div id="recordings-list"><div class="empty">Loading recordings…</div></div>
+    </div>
     <div id="stream-state" class="grid-2"><div class="empty">Loading stream state…</div></div>
     <div class="section stack"><div><h3>Client / network profile</h3><p class="field-hint">Profiles match the paired client ID, network class, and current capability signature exactly. A changed capability signature always wins over saved preferences.</p></div>
       <form id="stream-profile-form" class="stack">
@@ -323,6 +344,56 @@ async function renderStreamNegotiation() {
       </form>
       <div id="stream-profiles"><div class="empty">Loading profiles…</div></div>
     </div>`, { authenticated: true, activeId: 'stream' });
+
+  let recordingState = null;
+  const renderRecordings = (state) => {
+    recordingState = state;
+    const status = document.querySelector('#recording-status');
+    const toggle = document.querySelector('#recording-toggle');
+    const input = document.querySelector('#recording-capacity-form input');
+    const root = document.querySelector('#recordings-list');
+    if (!status || !toggle || !input || !root) return;
+    toggle.disabled = state.state === 'finalizing';
+    toggle.textContent = state.enabled ? 'Stop recording' : 'Start recording';
+    toggle.className = state.enabled ? 'btn-danger' : 'btn-primary';
+    status.innerHTML = `<span class="status-dot ${state.state === 'recording' ? 'dot-ok' : state.state === 'error' ? 'dot-danger' : 'dot-idle'}"></span>${escapeHtml(state.state)} · ${formatBytes(state.used_bytes)} / ${formatBytes(state.capacity_bytes)}${state.last_error ? ` · ${escapeHtml(state.last_error)}` : ''}`;
+    if (document.activeElement !== input) input.value = state.capacity_mb;
+    const recordings = state.recordings || [];
+    root.innerHTML = recordings.length ? `<table><thead><tr><th>Recorded</th><th>Video</th><th>Size</th><th></th></tr></thead><tbody>${recordings.map((item) => `<tr><td>${escapeHtml(new Date(item.created_at_unix_ms || 0).toLocaleString())}</td><td>${escapeHtml(item.codec || 'video')} · ${escapeHtml(item.width || '—')}×${escapeHtml(item.height || '—')} · ${escapeHtml(item.fps || '—')} fps${item.hdr ? ' · HDR' : ''}</td><td class="num">${formatBytes(item.size_bytes)}</td><td style="text-align:right"><div class="btn-row"><button class="btn-sm" type="button" data-watch-recording="${escapeHtml(item.id)}">Watch</button><a class="btn-sm btn-ghost" href="/api/steamshine/v1/stream/recordings/${encodeURIComponent(item.id)}/download">Download</a><button class="btn-sm btn-danger" type="button" data-delete-recording="${escapeHtml(item.id)}">Delete</button></div></td></tr>`).join('')}</tbody></table>` : '<div class="empty">No completed recordings.</div>';
+    root.querySelectorAll('[data-watch-recording]').forEach((button) => button.onclick = () => {
+      const player = document.querySelector('#recording-player');
+      player.src = `/api/steamshine/v1/stream/recordings/${encodeURIComponent(button.dataset.watchRecording)}/video`;
+      player.hidden = false;
+      player.play().catch(() => {});
+    });
+    root.querySelectorAll('[data-delete-recording]').forEach((button) => button.onclick = async () => {
+      if (!await confirmDialog({ title: 'Delete recording', message: 'Delete this completed recording permanently?' })) return;
+      try {
+        const result = await json(await api(`/stream/recordings/${encodeURIComponent(button.dataset.deleteRecording)}`, { method: 'DELETE' }));
+        toast(result.message, 'ok');
+        await loadRecordings();
+      } catch (error) { toast(error.message, 'error'); }
+    });
+  };
+
+  const loadRecordings = async () => renderRecordings(await json(await api('/stream/recordings')));
+
+  document.querySelector('#recording-toggle').onclick = async () => {
+    try {
+      const result = await json(await api('/stream/recordings/toggle', { method: 'POST', body: JSON.stringify({ enabled: !recordingState?.enabled }) }));
+      toast(result.message, 'ok');
+      await loadRecordings();
+    } catch (error) { toast(error.message, 'error'); }
+  };
+  document.querySelector('#recording-capacity-form').onsubmit = async (event) => {
+    event.preventDefault();
+    try {
+      const capacity = Number(event.currentTarget.elements.capacity_mb.value);
+      const result = await json(await api('/stream/recordings/settings', { method: 'POST', body: JSON.stringify({ capacity_mb: capacity }) }));
+      toast(result.message, 'ok');
+      await loadRecordings();
+    } catch (error) { toast(error.message, 'error'); }
+  };
 
   const loadProfiles = async () => {
     const profileDocument = await json(await api('/stream/profiles'));
@@ -369,8 +440,9 @@ async function renderStreamNegotiation() {
       if (!form.elements.capability_signature.value) form.elements.capability_signature.value = state.requested.capability_signature;
     }
   };
-  await Promise.all([loadProfiles(), renderState()]);
-  pollTimer = setInterval(renderState, 2000);
+  const refreshLiveState = async () => Promise.all([renderState(), loadRecordings().catch(() => {})]);
+  await Promise.all([loadProfiles(), refreshLiveState()]);
+  pollTimer = setInterval(refreshLiveState, 2000);
 }
 
 /** @brief Render the applications list: card grid + add/edit form + close-running control. */
@@ -612,10 +684,8 @@ async function renderClients() {
 /** @brief Render the full PTY web terminal (xterm.js over WebSocket). */
 async function renderTerminal() {
   const status = await json(await api('/terminal/status'));
-  const wsOrigin = `https://${location.hostname}:${status.ws_port}/`;
-  shell(`<div class="page-header"><div><h2>Terminal</h2><p>A real shell on the SteamShine host, running as the same unprivileged user as Sunshine.</p></div>
+  shell(`<div class="page-header"><div><h2>Terminal</h2></div>
       <div class="btn-row"><button id="term-restart" class="btn-ghost btn-sm">Restart session</button></div></div>
-    <div class="callout info">The terminal connects over a separate port (<span class="num">${status.ws_port}</span>) using the same self-signed certificate. If it stays disconnected, open <a href="${wsOrigin}" target="_blank" rel="noopener">${escapeHtml(wsOrigin)}</a> once in a new tab to accept the certificate, then come back here.</div>
     <div class="terminal-wrap">
       <div class="terminal-keybar">
         <button data-key="Escape">Esc</button><button data-key="Tab">Tab</button><button data-key="ControlLeft">Ctrl</button>

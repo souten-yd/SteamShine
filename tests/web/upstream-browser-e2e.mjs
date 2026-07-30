@@ -249,6 +249,25 @@ try {
   if (streamState?.schema_version !== 1 || streamState?.poll_interval_ms !== 2000) {
     throw new Error(`Stream negotiation schema or polling bound changed: ${JSON.stringify(streamState)}`);
   }
+  await steamshinePage.getByRole('heading', { name: 'Sender recording' }).waitFor({ timeout: 5000 });
+  const initialRecordingState = await steamshinePage.evaluate(async () => (await fetch('/api/steamshine/v1/stream/recordings')).json());
+  if (initialRecordingState.capacity_mb !== 500 || initialRecordingState.state !== 'idle' || !Array.isArray(initialRecordingState.recordings)) {
+    throw new Error(`Unexpected default sender recording state: ${JSON.stringify(initialRecordingState)}`);
+  }
+  securityResults.recording_capacity_status = await steamshinePage.evaluate(async (csrf) => (await fetch('/api/steamshine/v1/stream/recordings/settings', {
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-SteamShine-CSRF-Token': csrf }, body: JSON.stringify({ capacity_mb: 501 }),
+  })).status, csrfValue);
+  const savedRecordingState = await steamshinePage.evaluate(async () => (await fetch('/api/steamshine/v1/stream/recordings')).json());
+  if (securityResults.recording_capacity_status !== 200 || savedRecordingState.capacity_mb !== 501) {
+    throw new Error(`Sender recording capacity did not persist: ${JSON.stringify(savedRecordingState)}`);
+  }
+  const recordingToggleStatuses = [];
+  for (const enabled of [true, false]) {
+    recordingToggleStatuses.push(await steamshinePage.evaluate(async ({ csrf, value }) => (await fetch('/api/steamshine/v1/stream/recordings/toggle', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-SteamShine-CSRF-Token': csrf }, body: JSON.stringify({ enabled: value }),
+    })).status, { csrf: csrfValue, value: enabled }));
+  }
+  if (recordingToggleStatuses.some((status) => status !== 200)) throw new Error(`Sender recording toggle failed: ${recordingToggleStatuses.join(',')}`);
   const profilePayload = {
     client_id: 'browser-client', network_class: 'lan', capability_signature: 'v1-c0-d0-x0-h0', active: true,
     geometry_policy: 'fit', fps_policy: 'custom', fps_ceiling: 60, codec_policy: 'h264', hdr_policy: 'off',
@@ -301,6 +320,9 @@ try {
   if (securityResults.app_asset_cache_control !== 'no-store') {
     throw new Error('SteamShine application assets may retain stale login code in the browser cache.');
   }
+  const appAsset = await appAssetResponse.text();
+  securityResults.terminal_explanation_removed = !appAsset.includes('A real shell on the SteamShine host') && !appAsset.includes('The terminal connects over a separate port');
+  if (!securityResults.terminal_explanation_removed) throw new Error('The Terminal page still contains the removed subtitle or framed explanation.');
   securityResults.malformed_json_status = await steamshinePage.evaluate(async (csrf) => (await fetch('/api/steamshine/v1/pairing/pin', {
     method: 'POST', headers: { 'Content-Type': 'application/json', 'X-SteamShine-CSRF-Token': csrf }, body: '{',
   })).status, csrfValue);

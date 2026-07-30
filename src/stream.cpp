@@ -16,6 +16,7 @@
 #include <limits>
 #include <numeric>
 #include <queue>
+#include <span>
 
 // lib includes
 #include <boost/endian/arithmetic.hpp>
@@ -45,6 +46,7 @@ extern "C" {
 #include "process.h"
 #include "steamos_virtual_session.h"
 #include "stream.h"
+#include "stream_recording.h"
 #include "sync.h"
 #include "system_tray.h"
 #include "thread_safe.h"
@@ -318,12 +320,10 @@ namespace stream {
     if (refresh_hint_discarded) {
       add_fallback_reason(snapshot, "client_refresh_rate_hint_inconsistent");
     }
-    if (snapshot.requested.launch_geometry.width != snapshot.requested.stream_geometry.width ||
-        snapshot.requested.launch_geometry.height != snapshot.requested.stream_geometry.height) {
+    if (snapshot.requested.launch_geometry.width != snapshot.requested.stream_geometry.width || snapshot.requested.launch_geometry.height != snapshot.requested.stream_geometry.height) {
       add_fallback_reason(snapshot, "rtsp_geometry_differs_from_launch");
     }
-    if (snapshot.requested.launch_geometry.frame_rate.numerator != snapshot.requested.stream_geometry.frame_rate.numerator ||
-        snapshot.requested.launch_geometry.frame_rate.denominator != snapshot.requested.stream_geometry.frame_rate.denominator) {
+    if (snapshot.requested.launch_geometry.frame_rate.numerator != snapshot.requested.stream_geometry.frame_rate.numerator || snapshot.requested.launch_geometry.frame_rate.denominator != snapshot.requested.stream_geometry.frame_rate.denominator) {
       add_fallback_reason(snapshot, "rtsp_frame_rate_differs_from_launch");
     }
     if (configured_total_bitrate_kbps > 0 && configured_total_bitrate_kbps != config.monitor.bitrate) {
@@ -2114,6 +2114,18 @@ namespace stream {
         }
       }
 
+      stream_recording::service().submit({
+        .payload = std::span {reinterpret_cast<const std::uint8_t *>(payload.data()), payload.size()},
+        .stream_id = reinterpret_cast<std::uintptr_t>(session),
+        .frame_index = packet->frame_index(),
+        .codec = session->config.monitor.videoFormat,
+        .width = session->config.monitor.width,
+        .height = session->config.monitor.height,
+        .fps = session->config.monitor.framerate,
+        .hdr = session->config.monitor.dynamicRange != 0,
+        .idr = packet->is_idr(),
+      });
+
       steamos_virtual_session::mark_encoded_packet(payload.size(), packet->is_idr());
 
       video_short_frame_header_t frame_header = {};
@@ -2793,6 +2805,7 @@ namespace stream {
         return;
       }
 
+      stream_recording::service().stream_ended(reinterpret_cast<std::uintptr_t>(&session));
       session.shutdown_event->raise(true);
     }
 
@@ -2987,4 +3000,20 @@ namespace stream {
       return session;
     }
   }  // namespace session
+
+  /** @copydoc stream::request_recording_key_frame */
+  void request_recording_key_frame() {
+    auto ref {broadcast.ref()};
+    if (!ref) {
+      return;
+    }
+    auto sessions_lock {ref->control_server._sessions.lock()};
+    for (auto *const active_session : *ref->control_server._sessions) {
+      if (active_session == nullptr || session::state(*active_session) != session::state_e::RUNNING) {
+        continue;
+      }
+      video::record_idr_request(video::idr_reason_e::client_request);
+      active_session->video.idr_events->raise(video::idr_reason_e::client_request);
+    }
+  }
 }  // namespace stream
