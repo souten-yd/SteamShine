@@ -533,6 +533,7 @@ namespace gamescope_source {
 
   bool has_game_mode_session_identity(const std::string_view command_line, const std::string_view cgroup) {
     size_t component_start {};
+    bool steam_session_component {false};
     while (component_start < cgroup.size()) {
       const auto separator {cgroup.find('/', component_start)};
       component_start = separator == std::string_view::npos ? cgroup.size() : separator + 1;
@@ -544,12 +545,16 @@ namespace gamescope_source {
       if (component == "gamescope-session.service" || (component.starts_with("gamescope-session@") && component.ends_with(".service"))) {
         return true;
       }
+      if (component == "steam.service" || component == "steam.scope" ||
+          ((component.starts_with("steam-") || component.starts_with("app-steam-") || component.starts_with("app-steam@")) &&
+           (component.ends_with(".service") || component.ends_with(".scope")))) {
+        steam_session_component = true;
+      }
       component_start = component_end == std::string_view::npos ? cgroup.size() : component_end;
     }
 
     const bool steam_argument {command_line.find("--steam") != std::string_view::npos || command_line.find("-steamdeck") != std::string_view::npos};
-    const bool steam_session {cgroup.find("gamescope-session") != std::string_view::npos || cgroup.find("steam") != std::string_view::npos};
-    return steam_argument && steam_session;
+    return steam_argument && steam_session_component;
   }
 
   bool is_gamescope_capture_media_class(const std::string_view media_class) {

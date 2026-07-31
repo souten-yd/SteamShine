@@ -595,6 +595,9 @@ namespace {
     EXPECT_EQ(select_stock_handoff_action(stock_handoff_policy_e::auto_idle, true, true, stock_activity_e::idle), stock_handoff_action_e::attach);
     EXPECT_EQ(select_stock_handoff_action(stock_handoff_policy_e::auto_idle, true, false, stock_activity_e::active_game), stock_handoff_action_e::attach);
     EXPECT_EQ(select_stock_handoff_action(stock_handoff_policy_e::auto_idle, true, false, stock_activity_e::unknown), stock_handoff_action_e::attach);
+    EXPECT_FALSE(steamos_virtual_session::systemctl_job_mode_argument(true));
+    ASSERT_TRUE(steamos_virtual_session::systemctl_job_mode_argument(false));
+    EXPECT_EQ(*steamos_virtual_session::systemctl_job_mode_argument(false), "--no-block");
     EXPECT_EQ(steamos_virtual_session::to_string(stock_handoff_state_e::inactive), "inactive");
     EXPECT_EQ(steamos_virtual_session::to_string(stock_handoff_state_e::attached_active_game), "attached_active_game");
     EXPECT_EQ(steamos_virtual_session::to_string(stock_handoff_state_e::owned_active), "owned_active");
@@ -833,6 +836,7 @@ namespace {
     EXPECT_TRUE(gamescope_source::has_game_mode_session_identity("gamescope --steam", "0::/user.slice/steam-session.scope\n"));
     EXPECT_FALSE(gamescope_source::has_game_mode_session_identity(stock_command, "0::/user.slice/not-gamescope-session.service\n"));
     EXPECT_FALSE(gamescope_source::has_game_mode_session_identity("gamescope", "0::/user.slice/steam-session.scope\n"));
+    EXPECT_FALSE(gamescope_source::has_game_mode_session_identity("gamescope --steam", "0::/user.slice/user@1000.service/app.slice/steamshine.service\n"));
   }
 
   /**

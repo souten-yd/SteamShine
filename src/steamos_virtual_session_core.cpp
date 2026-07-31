@@ -259,6 +259,10 @@ namespace steamos_virtual_session {
              stock_handoff_action_e::attach;
   }
 
+  std::optional<std::string_view> systemctl_job_mode_argument(const bool wait_for_completion) {
+    return wait_for_completion ? std::nullopt : std::optional<std::string_view> {"--no-block"};
+  }
+
   std::string_view to_string(const stock_handoff_state_e state) {
     switch (state) {
       case stock_handoff_state_e::inactive:

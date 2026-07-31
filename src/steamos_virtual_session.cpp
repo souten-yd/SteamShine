@@ -417,10 +417,11 @@ namespace steamos_virtual_session {
       }
       if (child == 0) {
         close_inherited_descriptors_for_exec(3, 65536);
-        if (wait_for_completion) {
-          ::execlp("systemctl", "systemctl", "--user", "--wait", operation, "gamescope-session.target", static_cast<char *>(nullptr));
+        const auto job_mode {systemctl_job_mode_argument(wait_for_completion)};
+        if (!job_mode) {
+          ::execlp("systemctl", "systemctl", "--user", operation, "gamescope-session.target", static_cast<char *>(nullptr));
         } else {
-          ::execlp("systemctl", "systemctl", "--user", "--no-block", operation, "gamescope-session.target", static_cast<char *>(nullptr));
+          ::execlp("systemctl", "systemctl", "--user", job_mode->data(), operation, "gamescope-session.target", static_cast<char *>(nullptr));
         }
         _exit(127);
       }

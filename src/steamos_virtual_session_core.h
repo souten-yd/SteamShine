@@ -226,6 +226,17 @@ namespace steamos_virtual_session {
   stock_handoff_action_e select_stock_handoff_action(stock_handoff_policy_e policy, bool prefer_owned_session, bool startup_encoder_preflight, stock_activity_e activity);
 
   /**
+   * @brief Select the optional systemctl job-mode argument.
+   *
+   * Synchronous systemctl operation is the default and is also the only
+   * blocking form supported by `stop`; `--wait` is limited to other verbs.
+   *
+   * @param wait_for_completion Whether the caller must wait for the unit job.
+   * @return No argument for synchronous operation, or `--no-block` otherwise.
+   */
+  std::optional<std::string_view> systemctl_job_mode_argument(bool wait_for_completion);
+
+  /**
    * @brief Observable lifecycle state of a stock Game Mode handoff.
    */
   enum class stock_handoff_state_e {
