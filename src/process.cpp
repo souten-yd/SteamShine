@@ -64,6 +64,16 @@ namespace proc {
            origin == steamos_virtual_session::session_origin_e::none;
   }
 
+  bool should_keep_physical_desktop(
+    const int exit_code,
+    const bool prefer_physical_desktop,
+    const steamos_virtual_session::session_origin_e origin
+  ) {
+    return exit_code == virtual_display_fallback_exit_code &&
+           prefer_physical_desktop &&
+           origin == steamos_virtual_session::session_origin_e::none;
+  }
+
   bool should_launch_owned_virtual_desktop(
     const std::string_view app_command,
     const std::size_t detached_command_count,
@@ -82,6 +92,10 @@ namespace proc {
     return std::ranges::any_of(application.prep_cmds, [](const cmd_t &command) {
       return steam_session::command_opens_big_picture(command.do_cmd);
     });
+  }
+
+  bool should_prefer_physical_desktop(const ctx_t &application) {
+    return application.cmd.empty() && application.detached.empty();
   }
 
   void reset_launch_environment(
@@ -273,6 +287,7 @@ namespace proc {
 
     const auto virtual_status {steamos_virtual_session::status_snapshot()};
     preserve_attached_steam_ = virtual_status.origin == steamos_virtual_session::session_origin_e::attached_existing;
+    const bool prefer_physical_desktop {should_prefer_physical_desktop(_app)};
     const bool launch_owned_virtual_desktop {should_launch_owned_virtual_desktop(
       _app.cmd,
       _app.detached.size(),
@@ -379,12 +394,11 @@ namespace proc {
       auto ret = child.exit_code();
       if (ret != 0) {
         BOOST_LOG(error) << '[' << cmd.do_cmd << "] exited with code ["sv << ret << ']';
-        if (should_retry_owned_virtual_display(
-              ret,
-              config::steamos_virtual_display.enabled,
-              config::steamos_virtual_display.mode,
-              virtual_status.origin
-            )) {
+        if (should_keep_physical_desktop(ret, prefer_physical_desktop, virtual_status.origin)) {
+          BOOST_LOG(warning) << "Physical Desktop mode preparation was unavailable; preserving the capturable KDE Desktop at its current mode";
+          continue;
+        }
+        if (should_retry_owned_virtual_display(ret, config::steamos_virtual_display.enabled, config::steamos_virtual_display.mode, virtual_status.origin)) {
           // The failed display-mode helper may already have saved or changed physical state.
           // Treat its matching undo command as active so fail_guard restores it before retry.
           ++_app_prep_it;
@@ -438,6 +452,13 @@ namespace proc {
       return candidate.id == std::to_string(app_id);
     })};
     return application != _apps.end() && should_prefer_owned_virtual_display(*application);
+  }
+
+  bool proc_t::prefers_physical_desktop(const int app_id) const {
+    const auto application {std::ranges::find_if(_apps, [app_id](const ctx_t &candidate) {
+      return candidate.id == std::to_string(app_id);
+    })};
+    return application != _apps.end() && should_prefer_physical_desktop(*application);
   }
 
   int proc_t::running() {

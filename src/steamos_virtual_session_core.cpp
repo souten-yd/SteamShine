@@ -274,6 +274,18 @@ namespace steamos_virtual_session {
       };
     }
 
+    if (input.source_policy == session_source_policy_e::auto_select && input.prefer_physical_desktop && input.capturable_output_present) {
+      return {session_route_e::physical_desktop, "desktop_application_capturable_output"};
+    }
+    if (input.source_policy == session_source_policy_e::auto_select && input.startup_preflight_owned_session && input.prefer_owned_session) {
+      if (input.retained_owned_session) {
+        return {session_route_e::retained_owned_private, "startup_preflight_retained_owned_private"};
+      }
+      return {
+        input.host_supported ? session_route_e::new_owned_private : session_route_e::reject,
+        input.host_supported ? "startup_preflight_replaced_owned_private" : "startup_preflight_host_unsupported"
+      };
+    }
     if (input.verified_existing_gamescope_present) {
       return {session_route_e::attached_existing, "verified_existing_gamescope"};
     }
@@ -337,9 +349,7 @@ namespace steamos_virtual_session {
     const std::filesystem::path &runtime_directory,
     const std::string_view gamescope_wayland_display
   ) {
-    if (runtime_directory.empty() || !runtime_directory.is_absolute() ||
-        gamescope_wayland_display.empty() || gamescope_wayland_display == "." || gamescope_wayland_display == ".." ||
-        gamescope_wayland_display.find('/') != std::string_view::npos || gamescope_wayland_display.find('\0') != std::string_view::npos) {
+    if (runtime_directory.empty() || !runtime_directory.is_absolute() || gamescope_wayland_display.empty() || gamescope_wayland_display == "." || gamescope_wayland_display == ".." || gamescope_wayland_display.find('/') != std::string_view::npos || gamescope_wayland_display.find('\0') != std::string_view::npos) {
       return std::nullopt;
     }
     return runtime_directory.lexically_normal() / (std::string {gamescope_wayland_display} + "-ei");
@@ -375,8 +385,7 @@ namespace steamos_virtual_session {
       result.reason = "invalid_refresh";
       return result;
     }
-    if (result.requested_width < constraints.minimum_width || result.requested_width > constraints.maximum_width ||
-        result.requested_height < constraints.minimum_height || result.requested_height > constraints.maximum_height) {
+    if (result.requested_width < constraints.minimum_width || result.requested_width > constraints.maximum_width || result.requested_height < constraints.minimum_height || result.requested_height > constraints.maximum_height) {
       result.reason = "geometry_out_of_bounds";
       return result;
     }
@@ -423,8 +432,7 @@ namespace steamos_virtual_session {
     }
     std::uint64_t frame_bytes {};
     std::uint64_t buffer_bytes {};
-    if (!checked_multiply(frame_pixels, constraints.bytes_per_pixel, frame_bytes) ||
-        !checked_multiply(frame_bytes, constraints.buffer_count, buffer_bytes)) {
+    if (!checked_multiply(frame_pixels, constraints.bytes_per_pixel, frame_bytes) || !checked_multiply(frame_bytes, constraints.buffer_count, buffer_bytes)) {
       result.reason = "buffer_size_overflow";
       return result;
     }

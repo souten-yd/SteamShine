@@ -8,6 +8,8 @@
 #include <boost/locale.hpp>
 #include <inputtino/input.hpp>
 #include <libevdev/libevdev.h>
+#include <memory>
+#include <mutex>
 
 // local includes
 #include "src/config.h"
@@ -62,12 +64,6 @@ namespace platf {
    */
   struct input_raw_t {
     input_raw_t():
-        mouse(inputtino::Mouse::create({
-          .name = inputtino_name_for_seat("Mouse passthrough"sv),
-          .vendor_id = 0xBEEF,
-          .product_id = 0xDEAD,
-          .version = 0x111,
-        })),
         keyboard(inputtino::Keyboard::create({
           .name = inputtino_name_for_seat("Keyboard passthrough"sv),
           .vendor_id = 0xBEEF,
@@ -76,9 +72,6 @@ namespace platf {
         })),
         gamescope_eis {},
         gamepads(MAX_GAMEPADS) {
-      if (!mouse) {
-        BOOST_LOG(warning) << "Unable to create virtual mouse: " << mouse.getErrorMessage();
-      }
       if (!keyboard) {
         BOOST_LOG(warning) << "Unable to create virtual keyboard: " << keyboard.getErrorMessage();
       }
@@ -86,8 +79,35 @@ namespace platf {
 
     ~input_raw_t() = default;
 
-    // All devices are wrapped in Result because it might be that we aren't able to create them (ex: udev permission denied)
-    inputtino::Result<inputtino::Mouse> mouse;  ///< Shared inputtino virtual mouse device.
+    /**
+     * @brief Return the desktop uinput mouse, creating it on first desktop use.
+     *
+     * Gamescope sessions deliver pointer input through their private EIS
+     * socket. Deferring this global uinput device prevents its absolute
+     * pointer half from being exposed by Linux as a legacy joystick while a
+     * Game Mode session is active.
+     *
+     * @return Desktop mouse pointer, or nullptr when uinput creation failed.
+     */
+    inputtino::Mouse *desktop_mouse() {
+      std::call_once(mouse_creation_once, [this]() {
+        auto result = inputtino::Mouse::create({
+          .name = inputtino_name_for_seat("Mouse passthrough"sv),
+          .vendor_id = 0xBEEF,
+          .product_id = 0xDEAD,
+          .version = 0x111,
+        });
+        if (!result) {
+          BOOST_LOG(warning) << "Unable to create virtual mouse: " << result.getErrorMessage();
+          return;
+        }
+        mouse = std::make_unique<inputtino::Mouse>(std::move(*result));
+      });
+      return mouse.get();
+    }
+
+    std::unique_ptr<inputtino::Mouse> mouse;  ///< Lazily created desktop-only virtual mouse.
+    std::once_flag mouse_creation_once;  ///< Serializes the first desktop mouse creation attempt.
     inputtino::Result<inputtino::Keyboard> keyboard;  ///< inputtino virtual keyboard device.
     gamescope_eis_input_t gamescope_eis;  ///< Sender isolated to the selected Gamescope session.
 

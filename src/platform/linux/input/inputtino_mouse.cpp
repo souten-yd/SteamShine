@@ -23,11 +23,11 @@ namespace platf::mouse {
    * @brief Apply a relative pointer movement to the virtual mouse.
    */
   void move(input_raw_t *raw, int deltaX, int deltaY) {
-    if (raw->gamescope_eis.move(deltaX, deltaY) != gamescope_input_result_e::desktop) {
+    if (!gamescope_input_uses_desktop_device(raw->gamescope_eis.move(deltaX, deltaY))) {
       return;
     }
-    if (raw->mouse) {
-      (*raw->mouse).move(deltaX, deltaY);
+    if (auto *mouse = raw->desktop_mouse()) {
+      mouse->move(deltaX, deltaY);
     }
   }
 
@@ -35,11 +35,11 @@ namespace platf::mouse {
    * @brief Move abs using the backend coordinate system.
    */
   void move_abs(input_raw_t *raw, const touch_port_t &touch_port, float x, float y) {
-    if (raw->gamescope_eis.move_absolute(x, y) != gamescope_input_result_e::desktop) {
+    if (!gamescope_input_uses_desktop_device(raw->gamescope_eis.move_absolute(x, y))) {
       return;
     }
-    if (raw->mouse) {
-      (*raw->mouse).move_abs(x, y, touch_port.width, touch_port.height);
+    if (auto *mouse = raw->desktop_mouse()) {
+      mouse->move_abs(x, y, touch_port.width, touch_port.height);
     }
   }
 
@@ -68,10 +68,10 @@ namespace platf::mouse {
         BOOST_LOG(warning) << "Unknown mouse button: " << button;
         return;
     }
-    if (raw->gamescope_eis.button(linux_button, !release) != gamescope_input_result_e::desktop) {
+    if (!gamescope_input_uses_desktop_device(raw->gamescope_eis.button(linux_button, !release))) {
       return;
     }
-    if (raw->mouse) {
+    if (auto *mouse = raw->desktop_mouse()) {
       inputtino::Mouse::MOUSE_BUTTON btn_type;
       switch (button) {
         case BUTTON_LEFT:
@@ -94,9 +94,9 @@ namespace platf::mouse {
           return;
       }
       if (release) {
-        (*raw->mouse).release(btn_type);
+        mouse->release(btn_type);
       } else {
-        (*raw->mouse).press(btn_type);
+        mouse->press(btn_type);
       }
     }
   }
@@ -105,11 +105,11 @@ namespace platf::mouse {
    * @brief Apply a vertical scroll event to the virtual mouse.
    */
   void scroll(input_raw_t *raw, int high_res_distance) {
-    if (raw->gamescope_eis.scroll(0, high_res_distance) != gamescope_input_result_e::desktop) {
+    if (!gamescope_input_uses_desktop_device(raw->gamescope_eis.scroll(0, high_res_distance))) {
       return;
     }
-    if (raw->mouse) {
-      (*raw->mouse).vertical_scroll(high_res_distance);
+    if (auto *mouse = raw->desktop_mouse()) {
+      mouse->vertical_scroll(high_res_distance);
     }
   }
 
@@ -117,11 +117,11 @@ namespace platf::mouse {
    * @brief Apply a horizontal scroll event to the virtual mouse.
    */
   void hscroll(input_raw_t *raw, int high_res_distance) {
-    if (raw->gamescope_eis.scroll(high_res_distance, 0) != gamescope_input_result_e::desktop) {
+    if (!gamescope_input_uses_desktop_device(raw->gamescope_eis.scroll(high_res_distance, 0))) {
       return;
     }
-    if (raw->mouse) {
-      (*raw->mouse).horizontal_scroll(high_res_distance);
+    if (auto *mouse = raw->desktop_mouse()) {
+      mouse->horizontal_scroll(high_res_distance);
     }
   }
 
@@ -129,12 +129,9 @@ namespace platf::mouse {
    * @brief Return the current virtual pointer location.
    */
   util::point_t get_location(input_raw_t *raw) {
-    if (raw->mouse) {
-      // TODO: decide what to do after https://github.com/games-on-whales/inputtino/issues/6 is resolved.
-      // TODO: auto x = (*raw->mouse).get_absolute_x();
-      // TODO: auto y = (*raw->mouse).get_absolute_y();
-      return {0, 0};
-    }
+    // Do not instantiate the desktop-only uinput mouse for a location query.
+    // TODO: decide what to do after https://github.com/games-on-whales/inputtino/issues/6 is resolved.
+    static_cast<void>(raw);
     return {0, 0};
   }
 }  // namespace platf::mouse

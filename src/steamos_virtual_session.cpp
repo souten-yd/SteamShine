@@ -116,6 +116,7 @@ namespace steamos_virtual_session {
       std::string game_gpu_selector;  ///< Game GPU selector used to create the retained session.
       std::string capture_gpu_selector;  ///< Capture GPU selector used to create the retained session.
       std::string encoder_gpu_selector;  ///< Encoder GPU selector used to create the retained session.
+      bool startup_encoder_preflight {false};  ///< Whether this owned canvas was prepared before HTTP startup for the first launch.
       bool stream_requested {false};  ///< Whether RTSP accepted the associated stream before capture attached.
       std::atomic_bool packet_tracking {false};  ///< Whether the video sender may update virtual-session metrics.
       std::atomic_uint64_t encoded_packets {0};  ///< Encoded packets emitted during the owned session.
@@ -455,6 +456,7 @@ namespace steamos_virtual_session {
       manager.game_gpu_selector.clear();
       manager.capture_gpu_selector.clear();
       manager.encoder_gpu_selector.clear();
+      manager.startup_encoder_preflight = false;
       manager.stream_requested = false;
       manager.current = config::steamos_virtual_display.enabled ? state_e::Idle : state_e::Disabled;
     }
@@ -1375,7 +1377,13 @@ namespace steamos_virtual_session {
 #endif
   }  // namespace
 
-  bool prepare(const rtsp_stream::launch_session_t &launch_session, std::string &error, const bool force_owned_fallback, const bool prefer_owned_session) {
+  bool prepare(
+    const rtsp_stream::launch_session_t &launch_session,
+    std::string &error,
+    const bool force_owned_fallback,
+    const bool prefer_owned_session,
+    const bool prefer_physical_desktop
+  ) {
     std::scoped_lock lock {manager.mutex};
     manager.migration_required = false;
     manager.app_launch_rejected_reason.clear();
@@ -1489,6 +1497,8 @@ namespace steamos_virtual_session {
       .mode = force_owned_fallback ? virtual_display_mode_e::force : config::steamos_virtual_display.mode,
       .source_policy = force_owned_fallback ? session_source_policy_e::owned_private : config::steamos_virtual_display.session_source,
       .prefer_owned_session = prefer_owned_session,
+      .prefer_physical_desktop = prefer_physical_desktop,
+      .startup_preflight_owned_session = manager.startup_encoder_preflight && manager.origin == session_origin_e::owned_private,
       .capturable_output_present = capturable_output_present,
       .retained_owned_session = retained_owned_session,
       .host_supported = true,
@@ -1503,6 +1513,8 @@ namespace steamos_virtual_session {
                     << " capturable_output_present=" << (capturable_output_present ? "true" : "false")
                     << " retained_owned_session=" << (retained_owned_session ? "true" : "false")
                     << " prefer_owned_session=" << (prefer_owned_session ? "true" : "false")
+                    << " prefer_physical_desktop=" << (prefer_physical_desktop ? "true" : "false")
+                    << " startup_encoder_preflight=" << (manager.startup_encoder_preflight ? "true" : "false")
                     << " verified_existing_gamescope=" << (verified_existing_gamescope ? "true" : "false");
     if (decision.route == session_route_e::physical_desktop) {
       if (manager.origin != session_origin_e::none) {
@@ -1933,6 +1945,19 @@ namespace steamos_virtual_session {
 #endif
   }
 
+  bool prepare_encoder_probe(const bool enable_hdr, std::string &error) {
+    rtsp_stream::launch_session_t probe_session {};
+    probe_session.id = 0;
+    probe_session.hdr_requested = enable_hdr;
+    probe_session.enable_hdr = enable_hdr;
+    if (!prepare(probe_session, error)) {
+      return false;
+    }
+    std::scoped_lock lock {manager.mutex};
+    manager.startup_encoder_preflight = manager.origin == session_origin_e::owned_private;
+    return true;
+  }
+
   bool capture_backend_required() {
     const bool physical_output_connected {host_physical_output_connected()};
     const bool active_crtc_present {host_active_crtc_present()};
@@ -1952,6 +1977,9 @@ namespace steamos_virtual_session {
       .feature_enabled = config::steamos_virtual_display.enabled,
       .mode = config::steamos_virtual_display.mode,
       .source_policy = config::steamos_virtual_display.session_source,
+      .prefer_owned_session = false,
+      .prefer_physical_desktop = false,
+      .startup_preflight_owned_session = false,
       .capturable_output_present = capturable_output_present,
       .retained_owned_session = active_origin == session_origin_e::owned_private,
       .host_supported = true,
@@ -2078,6 +2106,7 @@ namespace steamos_virtual_session {
 
   void mark_streaming() {
     std::scoped_lock lock {manager.mutex};
+    manager.startup_encoder_preflight = false;
     manager.stream_requested = true;
     if (manager.current == state_e::Ready) {
       manager.current = state_e::Streaming;

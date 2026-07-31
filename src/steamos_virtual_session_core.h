@@ -158,6 +158,8 @@ namespace steamos_virtual_session {
     virtual_display_mode_e mode;  ///< Requested virtual-display policy.
     session_source_policy_e source_policy;  ///< Configured Gamescope source policy.
     bool prefer_owned_session;  ///< Whether the selected application prefers an owned canvas over physical Desktop.
+    bool prefer_physical_desktop;  ///< Whether a capture-only Desktop app prefers a usable physical compositor over resident Game Mode.
+    bool startup_preflight_owned_session;  ///< Whether startup prepared an owned encoder-probe canvas that must survive the first launch decision.
     bool capturable_output_present;  ///< Whether a normal capture target is available.
     bool retained_owned_session;  ///< Whether SteamShine owns a compatible retained session.
     bool host_supported;  ///< Whether the host can create an owned Gamescope session.
@@ -175,11 +177,13 @@ namespace steamos_virtual_session {
   /**
    * @brief Select the capture route for one launch from current observations.
    *
-   * Automatic policy always prefers a verified stock Game Mode source. A
-   * Big Picture application preference then selects compatible retained or new
-   * owned Gamescope before physical Desktop. Other applications retain the
-   * PR #12 order: physical Desktop, retained owned, then new owned. Explicit
-   * source policies remain authoritative.
+   * Automatic policy normally prefers a verified stock Game Mode source. A
+   * capture-only Desktop application instead selects a usable physical
+   * compositor after the host has entered Desktop Mode. The first Big Picture
+   * launch preserves a startup encoder-preflight canvas instead of racing a
+   * transient stock Game Mode source. Other Big Picture launches still prefer
+   * verified stock Game Mode, then compatible retained or new owned Gamescope
+   * before physical Desktop. Explicit source policies remain authoritative.
    *
    * @param input Immutable policy and host-observation inputs.
    * @return Deterministic route and diagnostic reason.

@@ -11,6 +11,40 @@ trap 'rm -rf -- "${test_root}" "${fake_dri}"' EXIT
 source "${root_dir}/tests/fixtures/steamos/fixture.sh"
 steamos_fixture_init "${test_root}/fixture"
 
+# Every deployable SteamOS workflow job must use the immutable image recorded
+# in the repository lock rather than an independently updated digest.
+locked_image="$(sed -n 's/^image=//p' "${root_dir}/ci/steamos/image.lock")"
+locked_digest="$(sed -n 's/^digest=//p' "${root_dir}/ci/steamos/image.lock")"
+mapfile -t workflow_images < <(sed -n 's/^[[:space:]]*image: //p' "${root_dir}/.github/workflows/build-steamos.yml")
+test -n "${locked_image}" && test -n "${locked_digest}" && test "${#workflow_images[@]}" -gt 0
+for workflow_image in "${workflow_images[@]}"; do
+  test "${workflow_image}" = "${locked_image}@${locked_digest}"
+done
+
+# The Game Mode guard must ignore writeback connectors, hold the vendor launcher
+# while headless, and resume the unmodified launcher when a physical connector
+# becomes connected.
+guard_drm="${test_root}/guard-drm"
+guard_marker="${test_root}/guard-launcher-called"
+mkdir -p "${guard_drm}/card0-Writeback-1" "${guard_drm}/card0-HDMI-A-1"
+printf 'connected\n' >"${guard_drm}/card0-Writeback-1/status"
+printf 'disconnected\n' >"${guard_drm}/card0-HDMI-A-1/status"
+cat >"${test_root}/vendor-gamescope-session" <<'EOF'
+#!/usr/bin/env bash
+printf 'called\n' >"${STEAMSHINE_GUARD_TEST_MARKER:?}"
+EOF
+chmod 755 "${test_root}/vendor-gamescope-session"
+STEAMSHINE_DRM_ROOT="${guard_drm}" \
+  STEAMSHINE_CONNECTOR_POLL_SECONDS=0.01 \
+  STEAMSHINE_GUARD_TEST_MARKER="${guard_marker}" \
+  "${root_dir}/scripts/steamshine-gamescope-session-guard.sh" "${test_root}/vendor-gamescope-session" &
+guard_pid=$!
+sleep 0.05
+test ! -e "${guard_marker}"
+printf 'connected\n' >"${guard_drm}/card0-HDMI-A-1/status"
+wait "${guard_pid}"
+grep -Fxq 'called' "${guard_marker}"
+
 # The CI timing report must split compiler work from the final runtime link
 # without requiring a Sunshine build in shell-only validation.
 python3 "${root_dir}/scripts/collect-ninja-timing.py" "${root_dir}/tests/fixtures/steamos/ninja.log" "${test_root}/ninja-timings.json"
@@ -72,6 +106,7 @@ mkdir -p "${test_root}/stage/bin" "${test_root}/stage/scripts" "${test_root}/hom
 install -m 755 /bin/true "${test_root}/stage/bin/steamshine"
 install -m 755 /bin/true "${test_root}/stage/bin/steamshine-input-visualizer"
 install -m 755 "${root_dir}/scripts/migrate-steamos-apps.py" "${test_root}/stage/scripts/migrate-steamos-apps.py"
+install -m 755 "${root_dir}/scripts/steamshine-gamescope-session-guard.sh" "${test_root}/stage/scripts/steamshine-gamescope-session-guard.sh"
 cat >"${test_root}/home/.config/sunshine/apps.json" <<'EOF'
 {"env":{"CUSTOM":"preserved"},"apps":[{"name":"Desktop","image-path":"custom.png"},{"name":"Steam Big Picture","detached":["setsid env DISPLAY=:1 steam steam://open/bigpicture"]},{"name":"Custom Game","cmd":"custom-game"}]}
 EOF
@@ -279,11 +314,17 @@ EOF
 chmod 755 "${test_root}/mock-bin/loginctl" "${test_root}/mock-bin/journalctl" "${test_root}/mock-bin/pgrep"
 systemctl_state="${test_root}/systemctl-state"
 mock_proc="${test_root}/mock-proc"
+vendor_unit="${test_root}/gamescope-session.service"
 mkdir -p "${systemctl_state}" "${mock_proc}"
+printf '[Service]\n' >"${vendor_unit}"
 HOME="${test_root}/home" XDG_RUNTIME_DIR="${test_root}/home/run" PATH="${test_root}/mock-bin:${PATH}" \
   SYSTEMCTL_STATE_DIR="${systemctl_state}" STEAMSHINE_PROC_ROOT="${mock_proc}" \
+  STEAMSHINE_GAMESCOPE_VENDOR_LAUNCHER="${test_root}/vendor-gamescope-session" \
+  STEAMSHINE_GAMESCOPE_VENDOR_UNIT="${vendor_unit}" \
   "${root_dir}/steamshine.sh" install --artifact "${test_root}/steamshine-steamos-x86_64-test.tar.zst" --non-interactive --yes
 service_unit="${test_root}/home/.config/systemd/user/steamshine.service"
+guard_executable="${test_root}/home/.local/libexec/steamshine/steamshine-gamescope-session-guard"
+guard_dropin="${test_root}/home/.config/systemd/user/gamescope-session.service.d/90-steamshine-headless-guard.conf"
 grep -Fq 'ExecStart=%h/.local/bin/steamshine %h/.config/steamshine/sunshine.conf' "${service_unit}"
 grep -Fq 'Environment=XDG_RUNTIME_DIR=%t' "${service_unit}"
 grep -Fq 'Environment=PIPEWIRE_RUNTIME_DIR=%t' "${service_unit}"
@@ -303,6 +344,9 @@ if grep -Fq -- '--config' "${service_unit}"; then
 fi
 test -x "${test_root}/home/.local/bin/steamshine"
 test -x "${test_root}/home/.local/bin/steamshine-input-visualizer"
+test -x "${guard_executable}"
+grep -Fq "ExecStart=%h/.local/libexec/steamshine/steamshine-gamescope-session-guard ${test_root}/vendor-gamescope-session" "${guard_dropin}"
+grep -Fq 'TimeoutStartSec=infinity' "${guard_dropin}"
 grep -Fq 'steamos_virtual_desktop_command = plasmawindowed org.kde.plasma.folder' "${test_root}/home/.config/steamshine/sunshine.conf"
 
 # `--no-start` still establishes default.target autostart, while
@@ -477,6 +521,8 @@ test ! -e "${test_root}/home/.local/share/steamshine/current"
 test ! -d "${test_root}/home/.cache/steamshine"
 test ! -e "${test_root}/home/.config/systemd/user/steamshine.service"
 test ! -e "${test_root}/home/.config/systemd/user/default.target.wants/steamshine.service"
+test ! -e "${guard_dropin}"
+test ! -e "${guard_executable}"
 test ! -f "${systemctl_state}/enabled"
 test ! -f "${systemctl_state}/active"
 test -f "${test_root}/home/.config/steamshine/sunshine.conf"

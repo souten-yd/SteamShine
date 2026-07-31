@@ -19,6 +19,16 @@ namespace platf {
   };
 
   /**
+   * @brief Decide whether an input route may instantiate a global desktop device.
+   *
+   * @param result Result returned by the session-scoped Gamescope sender.
+   * @return True only for the physical desktop fallback route.
+   */
+  constexpr bool gamescope_input_uses_desktop_device(const gamescope_input_result_e result) {
+    return result == gamescope_input_result_e::desktop;
+  }
+
+  /**
    * @brief Dynamically loaded libei sender for the verified Gamescope session.
    */
   class gamescope_eis_input_t {

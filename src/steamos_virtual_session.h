@@ -149,9 +149,29 @@ namespace steamos_virtual_session {
    * @param error Human-readable failure reason for the GameStream response.
    * @param force_owned_fallback Force an owned private canvas after physical-mode preparation fails.
    * @param prefer_owned_session Prefer an owned canvas for the selected application while retaining verified Game Mode attachment.
+   * @param prefer_physical_desktop Prefer a usable physical compositor for the capture-only Desktop application.
    * @return True only after a Wayland readiness signal is observed.
    */
-  bool prepare(const rtsp_stream::launch_session_t &launch_session, std::string &error, bool force_owned_fallback = false, bool prefer_owned_session = false);
+  bool prepare(
+    const rtsp_stream::launch_session_t &launch_session,
+    std::string &error,
+    bool force_owned_fallback = false,
+    bool prefer_owned_session = false,
+    bool prefer_physical_desktop = false
+  );
+
+  /**
+   * @brief Prepare the default virtual display for an encoder capability probe.
+   *
+   * This startup-only preflight runs before GameStream HTTP becomes visible so
+   * a headless host advertises the HEVC/AV1 Main10 modes discovered from its
+   * actual Gamescope capture path on the first Moonlight connection.
+   *
+   * @param enable_hdr Whether the probe display should expose its HDR path.
+   * @param error Human-readable virtual-display preparation failure.
+   * @return True when a capture source is ready for the encoder probe.
+   */
+  bool prepare_encoder_probe(bool enable_hdr, std::string &error);
 
   /**
    * @brief Report whether SteamOS virtual-display capture is enabled.

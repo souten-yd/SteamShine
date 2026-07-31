@@ -54,6 +54,25 @@ namespace proc {
   );
 
   /**
+   * @brief Decide whether a Desktop mode-helper failure must keep physical capture.
+   *
+   * A commandless Desktop application represents the compositor that is
+   * already running. If its monitor preparation cannot apply a safe mode, the
+   * stream must preserve that compositor instead of replacing it with an
+   * owned folder-view surface.
+   *
+   * @param exit_code Prep-command exit code.
+   * @param prefer_physical_desktop Whether the selected application is the commandless Desktop.
+   * @param origin Display origin selected for the application.
+   * @return True only for the explicit virtual-fallback result on a physical Desktop.
+   */
+  bool should_keep_physical_desktop(
+    int exit_code,
+    bool prefer_physical_desktop,
+    steamos_virtual_session::session_origin_e origin
+  );
+
+  /**
    * @brief Decide whether an application needs the owned private Desktop surface.
    *
    * @param app_command Configured primary application command.
@@ -74,6 +93,14 @@ namespace proc {
    * @return True when any configured launch command opens Steam Big Picture.
    */
   bool should_prefer_owned_virtual_display(const struct ctx_t &application);
+
+  /**
+   * @brief Decide whether an application represents the capture-only Desktop.
+   *
+   * @param application Parsed application configuration.
+   * @return True when the application has neither a primary nor detached command.
+   */
+  bool should_prefer_physical_desktop(const struct ctx_t &application);
 
   /**
    * @brief Restore the immutable application environment before a new launch.
@@ -243,6 +270,13 @@ namespace proc {
      * @return True when the application exists and opens Steam Big Picture.
      */
     bool prefers_owned_virtual_display(int app_id) const;
+    /**
+     * @brief Report whether one configured application is the capture-only Desktop.
+     *
+     * @param app_id Stable numeric application identifier from GameStream.
+     * @return True when the application exists and has no launch command.
+     */
+    bool prefers_physical_desktop(int app_id) const;
     /**
      * @brief Terminate the launched application process.
      */

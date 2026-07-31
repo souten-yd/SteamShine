@@ -280,6 +280,8 @@ namespace {
         .mode = mode,
         .source_policy = source_policy,
         .prefer_owned_session = false,
+        .prefer_physical_desktop = false,
+        .startup_preflight_owned_session = false,
         .capturable_output_present = false,
         .retained_owned_session = false,
         .host_supported = true,
@@ -295,6 +297,23 @@ namespace {
     EXPECT_EQ(select_session_route(request).route, session_route_e::attached_existing);
     request.retained_owned_session = true;
     EXPECT_EQ(select_session_route(request).route, session_route_e::attached_existing);
+
+    request.prefer_physical_desktop = true;
+    EXPECT_EQ(select_session_route(request).route, session_route_e::physical_desktop);
+    EXPECT_EQ(select_session_route(request).reason, "desktop_application_capturable_output");
+    request.capturable_output_present = false;
+    EXPECT_EQ(select_session_route(request).route, session_route_e::attached_existing);
+    request.prefer_physical_desktop = false;
+
+    request.startup_preflight_owned_session = true;
+    request.prefer_owned_session = true;
+    request.retained_owned_session = false;
+    EXPECT_EQ(select_session_route(request).route, session_route_e::new_owned_private);
+    EXPECT_EQ(select_session_route(request).reason, "startup_preflight_replaced_owned_private");
+    request.retained_owned_session = true;
+    EXPECT_EQ(select_session_route(request).route, session_route_e::retained_owned_private);
+    EXPECT_EQ(select_session_route(request).reason, "startup_preflight_retained_owned_private");
+    request.startup_preflight_owned_session = false;
 
     request.verified_existing_gamescope_present = false;
     request.retained_owned_session = false;
@@ -368,6 +387,8 @@ namespace {
       .mode = virtual_display_mode_e::auto_detect,
       .source_policy = session_source_policy_e::auto_select,
       .prefer_owned_session = false,
+      .prefer_physical_desktop = false,
+      .startup_preflight_owned_session = false,
       .capturable_output_present = false,
       .retained_owned_session = false,
       .host_supported = true,
@@ -384,6 +405,8 @@ namespace {
       .mode = virtual_display_mode_e::auto_detect,
       .source_policy = session_source_policy_e::auto_select,
       .prefer_owned_session = false,
+      .prefer_physical_desktop = false,
+      .startup_preflight_owned_session = false,
       .capturable_output_present = true,
       .retained_owned_session = false,
       .host_supported = true,

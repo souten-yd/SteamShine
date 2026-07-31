@@ -15,9 +15,11 @@ extern "C" {
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
+#include <cstdlib>
 #include <iterator>
 #include <list>
 #include <mutex>
+#include <string_view>
 #include <thread>
 #include <unordered_map>
 
@@ -53,6 +55,21 @@ namespace input {
     latency_diagnostics::fixed_ring_t<> input_queue_age;  ///< Fixed-memory T2-to-T3 latency samples.
 
     /**
+     * @brief Check whether detailed controller release-edge logging is enabled.
+     *
+     * @return True only when the diagnostic environment switch is exactly one.
+     */
+    bool gamepad_hold_diagnostics_enabled() {
+      static const bool enabled {
+        []() {
+          const auto *const value {std::getenv("STEAMSHINE_GAMEPAD_HOLD_DIAGNOSTICS")};
+          return value != nullptr && std::string_view {value} == "1";
+        }()
+      };
+      return enabled;
+    }
+
+    /**
      * @brief Publish an input queue depth and update its high-water mark.
      *
      * @param depth Number of packets waiting for input injection.
@@ -77,6 +94,25 @@ namespace input {
       input_queue_age.reset();
     }
   }  // namespace
+
+  gamepad_hold_release_t detect_gamepad_hold_release(
+    const platf::gamepad_state_t &previous,
+    const platf::gamepad_state_t &current,
+    const std::int16_t held_threshold,
+    const std::int16_t neutral_threshold
+  ) {
+    const auto stick_held = [held_threshold](const std::int16_t x, const std::int16_t y) {
+      return std::abs(static_cast<int>(x)) >= held_threshold || std::abs(static_cast<int>(y)) >= held_threshold;
+    };
+    const auto stick_neutral = [neutral_threshold](const std::int16_t x, const std::int16_t y) {
+      return std::abs(static_cast<int>(x)) <= neutral_threshold && std::abs(static_cast<int>(y)) <= neutral_threshold;
+    };
+    return {
+      .released_buttons = previous.buttonFlags & ~current.buttonFlags,
+      .left_stick_released = stick_held(previous.lsX, previous.lsY) && stick_neutral(current.lsX, current.lsY),
+      .right_stick_released = stick_held(previous.rsX, previous.rsY) && stick_neutral(current.rsX, current.rsY),
+    };
+  }
 
   constexpr auto MAX_GAMEPADS = std::min((std::size_t) platf::MAX_GAMEPADS, sizeof(std::int16_t) * 8);  ///< Maximum gamepads representable by the active gamepad mask.
 /**
@@ -1402,6 +1438,8 @@ namespace input {
       gamepad.id = id;
     } else if (!(packet->activeGamepadMask & (1 << packet->controllerNumber)) && gamepad.id >= 0) {
       // If this is the final event for a gamepad being removed, free the gamepad and return.
+      BOOST_LOG(info) << "GAMEPAD_DEVICE_REMOVED controller=" << packet->controllerNumber
+                      << " active_mask=" << util::hex(packet->activeGamepadMask).to_string_view();
       free_gamepad(platf_input, gamepad.id);
       gamepad.id = -1;
       return;
@@ -1483,8 +1521,16 @@ namespace input {
       }
     }
 
-    platf::gamepad_update(platf_input, gamepad.id, gamepad_state);
+    const auto hold_release {detect_gamepad_hold_release(gamepad.gamepad_state, gamepad_state)};
+    if (hold_release.any() && gamepad_hold_diagnostics_enabled()) {
+      BOOST_LOG(info) << "GAMEPAD_HOLD_RELEASE controller=" << packet->controllerNumber
+                      << " buttons=" << util::hex(hold_release.released_buttons).to_string_view()
+                      << " left_stick=" << (hold_release.left_stick_released ? "true" : "false")
+                      << " right_stick=" << (hold_release.right_stick_released ? "true" : "false")
+                      << " active_mask=" << util::hex(packet->activeGamepadMask).to_string_view();
+    }
 
+    platf::gamepad_update(platf_input, gamepad.id, gamepad_state);
     gamepad.gamepad_state = gamepad_state;
   }
 
