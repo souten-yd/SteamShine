@@ -860,6 +860,118 @@ pre {
   justify-content: flex-end;
 }
 
+.modal-wide {
+  width: min(680px, 100%);
+  max-height: min(84vh, 100%);
+  overflow-y: auto;
+}
+
+.modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.modal-head h3 {
+  margin: 0;
+}
+
+/* ---- Stream page ---- */
+.stream-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  padding: 0.95rem 1.15rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: linear-gradient(135deg, var(--bg-elev), var(--bg-elev-2));
+}
+
+.stream-banner.live {
+  border-color: rgb(52 211 153 / 32%);
+}
+
+.stream-banner-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+  flex: 1;
+}
+
+.stream-banner-text strong {
+  font-size: 0.95rem;
+  letter-spacing: -0.01em;
+}
+
+.stream-banner-text span {
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
+}
+
+.reason-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+/* ---- Client profile rows (Stream) ---- */
+.profile-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.profile-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  width: 100%;
+  padding: 0.7rem 0.85rem;
+  text-align: left;
+  color: var(--text);
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.profile-row:hover {
+  border-color: var(--border-strong);
+}
+
+.profile-row.selected {
+  border-color: var(--accent);
+}
+
+.profile-row-main {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.profile-row-main strong {
+  font-size: 0.85rem;
+  overflow-wrap: anywhere;
+}
+
+.profile-row-tags {
+  display: flex;
+  gap: 0.35rem;
+  flex-shrink: 0;
+}
+
+#profile-editor h4 {
+  margin: 1.2rem 0 0;
+  font-size: 0.85rem;
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
+}
+
 /* ---- Toast ---- */
 .toast-wrap {
   position: fixed;

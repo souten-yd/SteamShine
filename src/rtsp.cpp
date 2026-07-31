@@ -1308,6 +1308,11 @@ namespace rtsp_stream {
     }
 
     session.negotiation.requested.capability_signature = capabilitySignature;
+    if (const auto registration {web::stream_profile_service().ensure_registered(session.unique_id, capabilitySignature)};
+        registration.success && registration.code == "profile_registered") {
+      BOOST_LOG(info) << "STREAM_PROFILE_REGISTERED client=" << session.unique_id
+                      << " network=" << web::default_network_class;
+    }
     const auto profileSelection {web::stream_profile_service().select_active(session.unique_id, capabilitySignature)};
     session.negotiation.selected.profile_selection_reason = profileSelection.reason;
     if (profileSelection.profile) {

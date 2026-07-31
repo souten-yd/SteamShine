@@ -319,6 +319,15 @@ namespace web {
   };
 
   /**
+   * @brief Network class assigned to automatically recorded clients.
+   *
+   * SteamShine never infers LAN, Wi-Fi, or overlay state from an address, so a
+   * client recorded on its first connection is filed under one neutral class
+   * until the user names a different one.
+   */
+  inline constexpr std::string_view default_network_class {"default"};
+
+  /**
    * @brief Bounded per-client and network stream negotiation defaults.
    */
   struct stream_profile_t {
@@ -380,6 +389,21 @@ namespace web {
      * @return Stable validation or persistence result.
      */
     service_result_t save(const stream_profile_t &profile);
+
+    /**
+     * @brief Create a neutral profile the first time a paired client connects.
+     *
+     * Registration only ever adds an entry whose policies are all automatic, so
+     * a client that has never been configured behaves exactly as it did before
+     * it was recorded. An existing entry is never modified, which preserves the
+     * rule that a changed capability signature disables a saved profile instead
+     * of silently refreshing it.
+     *
+     * @param client_id Stable paired-client identifier supplied by the client.
+     * @param capability_signature Current protocol capability signature.
+     * @return Stable creation, already-present, or persistence result.
+     */
+    service_result_t ensure_registered(std::string_view client_id, std::string_view capability_signature);
 
     /**
      * @brief Remove one exact client/network profile.
