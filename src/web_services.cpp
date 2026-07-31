@@ -377,6 +377,34 @@ namespace web {
     return {true, "profile_saved", "Stream profile saved."};
   }
 
+  service_result_t StreamProfileService::ensure_registered(const std::string_view client_id, const std::string_view capability_signature) {
+    stream_profile_t candidate;
+    candidate.client_id = std::string {client_id};
+    candidate.network_class = default_network_class;
+    candidate.capability_signature = std::string {capability_signature};
+    candidate.active = true;
+    if (const auto error {validate(candidate)}; !error.empty()) {
+      return {false, error, "Stream profile registration key is invalid."};
+    }
+    std::lock_guard lock {mutex_};
+    const auto existing {std::find_if(profiles_.begin(), profiles_.end(), [&candidate](const auto &entry) {
+      return entry.first.first == candidate.client_id;
+    })};
+    if (existing != profiles_.end()) {
+      return {true, "profile_present", "Stream profile already exists for this client."};
+    }
+    if (profiles_.size() >= 64) {
+      return {false, "profile_limit_reached", "The bounded stream profile limit was reached."};
+    }
+    const auto key {std::make_pair(candidate.client_id, candidate.network_class)};
+    profiles_[key] = candidate;
+    if (!persist_locked()) {
+      profiles_.erase(key);
+      return {false, "profile_save_failed", "Unable to record the connecting client."};
+    }
+    return {true, "profile_registered", "Connecting client recorded with automatic defaults."};
+  }
+
   service_result_t StreamProfileService::reset(const std::string_view client_id, const std::string_view network_class) {
     stream_profile_t reset_key;
     reset_key.client_id = std::string {client_id};

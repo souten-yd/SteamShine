@@ -404,6 +404,83 @@ TEST(WebServicesTest, SelectsOnlyExactStreamCapabilityProfile) {
 }
 
 /**
+ * @brief Verify first-connection registration records a client without changing its stream.
+ */
+TEST(WebServicesTest, RegistersConnectingClientWithAutomaticDefaults) {
+  namespace fs = std::filesystem;
+  const auto path {fs::temp_directory_path() / "steamshine-stream-profile-registration.json"};
+  fs::remove(path);
+  web::StreamProfileService profiles {path};
+
+  const auto registered {profiles.ensure_registered("client-new", "v1-c1-d0-x0-h0")};
+  ASSERT_TRUE(registered.success) << registered.code;
+  EXPECT_EQ(registered.code, "profile_registered");
+  ASSERT_EQ(profiles.snapshot().at("profiles").size(), 1);
+
+  const auto selection {profiles.select_active("client-new", "v1-c1-d0-x0-h0")};
+  ASSERT_TRUE(selection.profile.has_value());
+  EXPECT_EQ(selection.profile->network_class, web::default_network_class);
+  EXPECT_EQ(selection.profile->geometry_policy, "fit");
+  EXPECT_EQ(selection.profile->fps_policy, "auto");
+  EXPECT_EQ(selection.profile->codec_policy, "auto");
+  EXPECT_EQ(selection.profile->hdr_policy, "auto");
+  EXPECT_EQ(selection.profile->bitrate_ceiling_kbps, 0);
+  EXPECT_EQ(selection.profile->learned_start_kbps, 0);
+
+  // A registered profile whose policies are all automatic must leave the request untouched.
+  video::config_t config {};
+  config.framerate = 120;
+  config.bitrate = 40000;
+  config.videoFormat = 1;
+  config.dynamicRange = 1;
+  const auto application {web::apply_stream_profile(*selection.profile, config)};
+  EXPECT_FALSE(application.applied);
+  EXPECT_TRUE(application.fallback_reasons.empty());
+  EXPECT_EQ(config.framerate, 120);
+  EXPECT_EQ(config.bitrate, 40000);
+  EXPECT_EQ(config.dynamicRange, 1);
+
+  fs::remove(path);
+}
+
+/**
+ * @brief Verify registration never rewrites a profile the user already configured.
+ */
+TEST(WebServicesTest, RegistrationPreservesConfiguredStreamProfiles) {
+  namespace fs = std::filesystem;
+  const auto path {fs::temp_directory_path() / "steamshine-stream-profile-registration-existing.json"};
+  fs::remove(path);
+  web::StreamProfileService profiles {path};
+  web::stream_profile_t configured;
+  configured.client_id = "client-known";
+  configured.network_class = "wifi-5ghz";
+  configured.capability_signature = "v1-c1-d0-x0-h0";
+  configured.codec_policy = "hevc";
+  configured.bitrate_ceiling_kbps = 15000;
+  configured.active = true;
+  ASSERT_TRUE(profiles.save(configured).success);
+
+  // A second connection must not add a duplicate neutral entry beside the user's choice.
+  const auto again {profiles.ensure_registered("client-known", "v1-c1-d0-x0-h0")};
+  EXPECT_TRUE(again.success);
+  EXPECT_EQ(again.code, "profile_present");
+  EXPECT_EQ(profiles.snapshot().at("profiles").size(), 1);
+
+  // A changed capability signature keeps disabling the saved entry rather than refreshing it.
+  const auto changed {profiles.ensure_registered("client-known", "v1-c3-d1-x0-h1")};
+  EXPECT_EQ(changed.code, "profile_present");
+  EXPECT_EQ(profiles.select_active("client-known", "v1-c3-d1-x0-h1").reason, "capability_signature_changed");
+  const auto stored {profiles.select_active("client-known", "v1-c1-d0-x0-h0")};
+  ASSERT_TRUE(stored.profile.has_value());
+  EXPECT_EQ(stored.profile->codec_policy, "hevc");
+  EXPECT_EQ(stored.profile->bitrate_ceiling_kbps, 15000);
+
+  EXPECT_EQ(profiles.ensure_registered("", "v1-c1-d0-x0-h0").code, "invalid_client_id");
+
+  fs::remove(path);
+}
+
+/**
  * @brief Verify one active network wins and safe defaults never rewrite a requested codec.
  */
 TEST(WebServicesTest, AppliesOnlyActiveSafeStreamProfileDefaults) {

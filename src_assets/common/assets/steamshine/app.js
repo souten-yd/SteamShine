@@ -75,6 +75,10 @@ const ICONS = {
   file: '<path d="M7 3h7l4 4v14H7z"/><path d="M14 3v4h4"/><path d="M9.5 12h6M9.5 15.5h6"/>',
   terminal: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M13 15h4"/>',
   logout: '<path d="M15 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h9"/><path d="M10 12h11M17 8l4 4-4 4"/>',
+  play: '<path d="M8 5.5v13l11-6.5z"/>',
+  display: '<rect x="3" y="4.5" width="18" height="12" rx="2"/><path d="M9 20h6M12 16.5V20"/>',
+  gear: '<circle cx="12" cy="12" r="3.2"/><path d="M12 3v2.2M12 18.8V21M4.2 7.5l1.9 1.1M17.9 15.4l1.9 1.1M4.2 16.5l1.9-1.1M17.9 8.6l1.9-1.1"/>',
+  close: '<path d="M6 6l12 12M18 6L6 18"/>',
   fan: '<circle cx="12" cy="12" r="2.2"/><path d="M12 9.8c0-3.2 1.6-5 3.4-5 1.5 0 2.4 1.2 2.4 2.4 0 1.9-2.6 2.6-5.8 2.6zM12 14.2c0 3.2-1.6 5-3.4 5-1.5 0-2.4-1.2-2.4-2.4 0-1.9 2.6-2.6 5.8-2.6zM9.8 12c-3.2 0-5-1.6-5-3.4 0-1.5 1.2-2.4 2.4-2.4 1.9 0 2.6 2.6 2.6 5.8zM14.2 12c3.2 0 5 1.6 5 3.4 0 1.5-1.2 2.4-2.4 2.4-1.9 0-2.6-2.6-2.6-5.8z"/>',
 };
 
@@ -84,10 +88,10 @@ function icon(name, extraClass = '') {
 
 const NAV = [
   { id: 'monitor', label: 'Monitor', icon: 'activity' },
-  { id: 'stream', label: 'Stream', icon: 'sliders' },
+  { id: 'stream', label: 'Stream', icon: 'play' },
   { id: 'applications', label: 'Apps', icon: 'grid' },
   { id: 'gpu', label: 'GPU', icon: 'cpu' },
-  { id: 'settings', label: 'Settings', icon: 'sliders' },
+  { id: 'config', label: 'Display', icon: 'display' },
   { id: 'pairing', label: 'Pin', icon: 'key' },
   { id: 'clients', label: 'Clients', icon: 'users' },
   { id: 'terminal', label: 'Terminal', icon: 'terminal' },
@@ -120,11 +124,11 @@ function toneFor(percent) {
 }
 
 /** @brief Render one metric tile (label + value + sparkline + temp/fan sub-row). */
-function metricTile({ label, value, percent, values, sub, temp, fan }) {
-  const tone = toneFor(percent);
-  return `<div class="metric-tile ${tone}">
+function metricTile({ label, value, percent, values, sub, temp, fan, max = 100, tone }) {
+  const toneClass = tone ? `tone-${tone}` : toneFor(percent);
+  return `<div class="metric-tile ${toneClass}">
     <div class="metric-tile-head"><span class="metric-label">${escapeHtml(label)}</span><span class="metric-value num">${value == null ? '—' : escapeHtml(value)}</span></div>
-    ${sparkline(values || [])}
+    ${sparkline(values || [], max)}
     <div class="metric-sub num">${sub ? `<span>${escapeHtml(sub)}</span>` : ''}${temp ? `<span class="metric-temp">${escapeHtml(temp)}</span>` : ''}${fan ? `<span class="fan">${icon('fan')}${escapeHtml(fan)} RPM</span>` : ''}</div>
   </div>`;
 }
@@ -224,9 +228,8 @@ async function renderAuthenticated(session) {
     config: renderVirtualDisplayConfig,
     clients: renderClients,
     monitor: renderMonitor,
-    stream: renderStreamNegotiation,
+    stream: renderStream,
     applications: renderApplications,
-    settings: renderSettings,
     gpu: renderGpu,
     terminal: renderTerminal,
   };
@@ -284,18 +287,57 @@ function formatUptime(seconds) {
   return d > 0 ? `${d}d ${h}h` : h > 0 ? `${h}h ${m}m` : `${m}m`;
 }
 
-/** @brief Format a bounded negotiation value for a compact status row. */
-function streamValue(value) {
-  if (value == null || value === '') return '—';
-  if (Array.isArray(value)) return value.length ? value.join(', ') : 'None';
-  if (typeof value === 'object') return Object.entries(value).map(([key, item]) => `${key}: ${item}`).join(', ');
-  return String(value);
+/** @brief Format a rational frame rate as a short decimal without trailing zeros. */
+function formatRate(rate) {
+  const numerator = Number(rate?.numerator) || 0;
+  const denominator = Number(rate?.denominator) || 0;
+  if (!numerator || !denominator) return null;
+  const value = numerator / denominator;
+  return Number.isInteger(value) ? String(value) : value.toFixed(2).replace(/0$/, '');
 }
 
-/** @brief Render one requested/selected/active/observed negotiation stage. */
-function streamStage(title, values) {
-  const rows = Object.entries(values || {}).map(([key, value]) => `<div class="row"><span class="k">${escapeHtml(key.replaceAll('_', ' '))}</span><span class="v num">${escapeHtml(streamValue(value))}</span></div>`).join('');
-  return `<div class="section stream-stage"><h3>${escapeHtml(title)}</h3><div class="rows">${rows || '<div class="empty">Unavailable</div>'}</div></div>`;
+/** @brief Format a geometry object as "1920 × 1080 @ 60". */
+function formatGeometry(geometry) {
+  const width = Number(geometry?.width) || 0;
+  const height = Number(geometry?.height) || 0;
+  if (!width || !height) return null;
+  const rate = formatRate(geometry.frame_rate);
+  return `${width} × ${height}${rate ? ` @ ${rate}` : ''}`;
+}
+
+/** @brief Format a bit rate given in bits per second as Mbps. */
+function formatMbps(bitsPerSecond) {
+  const value = Number(bitsPerSecond) || 0;
+  if (value <= 0) return null;
+  return `${(value / 1e6).toFixed(value < 1e7 ? 1 : 0)} Mbps`;
+}
+
+/** @brief Build one label/value row, dropping rows whose value is unknown. */
+function specRow(label, value) {
+  if (value == null || value === '') return '';
+  return `<div class="row"><span class="k">${escapeHtml(label)}</span><span class="v num">${escapeHtml(value)}</span></div>`;
+}
+
+/** @brief Human wording for the capture source a stream is running on. */
+const SOURCE_LABELS = {
+  owned_private: 'SteamShine private session',
+  existing_gamescope: 'Steam Game Mode session',
+  physical: 'Attached display',
+  retained_owned: 'Retained private session',
+};
+
+/** @brief Human wording for the adaptive-bitrate congestion state. */
+const CONGESTION_LABELS = {
+  clean: { text: 'Stable', tone: 'ok' },
+  warning: { text: 'Easing off', tone: 'warn' },
+  congested: { text: 'Congested', tone: 'danger' },
+  recovering: { text: 'Recovering', tone: 'warn' },
+  unknown: { text: 'Measuring', tone: 'idle' },
+};
+
+/** @brief Turn a stable snake_case diagnostics reason into readable prose. */
+function humanizeReason(reason) {
+  return String(reason || '').replaceAll('_', ' ').replace(/^./, (character) => character.toUpperCase());
 }
 
 /** @brief Format a byte count for recording capacity and completed-file rows. */
@@ -309,40 +351,162 @@ function formatBytes(bytes) {
   return `${scaled.toFixed(scaled >= 10 ? 1 : 2)} ${unit}`;
 }
 
-/** @brief Render live four-stage negotiation state and bounded client/network profiles. */
-async function renderStreamNegotiation() {
-  shell(`<div class="page-header"><div><h2>Stream negotiation</h2><p>Requested, selected, active, and observed state. Live data refreshes every 2 seconds without owning the media path.</p></div><a class="btn-ghost btn-sm" href="/sunshine/config">Sunshine fallback settings</a></div>
+/** @brief Render the idle banner shown while no client is streaming. */
+function streamIdleBanner(status) {
+  const encoder = status?.encoder ? `${status.encoder} encoder ready` : 'Encoder ready';
+  return `<div class="stream-banner idle">
+    <span class="status-dot dot-idle"></span>
+    <div class="stream-banner-text"><strong>No client is streaming</strong><span>${escapeHtml(encoder)} — start a stream from Moonlight and this page fills in.</span></div>
+  </div>`;
+}
+
+/** @brief Render the live banner naming the geometry, codec, and link state. */
+function streamLiveBanner(state, congestionState) {
+  const geometry = formatGeometry(state.active?.encode_geometry) || formatGeometry(state.selected?.encode_geometry) || formatGeometry(state.requested?.stream_geometry);
+  const codec = (state.active?.codec_name || state.selected?.codec_name || '').toUpperCase();
+  const range = state.active?.color?.hdr_active ? 'HDR10' : 'SDR';
+  const summary = [geometry, codec, range].filter(Boolean).join('  ·  ');
+  const congestion = CONGESTION_LABELS[congestionState] || CONGESTION_LABELS.unknown;
+  return `<div class="stream-banner live">
+    <span class="status-dot dot-ok"></span>
+    <div class="stream-banner-text"><strong>Streaming now</strong><span>${escapeHtml(summary || 'Negotiating…')}</span></div>
+    <span class="badge${congestion.tone === 'idle' ? '' : ` badge-${congestion.tone}`}">${escapeHtml(congestion.text)}</span>
+  </div>`;
+}
+
+/** @brief Render the four headline tiles for an active stream. */
+function streamTiles(state, adaptive, history) {
+  const observed = state.observed || {};
+  const actualMbps = (Number(observed.actual_bitrate_bps) || 0) / 1e6;
+  const targetMbps = (Number(observed.target_bitrate_bps) || 0) / 1e6;
+  const encodeFps = Number(observed.encode_fps) || 0;
+  const sourceFps = Number(observed.source_fps) || 0;
+  const latency = Number(observed.network_age_p99_ms) || 0;
+  const lost = Number(adaptive.lost_packets) || 0;
+
+  const lossDelta = Math.max(0, lost - history.lastLost);
+  history.lastLost = lost;
+  history.bitrate.push(actualMbps);
+  history.fps.push(encodeFps);
+  history.latency.push(latency);
+  history.loss.push(lossDelta);
+  ['bitrate', 'fps', 'latency', 'loss'].forEach((name) => { if (history[name].length > 60) history[name].shift(); });
+
+  const latencyTone = latency >= 60 ? 'danger' : latency >= 30 ? 'warn' : 'ok';
+  const lossTone = lossDelta > 0 ? 'warn' : 'ok';
+
+  return `<div class="grid">
+    ${metricTile({
+      label: 'Bitrate',
+      value: formatMbps(observed.actual_bitrate_bps),
+      values: history.bitrate,
+      max: Math.max(targetMbps, ...history.bitrate, 1) * 1.15,
+      sub: targetMbps ? `target ${targetMbps.toFixed(targetMbps < 10 ? 1 : 0)} Mbps` : undefined,
+      tone: 'neutral',
+    })}
+    ${metricTile({
+      label: 'Frame rate',
+      value: encodeFps ? `${encodeFps.toFixed(0)} fps` : null,
+      values: history.fps,
+      max: Math.max(sourceFps, ...history.fps, 1) * 1.15,
+      sub: sourceFps ? `source ${sourceFps.toFixed(0)} fps` : undefined,
+      tone: 'neutral',
+    })}
+    ${metricTile({
+      label: 'Network latency',
+      value: latency ? `${latency.toFixed(0)} ms` : null,
+      values: history.latency,
+      max: Math.max(60, ...history.latency),
+      sub: observed.encode_age_p99_ms ? `encode ${Number(observed.encode_age_p99_ms).toFixed(0)} ms p99` : undefined,
+      tone: latencyTone,
+    })}
+    ${metricTile({
+      label: 'Packets lost',
+      value: String(lost),
+      values: history.loss,
+      max: Math.max(4, ...history.loss),
+      sub: lossDelta > 0 ? `+${lossDelta} in the last 2 s` : 'none in the last 2 s',
+      tone: lossTone,
+    })}
+  </div>`;
+}
+
+/** @brief Render what the client receives and how well the link is holding up. */
+function streamDetailSections(state, adaptive) {
+  const selected = state.selected || {};
+  const active = state.active || {};
+  const requested = state.requested || {};
+  const observed = state.observed || {};
+  const color = active.color || selected.color || {};
+  const codec = (active.codec_name || selected.codec_name || '').toUpperCase();
+  const profile = active.profile || selected.profile || '';
+  const encoder = active.backend || selected.backend || '';
+  const requestedGeometry = formatGeometry(requested.stream_geometry);
+  const deliveredGeometry = formatGeometry(active.encode_geometry) || formatGeometry(selected.encode_geometry);
+
+  const delivering = [
+    specRow('Client', requested.client_id),
+    specRow('Delivered', deliveredGeometry),
+    requestedGeometry && requestedGeometry !== deliveredGeometry ? specRow('Client asked for', requestedGeometry) : '',
+    specRow('Codec', codec ? `${codec}${profile ? ` · ${profile}` : ''}` : null),
+    specRow('Dynamic range', color.hdr_active ? 'HDR10' : color.hdr_selected ? 'HDR10 selected, not active' : 'SDR'),
+    specRow('Colour', color.bit_depth ? `${color.bit_depth}-bit${color.colorspace ? ` · ${color.colorspace}` : ''}` : null),
+    specRow('Captured from', SOURCE_LABELS[selected.source_origin] || selected.source_origin),
+    specRow('Encoder', encoder ? `${encoder}${active.render_node ? ` · ${active.render_node}` : ''}` : null),
+  ].join('');
+
+  const congestion = CONGESTION_LABELS[adaptive.state] || CONGESTION_LABELS.unknown;
+  const mbps = (kbps) => (Number(kbps) ? `${(Number(kbps) / 1000).toFixed(1)} Mbps` : null);
+  const quality = [
+    specRow('Link', congestion.text),
+    specRow('Bitrate target', mbps(adaptive.target_kbps) || formatMbps(observed.target_bitrate_bps)),
+    specRow('Bitrate ceiling', mbps(adaptive.maximum_kbps)),
+    specRow('Learned for next session', mbps(adaptive.learned_next_kbps)),
+    specRow('Bitrate adjustments', adaptive.enabled ? `${Number(adaptive.updates_applied) || 0} applied` : 'Adaptive bitrate off'),
+    specRow('Frames waiting', `${Number(observed.capture_queue_frames) || 0} capture · ${Number(observed.encoder_queue_frames) || 0} encode · ${Number(observed.network_queue_frames) || 0} network`),
+    specRow('Capture age p99', observed.capture_age_p99_ms ? `${Number(observed.capture_age_p99_ms).toFixed(0)} ms` : null),
+  ].join('');
+
+  return `<div class="grid-2">
+    <div class="section"><h3>Delivering to Moonlight</h3><div class="rows">${delivering || '<div class="empty">Not negotiated yet.</div>'}</div></div>
+    <div class="section"><h3>Connection quality</h3><div class="rows">${quality || '<div class="empty">No measurements yet.</div>'}</div></div>
+  </div>`;
+}
+
+/** @brief Render why the delivered stream differs from the client request. */
+function streamAdjustments(state, adaptive) {
+  const reasons = [...(state.fallback_reasons || [])];
+  const outputReason = state.observed?.output_status_reason;
+  if (outputReason && outputReason !== 'ok') reasons.push(outputReason);
+  if (adaptive.reason && adaptive.state && !['clean', 'unknown'].includes(adaptive.state)) reasons.push(adaptive.reason);
+  const unique = [...new Set(reasons.filter(Boolean))];
+  if (!unique.length) return '';
+  return `<div class="section"><h3>Adjustments</h3>
+    <p class="field-hint">Why the delivered stream differs from what the client asked for.</p>
+    <div class="reason-list">${unique.map((reason) => `<span class="badge badge-warn">${escapeHtml(humanizeReason(reason))}</span>`).join('')}</div></div>`;
+}
+
+/** @brief Render the live stream page: headline tiles, delivered settings, quality, and recording. */
+async function renderStream() {
+  const history = { bitrate: [], fps: [], latency: [], loss: [], lastLost: 0 };
+  let connectedClientId = '';
+  shell(`<div class="page-header">
+      <div><h2>Stream</h2><p>What SteamShine is sending to Moonlight right now, refreshed every 2 seconds.</p></div>
+      <div class="btn-row">
+        <button id="open-stream-profiles" class="icon-btn" type="button" aria-label="Client profiles" title="Client profiles">${icon('gear')}</button>
+        <a class="btn-ghost btn-sm" href="/sunshine/config">Sunshine settings</a>
+      </div>
+    </div>
+    <div id="stream-live" class="stack"><div class="empty">Loading stream state…</div></div>
     <div class="section stack">
-      <div class="metric-tile-head"><div><h3 style="margin:0">Sender recording</h3><p class="field-hint">Stores the exact encoded video sent to the client without running another encoder. Audio is not included.</p></div><button id="recording-toggle" class="btn-primary" type="button">Loading…</button></div>
+      <div class="metric-tile-head"><div><h3 style="margin:0">Recording</h3><p class="field-hint">Saves the exact encoded video already being sent to the client. No second encoder, no audio.</p></div><button id="recording-toggle" class="btn-primary" type="button">Loading…</button></div>
       <div id="recording-status" class="status-line">Loading recording state…</div>
       <form id="recording-capacity-form" class="btn-row">
-        <label style="max-width:16rem">Recording capacity (MB)<input name="capacity_mb" type="number" min="1" max="102400" value="500" required></label>
-        <button class="btn-ghost" type="submit">Save capacity</button>
+        <label style="max-width:16rem">Storage limit (MB)<input name="capacity_mb" type="number" min="1" max="102400" value="500" required></label>
+        <button class="btn-ghost" type="submit">Save limit</button>
       </form>
       <video id="recording-player" class="recording-player" controls preload="metadata" hidden></video>
       <div id="recordings-list"><div class="empty">Loading recordings…</div></div>
-    </div>
-    <div id="stream-state" class="grid-2"><div class="empty">Loading stream state…</div></div>
-    <div class="section stack"><div><h3>Client / network profile</h3><p class="field-hint">Profiles match the paired client ID, network class, and current capability signature exactly. A changed capability signature always wins over saved preferences.</p></div>
-      <form id="stream-profile-form" class="stack">
-        <div class="form-grid">
-          <label>Client ID<input name="client_id" maxlength="128" required placeholder="paired-client-id"></label>
-          <label>Network class<input name="network_class" maxlength="32" required placeholder="lan, wifi-5ghz, tailscale"></label>
-          <label>Capability signature<input name="capability_signature" maxlength="256" required placeholder="h264-hevc-av1-main10"></label>
-          <label>Geometry policy<select name="geometry_policy"><option value="exact">Exact</option><option value="fit" selected>Fit</option><option value="virtual_fallback">Virtual fallback</option></select></label>
-          <label>FPS policy<select name="fps_policy"><option value="auto">Automatic</option><option value="custom">Custom ceiling</option></select></label>
-          <label>FPS ceiling<input name="fps_ceiling" type="number" min="0" max="240" value="0"></label>
-          <label>Codec policy<select name="codec_policy"><option value="auto">Automatic</option><option value="h264">H.264</option><option value="hevc">HEVC</option><option value="av1">AV1</option></select></label>
-          <label>HDR policy<select name="hdr_policy"><option value="off">Off</option><option value="auto" selected>Automatic</option><option value="require">Require</option></select></label>
-          <label>Bitrate ceiling (Kbps)<input name="bitrate_ceiling_kbps" type="number" min="0" max="200000" value="0"></label>
-          <label>Quality preset<select name="quality_preset"><option value="low_latency">Low latency</option><option value="balanced" selected>Balanced</option><option value="quality">Quality</option></select></label>
-          <label>Orientation<select name="orientation"><option value="auto">Automatic</option><option value="landscape">Landscape</option><option value="portrait">Portrait</option></select></label>
-          <label>Safe area (%)<input name="safe_area_percent" type="number" min="0" max="25" value="0"></label>
-          <label><span>Use on next connection</span><input name="active" type="checkbox" checked></label>
-        </div>
-        <div class="btn-row"><button class="btn-primary">Save profile</button></div><div class="notice"></div>
-      </form>
-      <div id="stream-profiles"><div class="empty">Loading profiles…</div></div>
     </div>`, { authenticated: true, activeId: 'stream' });
 
   let recordingState = null;
@@ -395,54 +559,134 @@ async function renderStreamNegotiation() {
     } catch (error) { toast(error.message, 'error'); }
   };
 
-  const loadProfiles = async () => {
-    const profileDocument = await json(await api('/stream/profiles'));
-    const profiles = profileDocument.profiles || [];
-    const root = document.querySelector('#stream-profiles');
+  document.querySelector('#open-stream-profiles').onclick = () => openStreamProfiles(connectedClientId);
+
+  const renderLive = async () => {
+    let status;
+    try { status = await json(await api('/status')); } catch (error) { return; }
+    const root = document.querySelector('#stream-live');
     if (!root) return;
-    root.innerHTML = profiles.length ? `<table><thead><tr><th>Client / network</th><th>Policies</th><th></th></tr></thead><tbody>${profiles.map((profile) => `<tr><td><strong>${escapeHtml(profile.client_id)}</strong><br><span class="field-hint">${escapeHtml(profile.network_class)} · ${escapeHtml(profile.capability_signature)}${profile.active ? ' · next connection' : ''}</span></td><td>${escapeHtml(profile.geometry_policy)} · ${escapeHtml(profile.codec_policy)} · HDR ${escapeHtml(profile.hdr_policy)} · ${profile.bitrate_ceiling_kbps ? `${escapeHtml(profile.bitrate_ceiling_kbps)} Kbps` : 'auto bitrate'}</td><td style="text-align:right"><button class="btn-sm btn-danger" data-reset-client="${escapeHtml(profile.client_id)}" data-reset-network="${escapeHtml(profile.network_class)}">Reset</button></td></tr>`).join('')}</tbody></table>` : '<div class="empty">No learned stream profiles.</div>';
-    root.querySelectorAll('[data-reset-client]').forEach((button) => button.onclick = async () => {
-      if (!await confirmDialog({ title: 'Reset stream profile', message: `Reset ${button.dataset.resetClient} on ${button.dataset.resetNetwork}?` })) return;
+    const state = status.stream_negotiation || {};
+    const adaptive = status.adaptive_bitrate || {};
+    connectedClientId = state.requested?.client_id || '';
+    root.innerHTML = state.available
+      ? streamLiveBanner(state, adaptive.state) + streamTiles(state, adaptive, history) + streamDetailSections(state, adaptive) + streamAdjustments(state, adaptive)
+      : streamIdleBanner(status);
+  };
+
+  const refreshLiveState = async () => Promise.all([renderLive(), loadRecordings().catch(() => {})]);
+  await refreshLiveState();
+  pollTimer = setInterval(refreshLiveState, 2000);
+}
+
+/** @brief Build the policy form for one automatically recorded client profile. */
+function streamProfileEditor(profile) {
+  const options = (name, entries, current) => `<select name="${name}">${entries.map(([value, text]) => `<option value="${value}"${current === value ? ' selected' : ''}>${escapeHtml(text)}</option>`).join('')}</select>`;
+  return `<form id="profile-policy" class="stack">
+    <h4>${escapeHtml(profile.client_id)}</h4>
+    <div class="form-grid">
+      <label>Network<input name="network_class" maxlength="32" required value="${escapeHtml(profile.network_class)}" placeholder="default, lan, wifi, vpn"></label>
+      <label>Resolution${options('geometry_policy', [['fit', 'Fit (recommended)'], ['exact', 'Exact match'], ['virtual_fallback', 'Virtual fallback']], profile.geometry_policy)}</label>
+      <label>Frame rate${options('fps_policy', [['auto', 'Automatic'], ['custom', 'Cap it']], profile.fps_policy)}</label>
+      <label>Frame rate cap (0 = automatic)<input name="fps_ceiling" type="number" min="0" max="240" value="${Number(profile.fps_ceiling) || 0}"></label>
+      <label>Codec${options('codec_policy', [['auto', 'Automatic'], ['h264', 'H.264'], ['hevc', 'HEVC'], ['av1', 'AV1']], profile.codec_policy)}</label>
+      <label>HDR${options('hdr_policy', [['auto', 'Automatic'], ['off', 'Never'], ['require', 'Require']], profile.hdr_policy)}</label>
+      <label>Bitrate cap (Kbps, 0 = automatic)<input name="bitrate_ceiling_kbps" type="number" min="0" max="200000" value="${Number(profile.bitrate_ceiling_kbps) || 0}"></label>
+      <label>Priority${options('quality_preset', [['balanced', 'Balanced'], ['low_latency', 'Low latency'], ['quality', 'Quality']], profile.quality_preset)}</label>
+      <label>Orientation${options('orientation', [['auto', 'Automatic'], ['landscape', 'Landscape'], ['portrait', 'Portrait']], profile.orientation)}</label>
+      <label>Safe area (%)<input name="safe_area_percent" type="number" min="0" max="25" value="${Number(profile.safe_area_percent) || 0}"></label>
+      <label><span>Use on the next connection</span><input name="active" type="checkbox"${profile.active ? ' checked' : ''}></label>
+    </div>
+    <div class="btn-row"><button class="btn-primary">Save</button><button type="button" class="btn-ghost" data-a="cancel-edit">Cancel</button><button type="button" class="btn-danger" data-a="forget">Forget this client</button></div>
+    <div class="notice"></div>
+  </form>`;
+}
+
+/** @brief Open the floating editor for clients recorded automatically on first connection. */
+async function openStreamProfiles(connectedClientId = '') {
+  const backdrop = document.createElement('div');
+  backdrop.className = 'modal-backdrop';
+  backdrop.innerHTML = `<div class="modal modal-wide" role="dialog" aria-label="Client profiles">
+    <div class="modal-head"><h3>Client profiles</h3><button class="icon-btn" type="button" data-a="close" aria-label="Close">${icon('close')}</button></div>
+    <p class="field-hint">Paired clients are recorded automatically the first time they start a stream, and everything stays automatic until you change it here.</p>
+    <div id="profile-list" class="stack"><div class="empty">Loading recorded clients…</div></div>
+    <div id="profile-editor"></div>
+  </div>`;
+  document.body.appendChild(backdrop);
+  const close = () => backdrop.remove();
+  backdrop.addEventListener('mousedown', (event) => { if (event.target === backdrop) close(); });
+  backdrop.querySelector('[data-a="close"]').onclick = close;
+
+  const list = backdrop.querySelector('#profile-list');
+  const editor = backdrop.querySelector('#profile-editor');
+  const keyOf = (profile) => `${profile.client_id}|${profile.network_class}`;
+
+  const openEditor = (profile) => {
+    editor.innerHTML = streamProfileEditor(profile);
+    editor.querySelector('[data-a="cancel-edit"]').onclick = () => { editor.innerHTML = ''; };
+    editor.querySelector('[data-a="forget"]').onclick = async () => {
+      if (!await confirmDialog({ title: 'Forget client', message: `Forget the saved profile for ${profile.client_id}? It is recorded again the next time that client connects.` })) return;
       try {
-        const result = await json(await api('/stream/profiles/reset', { method: 'POST', body: JSON.stringify({ client_id: button.dataset.resetClient, network_class: button.dataset.resetNetwork }) }));
+        const result = await json(await api('/stream/profiles/reset', { method: 'POST', body: JSON.stringify({ client_id: profile.client_id, network_class: profile.network_class }) }));
         toast(result.message, 'ok');
+        editor.innerHTML = '';
         await loadProfiles();
       } catch (error) { toast(error.message, 'error'); }
+    };
+    editor.querySelector('#profile-policy').onsubmit = async (event) => {
+      event.preventDefault();
+      const form = event.currentTarget;
+      const data = Object.fromEntries(new FormData(form));
+      const notice = form.querySelector('.notice');
+      const payload = {
+        ...data,
+        client_id: profile.client_id,
+        capability_signature: profile.capability_signature,
+        active: form.elements.active.checked,
+        fps_ceiling: Number(data.fps_ceiling),
+        bitrate_ceiling_kbps: Number(data.bitrate_ceiling_kbps),
+        safe_area_percent: Number(data.safe_area_percent),
+        learned_start_kbps: Number(profile.learned_start_kbps) || 0,
+      };
+      try {
+        const result = await json(await api('/stream/profiles', { method: 'POST', body: JSON.stringify(payload) }));
+        notice.textContent = result.message;
+        notice.className = 'notice ok';
+        await loadProfiles(`${payload.client_id}|${payload.network_class}`);
+      } catch (error) {
+        notice.textContent = error.message;
+        notice.className = 'notice error';
+      }
+    };
+  };
+
+  const renderList = (profiles, selectedKey) => {
+    if (!profiles.length) {
+      list.innerHTML = '<div class="empty">No clients recorded yet. A profile appears here the first time a paired client starts a stream.</div>';
+      editor.innerHTML = '';
+      return;
+    }
+    list.innerHTML = `<div class="profile-rows">${profiles.map((profile, index) => {
+      const custom = profile.geometry_policy !== 'fit' || profile.fps_policy !== 'auto' || profile.codec_policy !== 'auto' || profile.hdr_policy !== 'auto' || Number(profile.bitrate_ceiling_kbps) > 0;
+      const learned = Number(profile.learned_start_kbps) ? ` · learned ${(profile.learned_start_kbps / 1000).toFixed(1)} Mbps` : '';
+      return `<button type="button" class="profile-row${keyOf(profile) === selectedKey ? ' selected' : ''}" data-index="${index}">
+        <span class="profile-row-main"><strong>${escapeHtml(profile.client_id)}</strong><span class="field-hint">${escapeHtml(profile.network_class)}${escapeHtml(learned)}</span></span>
+        <span class="profile-row-tags">${profile.client_id === connectedClientId ? '<span class="badge badge-ok">connected</span>' : ''}<span class="badge">${custom ? 'custom' : 'automatic'}</span></span>
+      </button>`;
+    }).join('')}</div>`;
+    list.querySelectorAll('[data-index]').forEach((button) => button.onclick = () => {
+      const profile = profiles[Number(button.dataset.index)];
+      if (!profile) return;
+      renderList(profiles, keyOf(profile));
+      openEditor(profile);
     });
   };
 
-  document.querySelector('#stream-profile-form').onsubmit = async (event) => {
-    event.preventDefault();
-    const form = event.currentTarget;
-    const data = Object.fromEntries(new FormData(form));
-    const payload = { ...data, active: form.elements.active.checked, fps_ceiling: Number(data.fps_ceiling), bitrate_ceiling_kbps: Number(data.bitrate_ceiling_kbps), safe_area_percent: Number(data.safe_area_percent), learned_start_kbps: 0 };
-    try {
-      const result = await json(await api('/stream/profiles', { method: 'POST', body: JSON.stringify(payload) }));
-      form.querySelector('.notice').textContent = result.message;
-      form.querySelector('.notice').className = 'notice ok';
-      await loadProfiles();
-    } catch (error) {
-      form.querySelector('.notice').textContent = error.message;
-      form.querySelector('.notice').className = 'notice error';
-    }
+  const loadProfiles = async (selectedKey = '') => {
+    try { renderList((await json(await api('/stream/profiles'))).profiles || [], selectedKey); }
+    catch (error) { list.innerHTML = `<div class="notice error">${escapeHtml(error.message)}</div>`; }
   };
-
-  const renderState = async () => {
-    let status;
-    try { status = await json(await api('/status')); } catch (error) { return; }
-    const state = status.stream_negotiation || {};
-    const root = document.querySelector('#stream-state');
-    if (!root) return;
-    root.innerHTML = streamStage('Requested', state.requested) + streamStage('Selected', state.selected) + streamStage('Active', state.active) + streamStage('Observed', state.observed);
-    const form = document.querySelector('#stream-profile-form');
-    if (form && state.requested?.client_id && state.requested?.capability_signature) {
-      if (!form.elements.client_id.value) form.elements.client_id.value = state.requested.client_id;
-      if (!form.elements.capability_signature.value) form.elements.capability_signature.value = state.requested.capability_signature;
-    }
-  };
-  const refreshLiveState = async () => Promise.all([renderState(), loadRecordings().catch(() => {})]);
-  await Promise.all([loadProfiles(), refreshLiveState()]);
-  pollTimer = setInterval(refreshLiveState, 2000);
+  await loadProfiles();
 }
 
 /** @brief Render the applications list: card grid + add/edit form + close-running control. */
@@ -500,31 +744,6 @@ async function renderApplications() {
 
   document.querySelector('#add-app').onclick = () => openAppForm(null, -1);
   await load();
-}
-
-/** @brief Curated advanced-settings page over the shared /api/config store. */
-async function renderSettings() {
-  const config = await json(await api('/config'));
-  const field = (key, label, type = 'text') => `<label>${escapeHtml(label)}<input data-key="${key}" data-kind="text" type="${type}" value="${escapeHtml(config[key] ?? '')}"></label>`;
-  const check = (key, label) => `<div class="checkbox-row"><label style="flex-direction:row-reverse;justify-content:flex-end">${escapeHtml(label)}<input type="checkbox" data-key="${key}" data-kind="bool" ${['enabled', 'true', 'yes', 'on', '1'].includes(String(config[key]).toLowerCase()) ? 'checked' : ''}></label></div>`;
-  shell(`<div class="page-header"><div><h2>Advanced settings</h2><p>The most commonly changed options. For everything else, open the <a href="/config">full configuration editor</a>.</p></div></div>
-    <form id="settings-form" class="stack">
-      <div class="section"><h3>General</h3><div class="form-grid">${field('sunshine_name', 'Host name')}${field('port', 'Port', 'number')}</div></div>
-      <div class="section"><h3>Audio / Video</h3><div class="form-grid">${field('fec_percentage', 'FEC percentage', 'number')}${field('qp', 'Quantization parameter (QP)', 'number')}${field('adapter_name', 'GPU adapter name (blank = auto)')}${field('capture', 'Capture backend (blank = auto)')}</div></div>
-      <div class="section"><h3>Network</h3>${check('upnp', 'Enable UPnP')}<div class="form-grid">${field('lan_encryption_mode', 'LAN encryption mode (0-2)', 'number')}</div></div>
-      <div class="section"><h3>Advanced</h3><div class="form-grid">${field('min_log_level', 'Minimum log level (0-6)', 'number')}</div></div>
-      <div class="btn-row"><button class="btn-primary">Save settings</button></div>
-      <div class="notice"></div>
-    </form>`, { authenticated: true, activeId: 'settings' });
-  document.querySelector('#settings-form').onsubmit = async (event) => {
-    event.preventDefault();
-    const payload = {};
-    event.currentTarget.querySelectorAll('[data-key]').forEach((input) => {
-      payload[input.dataset.key] = input.dataset.kind === 'bool' ? (input.checked ? 'enabled' : 'disabled') : input.value;
-    });
-    try { await json(await api('/config', { method: 'POST', body: JSON.stringify(payload) })); event.currentTarget.querySelector('.notice').textContent = 'Saved.'; event.currentTarget.querySelector('.notice').className = 'notice ok'; }
-    catch (error) { event.currentTarget.querySelector('.notice').textContent = error.message; event.currentTarget.querySelector('.notice').className = 'notice error'; }
-  };
 }
 
 /** @brief AMD GPU performance profile page: presets + custom profile management. */
@@ -629,7 +848,7 @@ async function renderVirtualDisplayConfig() {
   const candidates = await json(await api('/config/virtual-display/sources')).catch(() => ({ sources: [] }));
   const enabled = config.steamos_virtual_display_enabled === 'enabled';
   const sourceOptions = (candidates.sources || []).map((source) => `<option value="${escapeHtml(source.pid)}">PID ${escapeHtml(source.pid)} — ${escapeHtml(source.description || 'Gamescope')} (${escapeHtml(source.render_node || 'unknown GPU')})</option>`).join('');
-  shell(`<div class="page-header"><div><h2>Virtual display</h2><p>Choose how SteamShine obtains the streamed display.</p></div></div>
+  shell(`<div class="page-header"><div><h2>Virtual display</h2><p>Choose how SteamShine obtains the display it streams. Saving requires a restart.</p></div><a class="btn-ghost btn-sm" href="/sunshine/config">Sunshine settings</a></div>
     <form id="virtual-display-config" class="section stack">
       <div class="checkbox-row"><label style="flex-direction:row-reverse;justify-content:flex-end">Enable SteamOS virtual display<input name="enabled" type="checkbox" ${enabled ? 'checked' : ''}></label></div>
       <label>Virtual display mode<select name="mode"><option value="off" ${config.steamos_virtual_display_mode === 'off' ? 'selected' : ''}>Off</option><option value="auto" ${config.steamos_virtual_display_mode === 'auto' ? 'selected' : ''}>Auto</option><option value="force" ${config.steamos_virtual_display_mode === 'force' ? 'selected' : ''}>Force</option></select></label>
@@ -641,7 +860,7 @@ async function renderVirtualDisplayConfig() {
       <div class="checkbox-row"><label style="flex-direction:row-reverse;justify-content:flex-end">Keep a SteamShine-owned session after disconnect<input name="keep_session_alive" type="checkbox" ${config.steamos_keep_session_alive !== 'disabled' ? 'checked' : ''}></label></div>
       <div class="btn-row"><button class="btn-primary">Save policy</button></div>
       <div class="notice"></div>
-    </form>`, { authenticated: true, activeId: 'settings' });
+    </form>`, { authenticated: true, activeId: 'config' });
   document.querySelector('#virtual-display-config').onsubmit = async (event) => {
     event.preventDefault();
     const form = event.currentTarget;

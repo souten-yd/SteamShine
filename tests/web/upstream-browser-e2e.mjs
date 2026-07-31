@@ -244,12 +244,12 @@ try {
   const csrfValue = await steamshinePage.evaluate(async () => (await fetch('/api/steamshine/v1/session')).json().then((value) => value.csrf_token));
   const streamResponse = await steamshinePage.goto(`${baseUrl}/steamshine/stream`, { waitUntil: 'domcontentloaded' });
   if (streamResponse?.status() !== 200) throw new Error(`Steam negotiation page returned ${streamResponse?.status()}.`);
-  await steamshinePage.getByRole('heading', { name: 'Stream negotiation' }).waitFor({ timeout: 5000 });
+  await steamshinePage.getByRole('heading', { name: 'Stream', exact: true }).waitFor({ timeout: 5000 });
   const streamState = await steamshinePage.evaluate(async () => (await fetch('/api/steamshine/v1/status')).json().then((value) => value.stream_negotiation));
   if (streamState?.schema_version !== 1 || streamState?.poll_interval_ms !== 2000) {
     throw new Error(`Stream negotiation schema or polling bound changed: ${JSON.stringify(streamState)}`);
   }
-  await steamshinePage.getByRole('heading', { name: 'Sender recording' }).waitFor({ timeout: 5000 });
+  await steamshinePage.getByRole('heading', { name: 'Recording', exact: true }).waitFor({ timeout: 5000 });
   const initialRecordingState = await steamshinePage.evaluate(async () => (await fetch('/api/steamshine/v1/stream/recordings')).json());
   if (initialRecordingState.capacity_mb !== 500 || initialRecordingState.state !== 'idle' || !Array.isArray(initialRecordingState.recordings)) {
     throw new Error(`Unexpected default sender recording state: ${JSON.stringify(initialRecordingState)}`);
@@ -289,12 +289,25 @@ try {
   if (securityResults.stream_profile_save_status !== 200 || streamProfiles.profiles?.length !== 1 || !streamProfiles.profiles[0].active) {
     throw new Error(`Stream profile API did not persist the active profile: ${JSON.stringify(streamProfiles)}`);
   }
-  const fallbackHref = await steamshinePage.getByRole('link', { name: 'Sunshine fallback settings' }).getAttribute('href');
+  const fallbackHref = await steamshinePage.getByRole('link', { name: 'Sunshine settings' }).first().getAttribute('href');
   if (fallbackHref !== '/sunshine/config') throw new Error(`Unexpected stream rollback route: ${fallbackHref}`);
+  await steamshinePage.locator('#open-stream-profiles').click();
+  const profileDialog = steamshinePage.getByRole('dialog', { name: 'Client profiles' });
+  await profileDialog.waitFor({ timeout: 5000 });
+  await profileDialog.locator(`.profile-row:has-text("${profilePayload.client_id}")`).click();
+  await profileDialog.locator('#profile-policy select[name="codec_policy"]').waitFor({ timeout: 5000 });
+  const editorNetworkClass = await profileDialog.locator('#profile-policy input[name="network_class"]').inputValue();
+  if (editorNetworkClass !== profilePayload.network_class) {
+    throw new Error(`Client profile editor opened the wrong entry: ${editorNetworkClass}`);
+  }
+  const editorCodec = await profileDialog.locator('#profile-policy select[name="codec_policy"]').inputValue();
+  if (editorCodec !== profilePayload.codec_policy) {
+    throw new Error(`Client profile editor did not prefill the saved codec policy: ${editorCodec}`);
+  }
   const statusRoute = '**/api/steamshine/v1/status';
   await steamshinePage.route(statusRoute, async (route) => route.fulfill({ status: 200, contentType: 'application/json', body: '{' }));
   await steamshinePage.goto(`${baseUrl}/steamshine/stream`, { waitUntil: 'domcontentloaded' });
-  await steamshinePage.getByRole('heading', { name: 'Stream negotiation' }).waitFor({ timeout: 5000 });
+  await steamshinePage.getByRole('heading', { name: 'Stream', exact: true }).waitFor({ timeout: 5000 });
   await steamshinePage.unroute(statusRoute);
   const upstreamAfterStreamUiFailure = await authenticatedPage.reload({ waitUntil: 'networkidle' });
   if (upstreamAfterStreamUiFailure?.status() !== 200) throw new Error('Stream UI status failure affected the upstream recovery UI.');

@@ -130,10 +130,12 @@ This is where most of the recent work went.
   overlay ranges) without pretending to know your network topology.
 - **A blip doesn't kill your game.** By default an owned session is retained across a disconnect, so
   Moonlight's resume lands you back exactly where you were.
-- **Per-client, per-network profiles.** Save one profile per paired client *and* network class — LAN,
-  Wi-Fi, overlay VPN — covering geometry, FPS ceiling, codec, HDR, bitrate ceiling, quality preset,
-  orientation and safe area. You choose the network class explicitly; SteamShine never guesses it from
-  an IP address, and a changed client capability signature always wins over a saved preference.
+- **Per-client profiles that create themselves.** The first time a paired client starts a stream it is
+  recorded automatically, with every policy left on automatic — so nothing changes until you want it
+  to. From there you can tune geometry, FPS ceiling, codec, HDR, bitrate ceiling, quality preset,
+  orientation and safe area per client *and* per network class — LAN, Wi-Fi, overlay VPN. You name the
+  network class explicitly; SteamShine never guesses it from an IP address, and a changed client
+  capability signature always wins over a saved preference.
 - **Record what was actually sent.** The Stream page can capture the exact encoded video that went to
   the client, into a bounded capacity you set. No second encoder, no extra load — just the bitstream,
   for when you want to prove what happened.
@@ -146,9 +148,10 @@ This is where most of the recent work went.
   explicitly, and an unsafe late fallback fails closed rather than quietly handing you Main10 SDR and
   calling it HDR.
 
-The **Stream** page shows all of it live in four honest stages — *Requested* (what the client asked
-for), *Selected* (what SteamShine chose, and why), *Active* (what the capture and encoder are really
-doing), *Observed* (FPS, queues, latency) — polling every 2 s without ever owning the media path.
+The **Stream** page shows all of it live: bitrate, frame rate, latency and packet loss as tiles you
+can read at a glance, exactly what the client is receiving, how the link is holding up, and — when
+the two differ — why. It polls every 2 s and never owns the media path, so nothing you do on that
+page can interrupt a stream.
 
 ---
 
@@ -160,12 +163,15 @@ The original Sunshine web UI is still there, unchanged. SteamShine adds a second
 | Page | What it does |
 | --- | --- |
 | **Monitor** | CPU, RAM, GPU and VRAM tiles with rolling sparklines, per-core bars, load average and uptime, plus GPU hotspot, fan RPM and power draw against its cap. Refreshes every 2 s. |
-| **Stream** | The four-stage negotiation view above, per-client profiles, and sender recording. |
+| **Stream** | Bitrate, frame rate, latency and packet-loss tiles; exactly what the client is being sent; how the link is holding up; and recording. Per-client tuning lives behind the gear icon. |
 | **Apps** | The list Moonlight clients can launch — add, edit, delete, and stop whatever is running now. |
 | **GPU** | AMD power profiles. Four built-ins (Silent / Balanced / Performance / OC) scaled from what your hardware actually reports, plus custom power limit, CPU governor and clock, and GPU clock/voltage offsets where the driver exposes them. |
-| **Settings** | The handful of options people actually change, plus a **Virtual display** page. |
+| **Display** | The virtual-display policy: mode, session source, local mirroring, and session retention. |
 | **Pin** / **Clients** | Four-digit pairing, and revoking clients you've paired. |
 | **Terminal** | A real shell on the host, in the browser, over its own WebSocket. |
+
+Everything else stays in Sunshine's own configuration editor, one click away on every page — the
+panel deliberately does not mirror settings you would only change once.
 
 Telemetry is read straight from `/proc` and `/sys` — no `amd-smi` or `sensors` subprocess spawned
 every second, and having the panel open creates no extra capture or encoder session. The control
