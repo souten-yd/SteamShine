@@ -163,6 +163,8 @@ configure_recommended() {
 }
 service_file() { printf '%s\n' "${HOME}/.config/systemd/user/${SERVICE_UNIT}"; }
 service_wants_link() { printf '%s\n' "${HOME}/.config/systemd/user/default.target.wants/${SERVICE_UNIT}"; }
+gamescope_guard_dropin() { printf '%s\n' "${HOME}/.config/systemd/user/gamescope-session.service.d/90-steamshine-headless-guard.conf"; }
+gamescope_guard_executable() { printf '%s\n' "${PREFIX}/libexec/steamshine/steamshine-gamescope-session-guard"; }
 systemd_user_path() {
   local path="$1"
   if [[ "${path}" == "${HOME}" ]]; then
@@ -172,6 +174,42 @@ systemd_user_path() {
   else
     printf '%s\n' "${path}"
   fi
+}
+install_gamescope_session_guard() {
+  local source="${PREFIX}/share/steamshine/current/scripts/steamshine-gamescope-session-guard.sh"
+  local vendor_launcher="${STEAMSHINE_GAMESCOPE_VENDOR_LAUNCHER:-/usr/lib/steamos/gamescope-session}"
+  local vendor_unit="${STEAMSHINE_GAMESCOPE_VENDOR_UNIT:-/usr/lib/systemd/user/gamescope-session.service}"
+  local executable dropin dropin_directory temporary systemd_executable
+  executable="$(gamescope_guard_executable)"
+  dropin="$(gamescope_guard_dropin)"
+  if ! virtual_display_enabled; then
+    run rm -f "${dropin}" "${executable}"
+    run systemctl --user daemon-reload || true
+    return
+  fi
+  [[ -x "${vendor_launcher}" && -f "${vendor_unit}" && -x "${source}" ]] || return 0
+  dropin_directory="$(dirname -- "${dropin}")"
+  systemd_executable="$(systemd_user_path "${executable}")"
+  run mkdir -p "$(dirname -- "${executable}")" "${dropin_directory}"
+  if "${DRY_RUN}"; then
+    say "[dry-run] install ${executable} and ${dropin}"
+    return
+  fi
+  command install -m 0755 "${source}" "${executable}"
+  temporary="$(mktemp "${dropin}.XXXXXX")"
+  if ! cat >"${temporary}" <<EOF
+[Service]
+ExecStart=
+ExecStart=${systemd_executable} ${vendor_launcher}
+TimeoutStartSec=infinity
+EOF
+  then
+    rm -f -- "${temporary}"
+    die 'The headless Game Mode session guard could not be generated.' "${EXIT_SERVICE}"
+  fi
+  chmod 0644 "${temporary}"
+  mv -f -- "${temporary}" "${dropin}"
+  systemctl --user daemon-reload || die 'The systemd user manager could not load the headless Game Mode session guard.' "${EXIT_SERVICE}"
 }
 install_service() {
   local unit unit_directory temporary executable config
@@ -407,6 +445,7 @@ install() {
     say 'SteamShine is installed; the systemd user service was not changed'
     return
   fi
+  install_gamescope_session_guard
   install_service
   enable_service
   if "${NO_START}"; then
@@ -594,6 +633,7 @@ update() {
     return
   fi
   install_service
+  install_gamescope_session_guard
   enable_service
   if "${was_active}" && ! "${NO_START}"; then
     run systemctl --user restart "${SERVICE_UNIT}" || die 'SteamShine was updated but its active service could not be restarted.' "${EXIT_SERVICE}"
@@ -622,6 +662,7 @@ repair() {
     [[ -n "${process_executable}" && "${process_executable}" == "${expected_executable}" ]] || restart_required=true
   fi
   install_service
+  install_gamescope_session_guard
   enable_service
   if "${NO_START}"; then
     verify_service false
@@ -640,7 +681,7 @@ uninstall() {
   if "${PURGE}" && "${NON_INTERACTIVE}" && ! "${ASSUME_YES}"; then die '--purge in non-interactive mode requires --yes.' "$EXIT_USAGE"; fi
   if ! "${NO_SERVICE}"; then
     run systemctl --user disable --now "${SERVICE_UNIT}" || true
-    run rm -f "$(service_file)" "$(service_wants_link)"
+    run rm -f "$(service_file)" "$(service_wants_link)" "$(gamescope_guard_dropin)" "$(gamescope_guard_executable)"
     run systemctl --user daemon-reload || true
     run systemctl --user reset-failed "${SERVICE_UNIT}" || true
   fi

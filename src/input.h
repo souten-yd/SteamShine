@@ -127,6 +127,47 @@ namespace input {
   };
 
   /**
+   * @brief Hold-to-release edges observed between two controller states.
+   *
+   * The summary deliberately records only release categories and a button
+   * mask. It is suitable for low-volume diagnostics without sampling a
+   * player's continuous controller motion.
+   */
+  struct gamepad_hold_release_t {
+    std::uint32_t released_buttons {0};  ///< Buttons that changed from pressed to released.
+    bool left_stick_released {false};  ///< Whether the left stick returned from a held direction to neutral.
+    bool right_stick_released {false};  ///< Whether the right stick returned from a held direction to neutral.
+
+    /**
+     * @brief Report whether any held control was released.
+     *
+     * @return True when a button or stick release edge is present.
+     */
+    bool any() const {
+      return released_buttons != 0 || left_stick_released || right_stick_released;
+    }
+  };
+
+  /**
+   * @brief Detect release edges that can interrupt a held game action.
+   *
+   * Stick classification uses separate held and neutral thresholds so small
+   * center noise cannot create a false release event.
+   *
+   * @param previous Previously injected controller state.
+   * @param current Controller state about to be injected.
+   * @param held_threshold Minimum absolute axis magnitude considered held.
+   * @param neutral_threshold Maximum absolute axis magnitude considered neutral.
+   * @return Released button mask and stick release categories.
+   */
+  gamepad_hold_release_t detect_gamepad_hold_release(
+    const platf::gamepad_state_t &previous,
+    const platf::gamepad_state_t &current,
+    std::int16_t held_threshold = 4096,
+    std::int16_t neutral_threshold = 1024
+  );
+
+  /**
    * @brief Return a consistent aggregate view of active-stream input counters.
    *
    * @return Non-secret input queue and delivery counters.

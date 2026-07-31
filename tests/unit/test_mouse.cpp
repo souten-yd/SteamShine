@@ -8,6 +8,7 @@
 
 #if defined(__linux__) || defined(__FreeBSD__)
   #include <linux/input-event-codes.h>
+  #include <src/platform/linux/input/gamescope_eis_input.h>
   #include <src/platform/linux/input/gamescope_pointer_state.h>
   #include <src/platform/linux/input/input_key_mapping.h>
 #endif
@@ -35,6 +36,15 @@ TEST(GamescopeInputMappingTest, ReleasesCombinedPointerStateOnDisconnect) {
   ASSERT_EQ(state.update(platf::gamescope_pointer_source_e::touch, true), true);
   EXPECT_TRUE(state.reset());
   EXPECT_FALSE(state.reset());
+}
+
+/**
+ * @brief Verify only the desktop route may instantiate desktop input devices.
+ */
+TEST(GamescopeInputMappingTest, DefersDesktopDevicesForGamescopeRoutes) {
+  EXPECT_TRUE(platf::gamescope_input_uses_desktop_device(platf::gamescope_input_result_e::desktop));
+  EXPECT_FALSE(platf::gamescope_input_uses_desktop_device(platf::gamescope_input_result_e::delivered));
+  EXPECT_FALSE(platf::gamescope_input_uses_desktop_device(platf::gamescope_input_result_e::blocked));
 }
 #endif
 

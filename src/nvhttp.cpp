@@ -1053,7 +1053,8 @@ namespace nvhttp {
 
     std::string virtual_session_error;
     const bool prefer_owned_session {appid > 0 && proc::proc.prefers_owned_virtual_display(static_cast<int>(appid))};
-    if (!steamos_virtual_session::prepare(*launch_session, virtual_session_error, false, prefer_owned_session)) {
+    const bool prefer_physical_desktop {appid > 0 && proc::proc.prefers_physical_desktop(static_cast<int>(appid))};
+    if (!steamos_virtual_session::prepare(*launch_session, virtual_session_error, false, prefer_owned_session, prefer_physical_desktop)) {
       BOOST_LOG(error) << "SteamOS virtual session preparation failed: " << virtual_session_error;
       tree.put("root.<xmlattr>.status_code", 503);
       tree.put("root.<xmlattr>.status_message", virtual_session_error);

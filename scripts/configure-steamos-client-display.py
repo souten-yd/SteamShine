@@ -164,19 +164,39 @@ def select_output(configuration: dict[str, Any], requested_name: str = "") -> di
 
 
 def select_mode(output: dict[str, Any], width: int, height: int, fps: float) -> dict[str, Any]:
-    """Select an exact-size mode at the requested or nearest lower safe refresh."""
-    modes = [
-        mode
-        for mode in output.get("modes", [])
-        if int(mode.get("size", {}).get("width", 0)) == width
-        and int(mode.get("size", {}).get("height", 0)) == height
-    ]
+    """Select the exact or closest registered size at a safe refresh rate."""
+    modes = list(output.get("modes", []))
     if not modes:
-        raise ValueError(f"KDE output {output.get('name', 'unknown')} has no {width}x{height} mode")
-    safe_modes = [mode for mode in modes if float(mode.get("refreshRate", 0.0)) <= fps + 0.01]
+        raise ValueError(f"KDE output {output.get('name', 'unknown')} has no registered modes")
+    sizes = {
+        (
+            int(mode.get("size", {}).get("width", 0)),
+            int(mode.get("size", {}).get("height", 0)),
+        )
+        for mode in modes
+    }
+    selected_size = min(
+        sizes,
+        key=lambda size: (
+            (size[0] - width) ** 2 + (size[1] - height) ** 2,
+            abs(size[0] * size[1] - width * height),
+            -size[0] * size[1],
+        ),
+    )
+    matching_modes = [
+        mode
+        for mode in modes
+        if (
+            int(mode.get("size", {}).get("width", 0)),
+            int(mode.get("size", {}).get("height", 0)),
+        )
+        == selected_size
+    ]
+    safe_modes = [mode for mode in matching_modes if float(mode.get("refreshRate", 0.0)) <= fps + 0.01]
     if not safe_modes:
         raise ValueError(
-            f"KDE output {output.get('name', 'unknown')} has no safe {width}x{height} mode at or below {fps:g} Hz"
+            f"KDE output {output.get('name', 'unknown')} has no safe "
+            f"{selected_size[0]}x{selected_size[1]} mode at or below {fps:g} Hz"
         )
     return min(
         safe_modes,

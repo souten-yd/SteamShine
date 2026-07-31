@@ -875,6 +875,26 @@ TEST_F(SteamOSVirtualSessionTest, FakeGamescopeReadinessAndCleanup) {
 }
 
 /**
+ * @brief Verify startup encoder preflight uses default geometry and enables HDR.
+ */
+TEST_F(SteamOSVirtualSessionTest, EncoderProbePreparesDefaultHdrDisplay) {
+  std::string error;
+  ASSERT_TRUE(steamos_virtual_session::prepare_encoder_probe(true, error)) << error;
+
+  const auto snapshot {steamos_virtual_session::status_snapshot()};
+  EXPECT_EQ(snapshot.requested_width, config::steamos_virtual_display.default_width);
+  EXPECT_EQ(snapshot.requested_height, config::steamos_virtual_display.default_height);
+  EXPECT_EQ(snapshot.fps, config::steamos_virtual_display.default_fps);
+  const auto endpoint {steamos_virtual_session::application_environment()};
+  ASSERT_TRUE(endpoint);
+  EXPECT_NE(endpoint->xdg_runtime_directory.find("session-" + std::to_string(::getpid()) + "-0"), std::string::npos);
+
+  std::ifstream arguments_file {std::filesystem::path {endpoint->xdg_runtime_directory} / "gamescope-arguments"};
+  const std::string arguments {(std::istreambuf_iterator<char> {arguments_file}), std::istreambuf_iterator<char> {}};
+  EXPECT_NE(arguments.find("--hdr-enabled\n"), std::string::npos);
+}
+
+/**
  * @brief Verify the exact peer-authenticated EIS connection is returned.
  */
 TEST_F(SteamOSVirtualSessionTest, OpensVerifiedGamescopeEisConnection) {

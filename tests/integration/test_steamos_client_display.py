@@ -45,6 +45,8 @@ class ClientDisplayTests(unittest.TestCase):
                     "scale": 1.5,
                     "modes": [
                         {"id": "1", "size": {"width": 3440, "height": 1440}, "refreshRate": 99.982},
+                        {"id": "2", "size": {"width": 3440, "height": 1440}, "refreshRate": 59.973},
+                        {"id": "3", "size": {"width": 2560, "height": 1440}, "refreshRate": 59.961},
                         {"id": "6", "size": {"width": 1920, "height": 1080}, "refreshRate": 60.0},
                         {"id": "50", "size": {"width": 1920, "height": 1080}, "refreshRate": 50.0},
                         {"id": "30", "size": {"width": 1920, "height": 1080}, "refreshRate": 100.0},
@@ -59,13 +61,21 @@ class ClientDisplayTests(unittest.TestCase):
         mode = DISPLAY.select_mode(output, 1920, 1080, 60.0)
         self.assertEqual(mode["id"], "6")
 
-    def test_rejects_invalid_request_and_missing_mode(self) -> None:
-        """Reject malformed client dimensions and unsupported physical modes."""
+    def test_rejects_invalid_request_and_output_without_modes(self) -> None:
+        """Reject malformed client dimensions and an output without registered modes."""
         invalid = dict(self.environment, SUNSHINE_CLIENT_WIDTH="wide")
         with self.assertRaises(ValueError):
             DISPLAY.requested_mode(invalid)
-        with self.assertRaises(ValueError):
-            DISPLAY.select_mode(self.configuration["outputs"][0], 1170, 2532, 60.0)
+        with self.assertRaisesRegex(ValueError, "no registered modes"):
+            DISPLAY.select_mode({"name": "DP-1", "modes": []}, 1170, 2532, 60.0)
+
+    def test_selects_closest_registered_dimensions_when_exact_size_is_missing(self) -> None:
+        """Use the closest physical dimensions for a Moonlight-native size absent from KScreen."""
+        output = DISPLAY.select_output(self.configuration)
+
+        mode = DISPLAY.select_mode(output, 3040, 1904, 60.0)
+
+        self.assertEqual(mode["id"], "2")
 
     def test_selects_nearest_lower_refresh_and_rejects_higher_only_mode(self) -> None:
         """Allow a lower exact-size mode but never silently select a refresh above the request."""

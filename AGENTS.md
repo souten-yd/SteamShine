@@ -3,6 +3,14 @@ You need to prefix commands with `C:\msys64\msys2_shell.cmd -defterm -here -no-s
 
 Prefix build directories with `cmake-build-`.
 
+For SteamOS binaries that will be installed or tested on the host, always build with the immutable container
+image and digest recorded in `ci/steamos/image.lock`. Do not use the `sunshine-build` distrobox or another
+rolling/latest Arch environment for a deployable binary: it can produce a binary that passes unit tests but
+requires newer GLIBC, GLIBCXX, Qt, ICU, or other libraries than SteamOS provides. Before replacing the running
+service, verify the built or packaged binary on the host with `ldd` and reject it if any dependency is missing
+or any symbol-version error is reported. Use `scripts/package-steamos-artifact.sh` and the normal installer for
+host testing so the previous immutable version remains available for rollback.
+
 The test executable is named `test_sunshine` and will be located inside the `tests` directory within
 the build directory.
 

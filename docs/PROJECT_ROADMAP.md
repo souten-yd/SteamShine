@@ -78,8 +78,9 @@ The inherited display-device configuration already defines automatic resolution,
 
 SteamShine also packages a KDE/KScreen preparation hook that:
 
-- applies an exact physical mode matching the Moonlight width and height;
-- chooses the nearest refresh for that exact size;
+- applies a physical mode matching the Moonlight width and height when registered;
+- otherwise applies the registered dimensions nearest to the Moonlight request;
+- chooses the nearest safe refresh for the selected size;
 - restores the previous mode and scale on application exit;
 - skips physical KScreen changes for an owned Gamescope virtual session.
 
@@ -262,10 +263,11 @@ A retained owned session may be reused only when its canvas, HDR intent, GPU, an
 
 Preferred path:
 
-- use the existing KScreen/display-device path when the physical output advertises an exact pixel size;
-- choose the nearest safe refresh for that exact size;
+- use the existing KScreen/display-device path with an exact registered pixel size when available;
+- otherwise choose the registered physical size with the shortest squared width/height distance;
+- choose the nearest safe refresh for that size;
 - restore the prior mode and scale;
-- if no exact physical mode exists, prefer an owned virtual session rather than changing aspect ratio silently.
+- reserve an owned virtual session for cases where no capturable physical KDE output is available.
 
 #### Existing Game Mode Gamescope
 

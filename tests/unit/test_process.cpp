@@ -41,6 +41,19 @@ TEST(ProcessCommandSelectionTest, RecognizesOwnedVirtualDisplayFallbackProtocol)
 }
 
 /**
+ * @brief Verify a commandless physical Desktop ignores only the explicit mode fallback result.
+ */
+TEST(ProcessCommandSelectionTest, KeepsPhysicalDesktopWhenModePreparationIsUnavailable) {
+  using steamos_virtual_session::session_origin_e;
+
+  EXPECT_TRUE(proc::should_keep_physical_desktop(75, true, session_origin_e::none));
+  EXPECT_FALSE(proc::should_keep_physical_desktop(1, true, session_origin_e::none));
+  EXPECT_FALSE(proc::should_keep_physical_desktop(75, false, session_origin_e::none));
+  EXPECT_FALSE(proc::should_keep_physical_desktop(75, true, session_origin_e::owned_private));
+  EXPECT_FALSE(proc::should_keep_physical_desktop(75, true, session_origin_e::attached_existing));
+}
+
+/**
  * @brief Verify the packaged KDE surface uses Gamescope's cursor-capable XWayland path.
  */
 TEST(ProcessCommandSelectionTest, ConstrainsPackagedVirtualDesktopToXwayland) {
@@ -215,6 +228,27 @@ TEST(ProcessCommandSelectionTest, PrefersOwnedCanvasForBigPictureLaunch) {
   proc::proc_t process_manager {std::move(environment), std::vector<proc::ctx_t> {application}};
   EXPECT_TRUE(process_manager.prefers_owned_virtual_display(42));
   EXPECT_FALSE(process_manager.prefers_owned_virtual_display(43));
+}
+
+/**
+ * @brief Verify only commandless applications request the physical Desktop preference.
+ */
+TEST(ProcessCommandSelectionTest, PrefersPhysicalDesktopForCommandlessApplication) {
+  proc::ctx_t application {};
+  application.id = "42";
+  EXPECT_TRUE(proc::should_prefer_physical_desktop(application));
+
+  application.detached = {"game --launch"};
+  EXPECT_FALSE(proc::should_prefer_physical_desktop(application));
+  application.detached.clear();
+  application.cmd = "game --launch";
+  EXPECT_FALSE(proc::should_prefer_physical_desktop(application));
+  application.cmd.clear();
+
+  boost::process::v1::environment environment;
+  proc::proc_t process_manager {std::move(environment), std::vector<proc::ctx_t> {application}};
+  EXPECT_TRUE(process_manager.prefers_physical_desktop(42));
+  EXPECT_FALSE(process_manager.prefers_physical_desktop(43));
 }
 
 TEST(ProcessEnvironmentTest, RestoresBaselineBetweenLaunches) {

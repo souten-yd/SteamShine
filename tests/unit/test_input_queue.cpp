@@ -23,6 +23,37 @@ using namespace std::chrono_literals;
 
 namespace {
   /**
+   * @brief Verify controller diagnostics identify button and stick hold releases.
+   */
+  TEST(InputGamepadDiagnostics, DetectsHeldControlReleaseEdges) {
+    platf::gamepad_state_t held {};
+    held.buttonFlags = platf::A | platf::LEFT_BUTTON;
+    held.lsX = 18000;
+    held.rsY = -22000;
+
+    platf::gamepad_state_t partial_release {held};
+    partial_release.buttonFlags = platf::LEFT_BUTTON;
+    partial_release.lsX = 12000;
+    partial_release.rsY = 0;
+    const auto partial {input::detect_gamepad_hold_release(held, partial_release)};
+    EXPECT_EQ(partial.released_buttons, platf::A);
+    EXPECT_FALSE(partial.left_stick_released);
+    EXPECT_TRUE(partial.right_stick_released);
+
+    platf::gamepad_state_t neutral {partial_release};
+    neutral.lsX = 500;
+    const auto final {input::detect_gamepad_hold_release(partial_release, neutral)};
+    EXPECT_EQ(final.released_buttons, 0U);
+    EXPECT_TRUE(final.left_stick_released);
+    EXPECT_FALSE(final.right_stick_released);
+
+    platf::gamepad_state_t redirected {held};
+    redirected.lsX = -18000;
+    redirected.rsY = 22000;
+    EXPECT_FALSE(input::detect_gamepad_hold_release(held, redirected).any());
+  }
+
+  /**
    * @brief Copy a packed Moonlight input structure into queue-owned bytes.
    *
    * @tparam Packet Concrete Moonlight input packet type.
