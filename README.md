@@ -253,8 +253,9 @@ An honest summary, because it should affect whether you install this today.
 **SteamShine works.** The virtual-display pipeline — headless Gamescope, PipeWire discovery, DMA-BUF
 capture, Vulkan encoding, video, audio, touch and mouse input, and session retention across
 disconnects — has been validated end to end on real hardware (SteamOS 3.8.16, RX 9070 XT), including
-ten cable disconnect/reconnect cycles. CI covers formatting, linting, build, lifecycle tests,
-packaging and installer smoke tests on every change.
+ten cable disconnect/reconnect cycles. The control panel's Stream page and automatic client
+registration have been accepted on that same hardware. CI covers formatting, linting, build,
+lifecycle tests, packaging and installer smoke tests on every change.
 
 Still outstanding, stated plainly:
 
@@ -262,8 +263,8 @@ Still outstanding, stated plainly:
   final hardware acceptance pass.
 - Attaching to a **Game Mode** session needs its own acceptance run; the Desktop Mode result doesn't
   substitute for it.
-- Adaptive bitrate, per-client profiles and the Stream page are implemented and unit/CI tested, but
-  their controlled-loss and live-browser acceptance runs are still pending.
+- Adaptive bitrate still needs its controlled-loss Ethernet and Wi-Fi runs. The Stream page reads the
+  controller's state; that isn't the same as having exercised it.
 - The GPU *write* path and the Terminal WebSocket haven't yet been exercised on live hardware.
 - Testing has concentrated on one host and one GPU. Other AMD hardware should work; nobody has proven
   it yet.

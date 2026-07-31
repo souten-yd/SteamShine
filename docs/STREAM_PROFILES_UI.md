@@ -70,9 +70,22 @@ provides only the final aggregate learned value.
 
 ## Acceptance
 
-Hardware acceptance remains required on the final integrated Artifact: open the
-page through localhost and LAN, run a 1080p60 stream, verify the banner, tiles,
-delivered settings and quality sections, confirm the client was recorded
-automatically on its first connection without changing the stream, save and
-reset two network-class profiles for one client, change the capability
-signature, and confirm the upstream Sunshine UI remains usable.
+Hardware accepted. The operator verified the page in a browser against Artifact
+`steamshine-steamos-x86_64-1801b0cdea131efeff23b8d1cb7e3dab400c10ca` from
+SteamOS Runtime Build run `30594131028` (PR #17, merged as
+`95f6a2f49589c6ffff113215c143f6fb39c521ca`), installed locally with a matching
+`BUILD_INFO.json` commit, an active service, and `NRestarts=0`. The accepted
+scope is the live page — banner, tiles, delivered settings, connection quality —
+the floating profile editor, and automatic first-connection registration leaving
+the stream unchanged.
+
+Two things stay outside this acceptance and keep their own gates:
+
+- Adaptive bitrate still needs its controlled-loss Ethernet and Wi-Fi runs;
+  reading its state on this page is not the same as exercising the controller.
+- Geometry, quality-preset, orientation and safe-area selections are stored and
+  displayed but not yet applied to the pipeline, so nothing about them was
+  accepted here.
+
+Re-running acceptance on a later Artifact means repeating the same checks; an
+earlier pass is evidence about the implementation, not acceptance of a new head.
