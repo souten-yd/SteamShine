@@ -347,7 +347,14 @@ case "${command_name}" in
     [[ "${SYSTEMCTL_FAIL_START:-0}" == 1 ]] && exit 1
     touch "${state}/active"
     mkdir -p "${STEAMSHINE_PROC_ROOT:?}/4242"
-    ln -sfn "$(readlink -f -- "${HOME}/.local/bin/steamshine")" "${STEAMSHINE_PROC_ROOT}/4242/exe"
+    expected_binary="$(readlink -f -- "${HOME}/.local/bin/steamshine")"
+    if [[ -n "${SYSTEMCTL_TRANSIENT_EXECUTABLE:-}" ]]; then
+      ln -sfn "${SYSTEMCTL_TRANSIENT_EXECUTABLE}" "${STEAMSHINE_PROC_ROOT}/4242/exe"
+      nohup bash -c 'sleep 0.1; ln -sfn "$1" "$2"' bash \
+        "${expected_binary}" "${STEAMSHINE_PROC_ROOT}/4242/exe" >/dev/null 2>&1 &
+    else
+      ln -sfn "${expected_binary}" "${STEAMSHINE_PROC_ROOT}/4242/exe"
+    fi
     ;;
   stop)
     rm -f "${state}/active"
@@ -462,6 +469,19 @@ HOME="${test_root}/home" XDG_RUNTIME_DIR="${test_root}/home/run" PATH="${test_ro
   "${root_dir}/steamshine.sh" install --artifact "${test_root}/steamshine-steamos-x86_64-test.tar.zst" --non-interactive --yes
 test "$(sha256sum "${service_unit}")" = "${service_unit_checksum}"
 grep -Fq -- '--user restart steamshine.service' "${systemctl_log}"
+
+# Type=simple may briefly expose systemd's executor at MainPID before execve
+# reaches the new immutable binary. Installation must retry that identity
+# check for a bounded interval instead of reporting a false wrong_binary.
+transient_executable="${test_root}/transient-systemd-executor"
+printf '#!/bin/sh\nexit 0\n' >"${transient_executable}"
+chmod 755 "${transient_executable}"
+: >"${systemctl_log}"
+HOME="${test_root}/home" XDG_RUNTIME_DIR="${test_root}/home/run" PATH="${test_root}/mock-bin:${PATH}" \
+  SYSTEMCTL_STATE_DIR="${systemctl_state}" STEAMSHINE_PROC_ROOT="${mock_proc}" SYSTEMCTL_LOG="${systemctl_log}" \
+  SYSTEMCTL_TRANSIENT_EXECUTABLE="${transient_executable}" \
+  "${root_dir}/steamshine.sh" install --artifact "${test_root}/steamshine-steamos-x86_64-test.tar.zst" --non-interactive --yes
+test "$(readlink -f -- "${mock_proc}/4242/exe")" = "$(readlink -f -- "${test_root}/home/.local/bin/steamshine")"
 
 # Repair recreates a missing default.target link without needlessly restarting
 # an already-active process that resolves to the current installed binary.
