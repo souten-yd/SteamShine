@@ -175,7 +175,15 @@ TEST(WebServicesTest, PersistsVirtualDisplayPolicyForRestart) {
   EXPECT_FALSE(invalid_pid.success);
   EXPECT_EQ(invalid_pid.code, "invalid_steamos_existing_gamescope_pid");
 
-  const auto saved = configuration.save_virtual_display(true, "force", "owned_private", "mirror", false, 4321);
+  const auto invalid_migration = configuration.save_virtual_display(true, "force", "owned_private", "mirror", false, 0, "force");
+  EXPECT_FALSE(invalid_migration.success);
+  EXPECT_EQ(invalid_migration.code, "invalid_steamos_steam_migration");
+
+  const auto invalid_handoff = configuration.save_virtual_display(true, "force", "owned_private", "mirror", false, 0, "auto_idle", "force");
+  EXPECT_FALSE(invalid_handoff.success);
+  EXPECT_EQ(invalid_handoff.code, "invalid_steamos_stock_session_handoff");
+
+  const auto saved = configuration.save_virtual_display(true, "force", "owned_private", "mirror", false, 4321, "reject", "auto_idle");
   EXPECT_TRUE(saved.success);
   EXPECT_EQ(saved.code, "restart_required");
   const auto persisted = file_handler::read_file(temporary_config.string().c_str());
@@ -184,6 +192,8 @@ TEST(WebServicesTest, PersistsVirtualDisplayPolicyForRestart) {
   EXPECT_NE(persisted.find("steamos_virtual_display_mode = force"), std::string::npos);
   EXPECT_NE(persisted.find("steamos_session_source = owned_private"), std::string::npos);
   EXPECT_NE(persisted.find("steamos_local_presentation = mirror"), std::string::npos);
+  EXPECT_NE(persisted.find("steamos_steam_migration = reject"), std::string::npos);
+  EXPECT_NE(persisted.find("steamos_stock_session_handoff = auto_idle"), std::string::npos);
   EXPECT_NE(persisted.find("steamos_keep_session_alive = disabled"), std::string::npos);
   EXPECT_NE(persisted.find("steamos_existing_gamescope_pid = 4321"), std::string::npos);
   const auto snapshot = configuration.snapshot();
@@ -191,6 +201,8 @@ TEST(WebServicesTest, PersistsVirtualDisplayPolicyForRestart) {
   EXPECT_EQ(snapshot.at("steamos_virtual_display_mode"), "force");
   EXPECT_EQ(snapshot.at("steamos_session_source"), "owned_private");
   EXPECT_EQ(snapshot.at("steamos_local_presentation"), "mirror");
+  EXPECT_EQ(snapshot.at("steamos_steam_migration"), "reject");
+  EXPECT_EQ(snapshot.at("steamos_stock_session_handoff"), "auto_idle");
   EXPECT_EQ(snapshot.at("steamos_keep_session_alive"), "disabled");
   EXPECT_EQ(snapshot.at("steamos_existing_gamescope_pid"), "4321");
 
@@ -245,6 +257,12 @@ TEST(WebServicesTest, StatusSnapshotIncludesPipeWireDiagnostics) {
   EXPECT_TRUE(snapshot.contains("virtual_display_source_executable"));
   EXPECT_TRUE(snapshot.contains("steam_location"));
   EXPECT_TRUE(snapshot.contains("migration_required"));
+  EXPECT_TRUE(snapshot.contains("steam_migration_state"));
+  EXPECT_TRUE(snapshot.contains("stock_handoff_state"));
+  EXPECT_TRUE(snapshot.contains("stock_handoff_reason"));
+  EXPECT_TRUE(snapshot.contains("stock_handoff_generation"));
+  EXPECT_TRUE(snapshot.contains("owned_gamescope_backend"));
+  EXPECT_TRUE(snapshot.contains("presentation_reason"));
   EXPECT_TRUE(snapshot.contains("app_launch_rejected_reason"));
   EXPECT_TRUE(snapshot.contains("app_launch_rejected_message"));
   EXPECT_TRUE(snapshot.contains("capture_selection_reason"));

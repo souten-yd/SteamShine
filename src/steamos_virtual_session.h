@@ -92,10 +92,16 @@ namespace steamos_virtual_session {
     uint64_t source_process_start_time {0};  ///< Verified Gamescope `/proc` start time.
     std::string steam_location;  ///< Steam singleton location relative to the selected Gamescope.
     bool migration_required {false};  ///< Whether an explicitly confirmed Desktop Steam migration is required.
+    steam_migration_state_e migration_state {steam_migration_state_e::not_needed};  ///< Latest safe Steam migration state.
+    stock_handoff_state_e stock_handoff_state {stock_handoff_state_e::inactive};  ///< Current stock Game Mode handoff lifecycle state.
+    std::string stock_handoff_reason;  ///< Bounded reason for the latest handoff decision or failure.
+    uint64_t stock_handoff_generation {0};  ///< Monotonic handoff generation for correlation.
     std::string app_launch_rejected_reason;  ///< Stable machine-readable reason for the latest rejected application launch.
     std::string app_launch_rejected_message;  ///< Safe operator-facing detail for the latest rejected application launch.
     session_display_endpoint_t display_endpoint;  ///< Active verified application display endpoint.
     std::string selection_reason;  ///< Stable reason for selecting Desktop capture or a Gamescope source.
+    owned_backend_e owned_backend {owned_backend_e::headless};  ///< Backend used by an owned Gamescope session.
+    std::string presentation_reason;  ///< Stable local-presentation selection or fallback reason.
     presentation_e presentation {presentation_e::remote_only};  ///< Desired remote/local presentation paths.
     bool local_presenter_active {false};  ///< Whether a local presenter has attached successfully.
     uint64_t local_presented_frames {0};  ///< Frames shown by the local presenter.

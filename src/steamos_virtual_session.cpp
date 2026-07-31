@@ -85,10 +85,19 @@ namespace steamos_virtual_session {
       uint64_t source_process_start_time {0};  ///< Verified Gamescope process start time.
       std::string steam_location {"unknown"};  ///< Steam singleton location relative to the selected Gamescope.
       bool migration_required {false};  ///< Whether Desktop Steam needs an explicitly confirmed migration.
+      steam_migration_state_e migration_state {steam_migration_state_e::not_needed};  ///< Latest Steam migration state.
+      stock_handoff_state_e stock_handoff_state {stock_handoff_state_e::inactive};  ///< Current stock Game Mode handoff state.
+      std::string stock_handoff_reason;  ///< Bounded reason for the latest handoff decision or failure.
+      uint64_t stock_handoff_generation {0};  ///< Monotonic handoff generation.
+      bool stock_handoff_lease_active {false};  ///< Whether this process owns the stock launcher lease.
+      std::filesystem::path stock_handoff_lease_path;  ///< Verified owner-only lease path.
       std::string app_launch_rejected_reason;  ///< Stable reason for the latest application launch rejection.
       std::string app_launch_rejected_message;  ///< Safe detail for the latest application launch rejection.
       session_display_endpoint_t display_endpoint;  ///< Verified endpoint for application launches.
       std::string selection_reason;  ///< Stable reason for the current Desktop or Gamescope capture choice.
+      owned_backend_e owned_backend {owned_backend_e::headless};  ///< Backend of the retained owned compositor.
+      std::uint64_t host_endpoint_generation {0};  ///< Outer KWin endpoint generation used by a nested compositor.
+      std::string presentation_reason;  ///< Stable local-presentation selection or fallback reason.
       presentation_e presentation {presentation_e::remote_only};  ///< Desired remote/local presentation paths.
       bool local_presenter_active {false};  ///< Whether a local presenter has attached successfully.
       std::atomic_uint64_t local_presented_frames {0};  ///< Frames displayed locally.
@@ -392,6 +401,168 @@ namespace steamos_virtual_session {
       }
       ::waitpid(process_group, nullptr, WNOHANG);
     }
+
+    /**
+     * @brief Run one fixed user-systemd operation with a bounded wait.
+     *
+     * @param operation Fixed `start` or `stop` operation.
+     * @param wait_for_completion Whether systemctl must wait for the unit job.
+     * @param timeout Maximum helper-process lifetime.
+     * @return True only when systemctl exits successfully before the deadline.
+     */
+    bool run_gamescope_session_systemctl(const char *operation, const bool wait_for_completion, const std::chrono::seconds timeout) {
+      const pid_t child {::fork()};
+      if (child < 0) {
+        return false;
+      }
+      if (child == 0) {
+        close_inherited_descriptors_for_exec(3, 65536);
+        if (wait_for_completion) {
+          ::execlp("systemctl", "systemctl", "--user", "--wait", operation, "gamescope-session.target", static_cast<char *>(nullptr));
+        } else {
+          ::execlp("systemctl", "systemctl", "--user", "--no-block", operation, "gamescope-session.target", static_cast<char *>(nullptr));
+        }
+        _exit(127);
+      }
+      const auto deadline {std::chrono::steady_clock::now() + timeout};
+      int status {};
+      while (std::chrono::steady_clock::now() < deadline) {
+        if (::waitpid(child, &status, WNOHANG) == child) {
+          return WIFEXITED(status) && WEXITSTATUS(status) == 0;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds {50});
+      }
+      ::kill(child, SIGTERM);
+      ::waitpid(child, &status, 0);
+      return false;
+    }
+
+    /**
+     * @brief Check whether a non-writeback physical connector is connected.
+     *
+     * @return True when a physical connector reports connected.
+     */
+    bool host_physical_output_connected();
+
+    /**
+     * @brief Check whether a verified stock Game Mode source is discoverable.
+     *
+     * @return True when a current stock producer is independently verified.
+     */
+    bool verified_game_mode_source_present();
+
+    /**
+     * @brief Atomically create the owner-bound stock-session handoff lease.
+     *
+     * @param generation Handoff generation stored for diagnostics.
+     * @param lease_path Receives the final validated lease path.
+     * @param error Receives a bounded failure reason.
+     * @return True after the complete lease is linked and synchronized.
+     */
+    bool acquire_stock_handoff_lease(const uint64_t generation, std::filesystem::path &lease_path, std::string &error) {
+      const auto *const runtime_value {std::getenv("XDG_RUNTIME_DIR")};
+      const std::filesystem::path runtime {runtime_value ? runtime_value : ""};
+      struct stat runtime_stat {};
+      if (runtime.empty() || ::lstat(runtime.c_str(), &runtime_stat) != 0 || !S_ISDIR(runtime_stat.st_mode) || runtime_stat.st_uid != ::getuid()) {
+        error = "runtime_unavailable";
+        return false;
+      }
+      const auto directory {runtime / "steamshine"};
+      std::error_code filesystem_error;
+      std::filesystem::create_directories(directory, filesystem_error);
+      struct stat directory_stat {};
+      if (filesystem_error || ::lstat(directory.c_str(), &directory_stat) != 0 || !S_ISDIR(directory_stat.st_mode) || directory_stat.st_uid != ::getuid()) {
+        error = "lease_directory_unavailable";
+        return false;
+      }
+      std::ifstream boot_file {"/proc/sys/kernel/random/boot_id"};
+      std::string boot_id;
+      std::getline(boot_file, boot_id);
+      const auto owner {gamescope_source::read_process_identity(::getpid())};
+      if (boot_id.empty() || !owner || owner->uid != static_cast<int>(::getuid()) || owner->start_time == 0) {
+        error = "owner_identity_unavailable";
+        return false;
+      }
+      lease_path = directory / "stock-session-handoff.lease";
+      const auto temporary {directory / (".stock-session-handoff." + std::to_string(::getpid()) + '.' + std::to_string(generation))};
+      const std::string contents {
+        "version=1\nboot_id=" + boot_id + "\nowner_pid=" + std::to_string(::getpid()) +
+        "\nowner_start_time=" + std::to_string(owner->start_time) + "\ngeneration=" + std::to_string(generation) + "\n"
+      };
+      const int descriptor {::open(temporary.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, 0600)};
+      if (descriptor < 0) {
+        error = "lease_temporary_create_failed";
+        return false;
+      }
+      size_t written {};
+      while (written < contents.size()) {
+        const auto count {::write(descriptor, contents.data() + written, contents.size() - written)};
+        if (count <= 0) {
+          break;
+        }
+        written += static_cast<size_t>(count);
+      }
+      const bool synchronized {written == contents.size() && ::fsync(descriptor) == 0};
+      ::close(descriptor);
+      if (!synchronized || ::link(temporary.c_str(), lease_path.c_str()) != 0) {
+        ::unlink(temporary.c_str());
+        error = "lease_publish_failed";
+        return false;
+      }
+      ::unlink(temporary.c_str());
+      const int directory_fd {::open(directory.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW)};
+      if (directory_fd >= 0) {
+        (void) ::fsync(directory_fd);
+        ::close(directory_fd);
+      }
+      return true;
+    }
+
+    /**
+     * @brief Release an owned lease and request crash-safe stock restoration.
+     */
+    void restore_stock_session_locked() {
+      if (!manager.stock_handoff_lease_active) {
+        return;
+      }
+      manager.stock_handoff_state = stock_handoff_state_e::restoring_stock;
+      const auto lease {manager.stock_handoff_lease_path};
+      struct stat lease_stat {};
+      if (!lease.empty() && ::lstat(lease.c_str(), &lease_stat) == 0 && S_ISREG(lease_stat.st_mode) && lease_stat.st_uid == ::getuid()) {
+        (void) ::unlink(lease.c_str());
+      }
+      manager.stock_handoff_lease_active = false;
+      manager.stock_handoff_lease_path.clear();
+      const bool requested {run_gamescope_session_systemctl("start", false, std::chrono::seconds {2})};
+      if (!requested) {
+        manager.stock_handoff_state = stock_handoff_state_e::failed;
+        manager.stock_handoff_reason = "stock_restore_request_failed";
+        BOOST_LOG(error) << "STOCK_HANDOFF_RESTORE generation=" << manager.stock_handoff_generation
+                         << " result=" << manager.stock_handoff_reason;
+        return;
+      }
+      if (!host_physical_output_connected()) {
+        manager.stock_handoff_state = stock_handoff_state_e::restoring_stock;
+        manager.stock_handoff_reason = "stock_restore_deferred_no_connector";
+        BOOST_LOG(info) << "STOCK_HANDOFF_RESTORE generation=" << manager.stock_handoff_generation
+                        << " result=" << manager.stock_handoff_reason;
+        return;
+      }
+      const auto deadline {std::chrono::steady_clock::now() + std::chrono::seconds {config::steamos_virtual_display.startup_timeout_seconds}};
+      while (!verified_game_mode_source_present() && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds {100});
+      }
+      const bool restored {verified_game_mode_source_present()};
+      manager.stock_handoff_state = restored ? stock_handoff_state_e::restored : stock_handoff_state_e::failed;
+      manager.stock_handoff_reason = restored ? "stock_restore_verified" : "stock_restore_verification_timeout";
+      if (restored) {
+        BOOST_LOG(info) << "STOCK_HANDOFF_RESTORE generation=" << manager.stock_handoff_generation
+                        << " result=" << manager.stock_handoff_reason;
+      } else {
+        BOOST_LOG(error) << "STOCK_HANDOFF_RESTORE generation=" << manager.stock_handoff_generation
+                         << " result=" << manager.stock_handoff_reason;
+      }
+    }
 #endif
 
     /**
@@ -430,6 +601,9 @@ namespace steamos_virtual_session {
         manager.steam_location = "unknown";
       }
       manager.presentation = presentation_e::remote_only;
+      manager.owned_backend = owned_backend_e::headless;
+      manager.host_endpoint_generation = 0;
+      manager.presentation_reason.clear();
       manager.local_presenter_active = false;
       manager.local_presented_frames.store(0, std::memory_order_relaxed);
       manager.local_dropped_frames.store(0, std::memory_order_relaxed);
@@ -458,6 +632,9 @@ namespace steamos_virtual_session {
       manager.encoder_gpu_selector.clear();
       manager.startup_encoder_preflight = false;
       manager.stream_requested = false;
+#if defined(__linux__)
+      restore_stock_session_locked();
+#endif
       manager.current = config::steamos_virtual_display.enabled ? state_e::Idle : state_e::Disabled;
     }
 
@@ -847,18 +1024,6 @@ namespace steamos_virtual_session {
 #else
       return false;
 #endif
-    }
-
-    /**
-     * @brief Decide whether the selected session may use a local mirror.
-     *
-     * @param origin Ownership origin selected for the session.
-     * @return Safe desired presentation paths.
-     */
-    presentation_e desired_presentation(const session_origin_e origin) {
-      host_desktop_endpoint::capture();
-      const auto endpoint {host_desktop_endpoint::current()};
-      return decide_presentation(config::steamos_virtual_display.local_presentation, origin, !endpoint.xdg_runtime_directory.empty() && !endpoint.wayland_display.empty(), host_physical_output_connected());
     }
 
     /**
@@ -1385,7 +1550,12 @@ namespace steamos_virtual_session {
     const bool prefer_physical_desktop
   ) {
     std::scoped_lock lock {manager.mutex};
+    if (!manager.stock_handoff_lease_active) {
+      manager.stock_handoff_state = stock_handoff_state_e::inactive;
+      manager.stock_handoff_reason.clear();
+    }
     manager.migration_required = false;
+    manager.migration_state = steam_migration_state_e::not_needed;
     manager.app_launch_rejected_reason.clear();
     manager.app_launch_rejected_message.clear();
     manager.steam_location = "unknown";
@@ -1397,6 +1567,24 @@ namespace steamos_virtual_session {
       physical_compositor_capture_available.load(std::memory_order_acquire)
     )};
     const bool verified_existing_gamescope {verified_game_mode_source_present()};
+    const bool live_kwin_available {host_desktop_endpoint::capture_live()};
+    const auto host_endpoint {host_desktop_endpoint::current()};
+    std::string hdr_presentation_error;
+    const bool hdr_presentation_available {
+      launch_session.enable_hdr && live_kwin_available && physical_output_connected &&
+      host_desktop_endpoint::supports_hdr_presentation(hdr_presentation_error)
+    };
+    const auto requested_backend {select_owned_backend(
+      config::steamos_virtual_display.local_presentation,
+      live_kwin_available,
+      physical_output_connected,
+      launch_session.enable_hdr,
+      hdr_presentation_available
+    )};
+    const auto requested_host_generation {
+      requested_backend == owned_backend_e::wayland_nested ? host_endpoint.generation : 0
+    };
+    const bool local_presentation_required {requested_backend == owned_backend_e::wayland_nested};
     const display_constraints_t display_constraints {
       .maximum_frame_pixels = static_cast<std::uint64_t>(config::steamos_virtual_display.maximum_frame_pixels),
       .maximum_pixel_rate = static_cast<std::uint64_t>(config::steamos_virtual_display.maximum_pixel_rate),
@@ -1473,6 +1661,9 @@ namespace steamos_virtual_session {
       .render_node = manager.render_node.empty() ? manager.pci_bdf : manager.render_node,
       .source_identity = manager.source_identity,
       .capture_pixel_format = manager.hdr ? "P010" : "NV12",
+      .backend = manager.owned_backend,
+      .host_endpoint_generation = manager.host_endpoint_generation,
+      .local_presentation_required = manager.presentation == presentation_e::remote_and_local,
     };
     const retained_session_key_t requested_key {
       .width = request.width,
@@ -1482,6 +1673,9 @@ namespace steamos_virtual_session {
       .render_node = requested_gpu_identity,
       .source_identity = config::steamos_virtual_display.gamescope_path,
       .capture_pixel_format = launch_session.enable_hdr ? "P010" : "NV12",
+      .backend = requested_backend.value_or(owned_backend_e::headless),
+      .host_endpoint_generation = requested_host_generation,
+      .local_presentation_required = local_presentation_required,
     };
     const bool retained_owned_session {
       retained_process_candidate &&
@@ -1492,7 +1686,7 @@ namespace steamos_virtual_session {
 #else
     const bool retained_owned_session {false};
 #endif
-    const auto decision {select_session_route({
+    auto decision {select_session_route({
       .feature_enabled = config::steamos_virtual_display.enabled,
       .mode = force_owned_fallback ? virtual_display_mode_e::force : config::steamos_virtual_display.mode,
       .source_policy = force_owned_fallback ? session_source_policy_e::owned_private : config::steamos_virtual_display.session_source,
@@ -1500,6 +1694,7 @@ namespace steamos_virtual_session {
       .prefer_physical_desktop = prefer_physical_desktop,
       .startup_preflight_owned_session = manager.startup_encoder_preflight && manager.origin == session_origin_e::owned_private,
       .capturable_output_present = capturable_output_present,
+      .live_kwin_available = live_kwin_available,
       .retained_owned_session = retained_owned_session,
       .host_supported = true,
       .verified_existing_gamescope_present = verified_existing_gamescope,
@@ -1514,6 +1709,10 @@ namespace steamos_virtual_session {
                     << " retained_owned_session=" << (retained_owned_session ? "true" : "false")
                     << " prefer_owned_session=" << (prefer_owned_session ? "true" : "false")
                     << " prefer_physical_desktop=" << (prefer_physical_desktop ? "true" : "false")
+                    << " requested_owned_backend=" << (requested_backend ? to_string(*requested_backend) : "unavailable")
+                    << " hdr_requested=" << (launch_session.enable_hdr ? "true" : "false")
+                    << " hdr_presentation_available=" << (hdr_presentation_available ? "true" : "false")
+                    << " hdr_presentation_error=\"" << hdr_presentation_error << '"'
                     << " startup_encoder_preflight=" << (manager.startup_encoder_preflight ? "true" : "false")
                     << " verified_existing_gamescope=" << (verified_existing_gamescope ? "true" : "false");
     if (decision.route == session_route_e::physical_desktop) {
@@ -1536,6 +1735,14 @@ namespace steamos_virtual_session {
       error = decision.reason == "existing_gamescope_unavailable" ?
                 "No unique verified existing Gamescope source is available" :
                 "The configured SteamOS Gamescope route is unavailable on this host";
+      manager.current = state_e::Failed;
+      return false;
+    }
+    if ((decision.route == session_route_e::retained_owned_private || decision.route == session_route_e::new_owned_private) && !requested_backend) {
+      manager.presentation_reason = launch_session.enable_hdr ? "nested_hdr_unverified" : "nested_wayland_unavailable";
+      error = launch_session.enable_hdr ?
+                "Local mirroring was required, but safe KWin HDR presentation could not be verified" :
+                "Local mirroring was required, but no verified KWin Wayland endpoint is available";
       manager.current = state_e::Failed;
       return false;
     }
@@ -1626,6 +1833,10 @@ namespace steamos_virtual_session {
       manager.current = state_e::Failed;
       return false;
     }
+    auto stock_handoff_failure_guard {util::fail_guard([]() {
+      restore_stock_session_locked();
+    })};
+    bool stock_handoff_completed {};
     if (decision.route == session_route_e::attached_existing) {
       std::string discovery_error;
       const auto discovery_timeout {std::min(std::chrono::milliseconds {500}, std::chrono::milliseconds {config::steamos_virtual_display.pipewire_node_timeout_milliseconds})};
@@ -1643,90 +1854,168 @@ namespace steamos_virtual_session {
           .gamescope_pid = selected->producer_pid,
           .cgroup = steam_session::cgroup_for_process(selected->producer_pid),
         };
-        std::optional<steam_session::resident_environment_t> resident_environment;
-        session_display_endpoint_t display_endpoint;
-        const uint64_t display_generation {next_display_generation.fetch_add(1, std::memory_order_relaxed)};
-        const auto resident_deadline {std::chrono::steady_clock::now() + std::chrono::seconds {config::steamos_virtual_display.startup_timeout_seconds}};
-        do {
-          resident_environment = steam_session::verified_resident_environment(target);
-          if (resident_environment) {
-            display_endpoint = attached_display_endpoint(*resident_environment, selected->producer_pid, selected->producer_start_time, display_generation, pipewire_runtime->string(), pipewire_remote);
-            if (display_endpoint.verification == display_verification_e::verified) {
-              break;
-            }
+        if (config::steamos_virtual_display.stock_session_handoff == stock_handoff_policy_e::auto_idle && prefer_owned_session && !manager.startup_encoder_preflight) {
+          manager.stock_handoff_state = stock_handoff_state_e::assessing;
+          auto candidate {steam_session::inspect_idle_stock_session(target)};
+          auto confirmed {candidate};
+          if (candidate.result == steam_session::migration_idle_result_e::idle) {
+            std::this_thread::sleep_for(std::chrono::milliseconds {200});
+            confirmed = steam_session::inspect_idle_stock_session(target);
           }
-          std::this_thread::sleep_for(std::chrono::milliseconds {50});
-        } while (std::chrono::steady_clock::now() < resident_deadline);
-        if (!resident_environment) {
-          manager.app_launch_rejected_reason = "resident_steam_environment_unavailable";
-          manager.app_launch_rejected_message = "A verified resident Steam environment is required for the selected Game Mode session";
-          error = manager.app_launch_rejected_message;
-          manager.current = state_e::Failed;
-          return false;
+          const bool stable_idle {
+            candidate.result == steam_session::migration_idle_result_e::idle &&
+            confirmed.result == steam_session::migration_idle_result_e::idle &&
+            candidate.steam_pid == confirmed.steam_pid &&
+            candidate.steam_start_time == confirmed.steam_start_time &&
+            gamescope_source::source_identity_is_current(*selected)
+          };
+          const auto activity {
+            stable_idle                                                                                                                                          ? stock_activity_e::idle :
+            (candidate.result == steam_session::migration_idle_result_e::active_game || confirmed.result == steam_session::migration_idle_result_e::active_game) ? stock_activity_e::active_game :
+                                                                                                                                                                   stock_activity_e::unknown
+          };
+          const auto action {select_stock_handoff_action(config::steamos_virtual_display.stock_session_handoff, prefer_owned_session, manager.startup_encoder_preflight, activity)};
+          if (action == stock_handoff_action_e::attach) {
+            manager.stock_handoff_state = activity == stock_activity_e::active_game ? stock_handoff_state_e::attached_active_game : stock_handoff_state_e::attached_unknown;
+            manager.stock_handoff_reason = activity == stock_activity_e::active_game ? "stock_game_active" : "stock_activity_unverified";
+            BOOST_LOG(info) << "STOCK_HANDOFF_DECISION action=attach reason=" << manager.stock_handoff_reason
+                            << " stock_pid=" << selected->producer_pid << " stock_start_time=" << selected->producer_start_time;
+          } else {
+            ++manager.stock_handoff_generation;
+            std::string lease_error;
+            if (!acquire_stock_handoff_lease(manager.stock_handoff_generation, manager.stock_handoff_lease_path, lease_error)) {
+              manager.stock_handoff_state = stock_handoff_state_e::failed;
+              manager.stock_handoff_reason = lease_error;
+              error = "Failed to acquire the stock Game Mode handoff lease";
+              manager.current = state_e::Failed;
+              return false;
+            }
+            manager.stock_handoff_lease_active = true;
+            manager.stock_handoff_state = stock_handoff_state_e::lease_acquired;
+            manager.stock_handoff_reason = "verified_idle_stock";
+            BOOST_LOG(info) << "STOCK_HANDOFF_LEASE_ACQUIRED generation=" << manager.stock_handoff_generation
+                            << " stock_pid=" << selected->producer_pid << " stock_start_time=" << selected->producer_start_time
+                            << " steam_pid=" << candidate.steam_pid << " steam_start_time=" << candidate.steam_start_time;
+            manager.stock_handoff_state = stock_handoff_state_e::stopping_stock;
+            const bool stop_requested {run_gamescope_session_systemctl("stop", true, std::chrono::seconds {config::steamos_virtual_display.startup_timeout_seconds})};
+            const auto stop_deadline {std::chrono::steady_clock::now() + std::chrono::seconds {config::steamos_virtual_display.shutdown_timeout_seconds}};
+            while (gamescope_source::source_identity_is_current(*selected) && std::chrono::steady_clock::now() < stop_deadline) {
+              std::this_thread::sleep_for(std::chrono::milliseconds {50});
+            }
+            if (!stop_requested || gamescope_source::source_identity_is_current(*selected)) {
+              manager.stock_handoff_state = stock_handoff_state_e::failed;
+              manager.stock_handoff_reason = stop_requested ? "stock_identity_remained" : "stock_stop_failed";
+              error = "Stock Game Mode did not stop safely for handoff";
+              restore_stock_session_locked();
+              manager.current = state_e::Failed;
+              return false;
+            }
+            manager.stock_handoff_state = stock_handoff_state_e::stock_stopped;
+            manager.stock_handoff_reason = "verified_idle_stock_stopped";
+            decision = {session_route_e::new_owned_private, "stock_idle_handoff"};
+            manager.selection_reason = decision.reason;
+            stock_handoff_completed = true;
+            BOOST_LOG(info) << "STOCK_HANDOFF_STOPPED generation=" << manager.stock_handoff_generation
+                            << " stock_pid=" << selected->producer_pid << " next_route=new_owned_private";
+          }
         }
-        if (display_endpoint.verification != display_verification_e::verified) {
+        if (!stock_handoff_completed) {
+          std::optional<steam_session::resident_environment_t> resident_environment;
+          session_display_endpoint_t display_endpoint;
+          const uint64_t display_generation {next_display_generation.fetch_add(1, std::memory_order_relaxed)};
+          const auto resident_deadline {std::chrono::steady_clock::now() + std::chrono::seconds {config::steamos_virtual_display.startup_timeout_seconds}};
+          do {
+            resident_environment = steam_session::verified_resident_environment(target);
+            if (resident_environment) {
+              display_endpoint = attached_display_endpoint(*resident_environment, selected->producer_pid, selected->producer_start_time, display_generation, pipewire_runtime->string(), pipewire_remote);
+              if (display_endpoint.verification == display_verification_e::verified) {
+                break;
+              }
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds {50});
+          } while (std::chrono::steady_clock::now() < resident_deadline);
+          if (!resident_environment) {
+            manager.app_launch_rejected_reason = "resident_steam_environment_unavailable";
+            manager.app_launch_rejected_message = "A verified resident Steam environment is required for the selected Game Mode session";
+            error = manager.app_launch_rejected_message;
+            manager.current = state_e::Failed;
+            return false;
+          }
+          if (display_endpoint.verification != display_verification_e::verified) {
+            manager.display_endpoint = display_endpoint;
+            manager.app_launch_rejected_reason = display_endpoint.error;
+            manager.app_launch_rejected_message = "The resident Steam Xwayland endpoint failed identity validation";
+            error = manager.app_launch_rejected_message + " (" + display_endpoint.error + ')';
+            manager.current = state_e::Failed;
+            return false;
+          }
+          manager.selection_reason = "verified_existing_gamescope";
+          manager.origin = session_origin_e::attached_existing;
+          manager.process_owned = false;
+          manager.runtime_owned = false;
+          manager.runtime_directory.clear();
+          manager.pipewire_runtime = pipewire_runtime->string();
+          manager.pipewire_remote = pipewire_remote;
+          manager.pipewire_node_id = selected->node_id;
+          manager.pipewire_object_serial = selected->object_serial;
+          manager.pipewire_producer_pid = selected->producer_pid;
+          manager.pulse_runtime = (*pipewire_runtime / "pulse").string();
+          record_geometry();
+          manager.hdr = launch_session.enable_hdr;
+          manager.pci_bdf = gpu->pci_bdf;
+          manager.render_node = gpu->render_node;
+          manager.game_gpu_selector = config::steamos_virtual_display.game_gpu;
+          manager.capture_gpu_selector = config::steamos_virtual_display.capture_gpu;
+          manager.encoder_gpu_selector = config::steamos_virtual_display.encoder_gpu;
+          manager.source_description = selected->node_description.empty() ? selected->application_name : selected->node_description;
+          manager.source_executable = selected->executable;
+          manager.source_identity = selected->executable;
+          manager.source_process_start_time = selected->producer_start_time;
           manager.display_endpoint = display_endpoint;
-          manager.app_launch_rejected_reason = display_endpoint.error;
-          manager.app_launch_rejected_message = "The resident Steam Xwayland endpoint failed identity validation";
-          error = manager.app_launch_rejected_message + " (" + display_endpoint.error + ')';
+          manager.owned_backend = owned_backend_e::headless;
+          manager.host_endpoint_generation = 0;
+          manager.presentation = physical_output_connected ? presentation_e::remote_and_local : presentation_e::remote_only;
+          manager.presentation_reason = physical_output_connected ? "stock_gamescope_physical_output" : "stock_gamescope_remote_only";
+          manager.local_presenter_active = physical_output_connected;
+          manager.steam_location = std::string {steam_session::to_string(steam_session::classify_current_user_instance({
+            .gamescope_pid = selected->producer_pid,
+            .cgroup = steam_session::cgroup_for_process(selected->producer_pid),
+          }))};
+          manager.packet_tracking.store(false, std::memory_order_release);
+          manager.encoded_packets.store(0, std::memory_order_relaxed);
+          manager.encoded_bytes.store(0, std::memory_order_relaxed);
+          manager.idr_packets.store(0, std::memory_order_relaxed);
+          manager.captured_frames.store(0, std::memory_order_relaxed);
+  #if defined(__linux__)
+          manager.process_group = selected->producer_pid;
+  #endif
+          manager.current = state_e::WaitingForCapture;
+          BOOST_LOG(info) << "SESSION_DISPLAY_ENDPOINT_READY origin=attached_existing display=" << manager.display_endpoint.x11_display << " wayland=" << manager.display_endpoint.wayland_display << " generation=" << display_generation << " pid=" << selected->producer_pid;
+          BOOST_LOG(info) << "GAMESCOPE_SOURCE_ATTACHED origin=attached_existing pid=" << selected->producer_pid << " start_time=" << selected->producer_start_time << " node_id=" << selected->node_id << " object_serial=" << selected->object_serial << " render_node=" << selected->render_node << " steam_location=" << manager.steam_location;
+          return true;
+        }
+      }
+      if (!stock_handoff_completed) {
+        BOOST_LOG(info) << "GAMESCOPE_SOURCE_UNAVAILABLE policy=" << to_string(config::steamos_virtual_display.session_source) << " reason=" << (discovery_error.empty() ? "selection_failed" : discovery_error);
+        if (selected.error() == gamescope_source::source_error_e::ambiguous) {
+          error = "Multiple verified existing Gamescope sources are available; select one explicit PID";
           manager.current = state_e::Failed;
           return false;
         }
-        manager.selection_reason = "verified_existing_gamescope";
-        manager.origin = session_origin_e::attached_existing;
-        manager.process_owned = false;
-        manager.runtime_owned = false;
-        manager.runtime_directory.clear();
-        manager.pipewire_runtime = pipewire_runtime->string();
-        manager.pipewire_remote = pipewire_remote;
-        manager.pipewire_node_id = selected->node_id;
-        manager.pipewire_object_serial = selected->object_serial;
-        manager.pipewire_producer_pid = selected->producer_pid;
-        manager.pulse_runtime = (*pipewire_runtime / "pulse").string();
-        record_geometry();
-        manager.hdr = launch_session.enable_hdr;
-        manager.pci_bdf = gpu->pci_bdf;
-        manager.render_node = gpu->render_node;
-        manager.game_gpu_selector = config::steamos_virtual_display.game_gpu;
-        manager.capture_gpu_selector = config::steamos_virtual_display.capture_gpu;
-        manager.encoder_gpu_selector = config::steamos_virtual_display.encoder_gpu;
-        manager.source_description = selected->node_description.empty() ? selected->application_name : selected->node_description;
-        manager.source_executable = selected->executable;
-        manager.source_identity = selected->executable;
-        manager.source_process_start_time = selected->producer_start_time;
-        manager.display_endpoint = display_endpoint;
-        manager.presentation = desired_presentation(manager.origin);
-        manager.steam_location = std::string {steam_session::to_string(steam_session::classify_current_user_instance({
-          .gamescope_pid = selected->producer_pid,
-          .cgroup = steam_session::cgroup_for_process(selected->producer_pid),
-        }))};
-        manager.packet_tracking.store(false, std::memory_order_release);
-        manager.encoded_packets.store(0, std::memory_order_relaxed);
-        manager.encoded_bytes.store(0, std::memory_order_relaxed);
-        manager.idr_packets.store(0, std::memory_order_relaxed);
-        manager.captured_frames.store(0, std::memory_order_relaxed);
-  #if defined(__linux__)
-        manager.process_group = selected->producer_pid;
-  #endif
-        manager.current = state_e::WaitingForCapture;
-        BOOST_LOG(info) << "SESSION_DISPLAY_ENDPOINT_READY origin=attached_existing display=" << manager.display_endpoint.x11_display << " wayland=" << manager.display_endpoint.wayland_display << " generation=" << display_generation << " pid=" << selected->producer_pid;
-        BOOST_LOG(info) << "GAMESCOPE_SOURCE_ATTACHED origin=attached_existing pid=" << selected->producer_pid << " start_time=" << selected->producer_start_time << " node_id=" << selected->node_id << " object_serial=" << selected->object_serial << " render_node=" << selected->render_node << " steam_location=" << manager.steam_location;
-        return true;
-      }
-      BOOST_LOG(info) << "GAMESCOPE_SOURCE_UNAVAILABLE policy=" << to_string(config::steamos_virtual_display.session_source) << " reason=" << (discovery_error.empty() ? "selection_failed" : discovery_error);
-      if (selected.error() == gamescope_source::source_error_e::ambiguous) {
-        error = "Multiple verified existing Gamescope sources are available; select one explicit PID";
+        if (selected.error() == gamescope_source::source_error_e::explicit_pid_invalid) {
+          error = "The configured existing Gamescope PID is unavailable or failed identity validation";
+          manager.current = state_e::Failed;
+          return false;
+        }
+        error = verified_existing_gamescope ?
+                  "A verified Game Mode Gamescope exists but no unique same-GPU capture source is available" :
+                  "No unique verified existing Gamescope source is available";
         manager.current = state_e::Failed;
         return false;
       }
-      if (selected.error() == gamescope_source::source_error_e::explicit_pid_invalid) {
-        error = "The configured existing Gamescope PID is unavailable or failed identity validation";
-        manager.current = state_e::Failed;
-        return false;
-      }
-      error = verified_existing_gamescope ?
-                "A verified Game Mode Gamescope exists but no unique same-GPU capture source is available" :
-                "No unique verified existing Gamescope source is available";
+    }
+    if (stock_handoff_completed && (base.empty() || !path_is_within_runtime_root(base, runtime_root))) {
+      error = "The handed-off Gamescope runtime must remain inside XDG_RUNTIME_DIR";
       manager.current = state_e::Failed;
       return false;
     }
@@ -1740,18 +2029,37 @@ namespace steamos_virtual_session {
       manager.current = state_e::Failed;
       return false;
     }
-    const auto arguments {gamescope_arguments(help_text, request.width, request.height, request.fps, launch_session.enable_hdr, gpu->gamescope_device, error)};
+    auto launch_backend {*requested_backend};
+    auto launch_host_generation {requested_host_generation};
+    auto arguments {gamescope_arguments(help_text, request.width, request.height, request.fps, launch_session.enable_hdr, gpu->gamescope_device, error, launch_backend)};
+    bool nested_backend_fallback {};
+    if (arguments.empty() && launch_backend == owned_backend_e::wayland_nested && config::steamos_virtual_display.local_presentation == local_presentation_policy_e::auto_select) {
+      error.clear();
+      launch_backend = owned_backend_e::headless;
+      launch_host_generation = 0;
+      arguments = gamescope_arguments(help_text, request.width, request.height, request.fps, launch_session.enable_hdr, gpu->gamescope_device, error, launch_backend);
+      nested_backend_fallback = !arguments.empty();
+    }
     if (arguments.empty()) {
       manager.current = state_e::Failed;
       return false;
     }
     manager.runtime_directory = base / ("session-" + std::to_string(::getpid()) + "-" + std::to_string(launch_session.id));
-    manager.selection_reason = force_owned_fallback ? "physical_mode_virtual_fallback" : "new_owned_private";
+    manager.selection_reason = manager.stock_handoff_lease_active ? "stock_idle_handoff" :
+                               force_owned_fallback               ? "physical_mode_virtual_fallback" :
+                                                                    "new_owned_private";
     manager.origin = session_origin_e::owned_private;
     manager.process_owned = true;
     manager.runtime_owned = true;
-    manager.presentation = desired_presentation(manager.origin);
-    manager.source_description = "SteamShine-owned private Gamescope";
+    manager.owned_backend = launch_backend;
+    manager.host_endpoint_generation = launch_host_generation;
+    manager.presentation = launch_backend == owned_backend_e::wayland_nested ? presentation_e::remote_and_local : presentation_e::remote_only;
+    manager.presentation_reason = launch_backend == owned_backend_e::wayland_nested ? "verified_kwin_nested" :
+                                  nested_backend_fallback                           ? "nested_gamescope_unsupported_remote_only" :
+                                  launch_session.enable_hdr && live_kwin_available  ? "nested_hdr_unverified_remote_only" :
+                                                                                      "remote_only_headless";
+    manager.local_presenter_active = launch_backend == owned_backend_e::wayland_nested;
+    manager.source_description = launch_backend == owned_backend_e::wayland_nested ? "SteamShine-owned nested Gamescope" : "SteamShine-owned private Gamescope";
     manager.source_executable = config::steamos_virtual_display.gamescope_path;
     manager.source_identity = config::steamos_virtual_display.gamescope_path;
     manager.source_process_start_time = 0;
@@ -1845,11 +2153,12 @@ namespace steamos_virtual_session {
       ::setenv("PIPEWIRE_REMOTE", pipewire_remote.c_str(), 1);
       ::setenv("PULSE_RUNTIME_PATH", manager.pulse_runtime.c_str(), 1);
       ::setenv("XAUTHORITY", xauthority_value.c_str(), 1);
-      // A headless Gamescope owns its Wayland server.  Inheriting the desktop
-      // display name makes Gamescope try to connect to a non-existent parent
-      // socket below this private runtime directory before it starts that
-      // server.
-      ::unsetenv("WAYLAND_DISPLAY");
+      if (manager.owned_backend == owned_backend_e::wayland_nested) {
+        const auto outer_wayland_socket {(std::filesystem::path {host_endpoint.xdg_runtime_directory} / host_endpoint.wayland_display).string()};
+        ::setenv("WAYLAND_DISPLAY", outer_wayland_socket.c_str(), 1);
+      } else {
+        ::unsetenv("WAYLAND_DISPLAY");
+      }
       ::unsetenv("DISPLAY");
       // Gamescope owns the nested Wayland session. Do not inherit the desktop
       // session type because it can make a headless compositor select a host
@@ -1924,8 +2233,13 @@ namespace steamos_virtual_session {
         manager.display_endpoint = read_owned_display_endpoint(manager.runtime_directory, child, manager.source_process_start_time, display_generation, manager.pipewire_runtime, manager.pipewire_remote, manager.pulse_runtime);
         if (manager.display_endpoint.verification == display_verification_e::verified) {
           manager.current = state_e::WaitingForCapture;
+          if (manager.stock_handoff_lease_active) {
+            manager.stock_handoff_state = stock_handoff_state_e::owned_active;
+            manager.stock_handoff_reason = "owned_headless_ready";
+          }
           BOOST_LOG(info) << "SESSION_DISPLAY_ENDPOINT_READY origin=owned_private display=" << manager.display_endpoint.x11_display << " wayland=" << manager.display_endpoint.wayland_display << " generation=" << display_generation << " pid=" << child;
           BOOST_LOG(info) << "SteamOS virtual display socket ready: " << request.width << 'x' << request.height << '@' << request.fps << " on AMD PCI " << manager.pci_bdf << " (" << manager.render_node << ')';
+          stock_handoff_failure_guard.disable();
           return true;
         }
       }
@@ -1941,6 +2255,7 @@ namespace steamos_virtual_session {
     stop_owned_process_group(manager.process_group, std::chrono::seconds {config::steamos_virtual_display.shutdown_timeout_seconds});
     std::filesystem::remove_all(manager.runtime_directory, ec);
     manager.process_group = -1;
+    restore_stock_session_locked();
     return false;
 #endif
   }
@@ -1981,6 +2296,7 @@ namespace steamos_virtual_session {
       .prefer_physical_desktop = false,
       .startup_preflight_owned_session = false,
       .capturable_output_present = capturable_output_present,
+      .live_kwin_available = false,
       .retained_owned_session = active_origin == session_origin_e::owned_private,
       .host_supported = true,
       .verified_existing_gamescope_present = active_origin == session_origin_e::attached_existing,
@@ -2034,10 +2350,16 @@ namespace steamos_virtual_session {
     snapshot.source_process_start_time = manager.source_process_start_time;
     snapshot.steam_location = manager.steam_location;
     snapshot.migration_required = manager.migration_required;
+    snapshot.migration_state = manager.migration_state;
+    snapshot.stock_handoff_state = manager.stock_handoff_state;
+    snapshot.stock_handoff_reason = manager.stock_handoff_reason;
+    snapshot.stock_handoff_generation = manager.stock_handoff_generation;
     snapshot.app_launch_rejected_reason = manager.app_launch_rejected_reason;
     snapshot.app_launch_rejected_message = manager.app_launch_rejected_message;
     snapshot.display_endpoint = manager.display_endpoint;
     snapshot.selection_reason = manager.selection_reason;
+    snapshot.owned_backend = manager.owned_backend;
+    snapshot.presentation_reason = manager.presentation_reason;
     snapshot.presentation = manager.presentation;
     snapshot.local_presenter_active = manager.local_presenter_active;
     snapshot.local_presented_frames = manager.local_presented_frames.load(std::memory_order_relaxed);
@@ -2269,12 +2591,112 @@ namespace steamos_virtual_session {
       manager.steam_location = std::string {steam_session::to_string(location)};
     }
     if (location == steam_session::instance_location_e::outside_target_gamescope) {
+      bool migration_allowed {};
+      {
+        std::scoped_lock lock {manager.mutex};
+        migration_allowed = steam_migration_allowed(
+          config::steamos_virtual_display.steam_migration,
+          steam_session::command_opens_big_picture(command),
+          manager.origin,
+          manager.owned_backend
+        );
+        if (migration_allowed) {
+          manager.migration_state = steam_migration_state_e::checking_idle;
+        }
+      }
+#if defined(__linux__)
+      if (migration_allowed) {
+        const auto desktop {host_desktop_endpoint::current()};
+        const auto candidate {steam_session::inspect_idle_desktop_migration(desktop.xdg_runtime_directory, desktop.wayland_display)};
+        if (candidate.result == steam_session::migration_idle_result_e::active_game) {
+          std::scoped_lock lock {manager.mutex};
+          manager.migration_state = steam_migration_state_e::blocked_active_game;
+          manager.app_launch_rejected_reason = "steam_migration_active_game";
+          manager.app_launch_rejected_message = "Steam has an active game scope; the Desktop Steam instance was left running";
+          error_message = manager.app_launch_rejected_message;
+          return false;
+        }
+        const auto original_identity {gamescope_source::read_process_identity(candidate.steam_pid)};
+        if (candidate.result != steam_session::migration_idle_result_e::idle || !original_identity || original_identity->start_time != candidate.steam_start_time) {
+          std::scoped_lock lock {manager.mutex};
+          manager.migration_state = steam_migration_state_e::blocked_unknown;
+          manager.app_launch_rejected_reason = "steam_migration_unverified";
+          manager.app_launch_rejected_message = "Desktop Steam identity or idle state could not be verified; it was left running";
+          error_message = manager.app_launch_rejected_message;
+          return false;
+        }
+        {
+          std::scoped_lock lock {manager.mutex};
+          manager.migration_state = steam_migration_state_e::shutting_down;
+        }
+        const pid_t shutdown_child {::fork()};
+        if (shutdown_child == 0) {
+          const auto set_or_unset = [](const char *name, const std::string &value) {
+            if (value.empty()) {
+              ::unsetenv(name);
+            } else {
+              ::setenv(name, value.c_str(), 1);
+            }
+          };
+          set_or_unset("XDG_RUNTIME_DIR", candidate.environment.xdg_runtime_directory);
+          set_or_unset("WAYLAND_DISPLAY", candidate.environment.wayland_display);
+          set_or_unset("DISPLAY", candidate.environment.x11_display);
+          set_or_unset("XAUTHORITY", candidate.environment.xauthority);
+          set_or_unset("DBUS_SESSION_BUS_ADDRESS", candidate.environment.dbus_session_bus_address);
+          set_or_unset("XDG_SESSION_TYPE", candidate.environment.xdg_session_type);
+          set_or_unset("XDG_CURRENT_DESKTOP", candidate.environment.xdg_current_desktop);
+          ::execl(candidate.executable_path.c_str(), candidate.executable_path.c_str(), "-shutdown", static_cast<char *>(nullptr));
+          _exit(127);
+        }
+        if (shutdown_child > 0) {
+          const auto deadline {std::chrono::steady_clock::now() + std::chrono::seconds {config::steamos_virtual_display.shutdown_timeout_seconds}};
+          while (std::chrono::steady_clock::now() < deadline) {
+            int child_status {};
+            (void) ::waitpid(shutdown_child, &child_status, WNOHANG);
+            const auto current_identity {gamescope_source::read_process_identity(candidate.steam_pid)};
+            const auto observation {classify_steam_shutdown_observation(
+              candidate.steam_start_time,
+              current_identity ? std::optional<std::uint64_t> {current_identity->start_time} : std::nullopt,
+              false
+            )};
+            if (observation == steam_migration_state_e::migrated) {
+              std::scoped_lock lock {manager.mutex};
+              manager.migration_required = false;
+              manager.migration_state = steam_migration_state_e::migrated;
+              manager.steam_location = "absent";
+              manager.app_launch_rejected_reason.clear();
+              manager.app_launch_rejected_message.clear();
+              return true;
+            }
+            if (observation == steam_migration_state_e::blocked_unknown) {
+              std::scoped_lock lock {manager.mutex};
+              manager.migration_state = steam_migration_state_e::blocked_unknown;
+              manager.app_launch_rejected_reason = "steam_migration_pid_reused";
+              manager.app_launch_rejected_message = "Steam PID identity changed while waiting for graceful shutdown";
+              error_message = manager.app_launch_rejected_message;
+              return false;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds {50});
+          }
+        }
+        {
+          std::scoped_lock lock {manager.mutex};
+          manager.migration_state = steam_migration_state_e::shutdown_timeout;
+          manager.app_launch_rejected_reason = shutdown_child < 0 ? "steam_migration_shutdown_failed" : "steam_migration_shutdown_timeout";
+          manager.app_launch_rejected_message = shutdown_child < 0 ? "Failed to request graceful Steam shutdown" : "Steam did not exit before the migration timeout";
+          error_message = manager.app_launch_rejected_message;
+          recover_failed_session_locked();
+        }
+        return false;
+      }
+#endif
       error_message = "Steam is already running outside the SteamShine Gamescope session; stop or migrate it before launching Steam here";
       bool migration_required {};
       {
         std::scoped_lock lock {manager.mutex};
         migration_required = manager.origin == session_origin_e::owned_private;
         manager.migration_required = migration_required;
+        manager.migration_state = steam_migration_state_e::blocked_unknown;
         manager.app_launch_rejected_reason = "steam_outside_target_gamescope";
         manager.app_launch_rejected_message = error_message;
       }
@@ -2288,6 +2710,7 @@ namespace steamos_virtual_session {
       {
         std::scoped_lock lock {manager.mutex};
         manager.migration_required = false;
+        manager.migration_state = steam_migration_state_e::blocked_unknown;
         manager.app_launch_rejected_reason = "steam_placement_unverified";
         manager.app_launch_rejected_message = error_message;
       }

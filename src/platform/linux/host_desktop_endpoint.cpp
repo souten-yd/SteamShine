@@ -305,6 +305,71 @@ namespace host_desktop_endpoint {
 #endif
   }
 
+  bool supports_hdr_presentation(std::string &error) {
+#if defined(SUNSHINE_BUILD_WAYLAND)
+    const auto host {current()};
+    std::string socket_path;
+    if (!host_socket_path(host, socket_path, error)) {
+      return false;
+    }
+    const int fd {::socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0)};
+    if (fd < 0) {
+      error = "Failed to create a host Wayland socket";
+      return false;
+    }
+    sockaddr_un address {};
+    address.sun_family = AF_UNIX;
+    std::strncpy(address.sun_path, socket_path.c_str(), sizeof(address.sun_path) - 1);
+    if (::connect(fd, reinterpret_cast<const sockaddr *>(&address), sizeof(address)) != 0) {
+      ::close(fd);
+      error = "Failed to connect to the captured host Wayland socket";
+      return false;
+    }
+    wl_display *const display {wl_display_connect_to_fd(fd)};
+    if (!display) {
+      ::close(fd);
+      error = "Failed to create a host Wayland client connection";
+      return false;
+    }
+
+    struct registry_state_t {
+      bool compositor {};  ///< Whether the host exposes `wl_compositor`.
+      bool xdg_shell {};  ///< Whether the host exposes `xdg_wm_base`.
+      bool color_management {};  ///< Whether the host exposes a Gamescope-compatible color protocol.
+    } state;
+
+    const wl_registry_listener listener {
+      .global = [](void *data, wl_registry *, uint32_t, const char *interface, uint32_t) {
+        auto &registry_state {*static_cast<registry_state_t *>(data)};
+        registry_state.compositor = registry_state.compositor || std::strcmp(interface, wl_compositor_interface.name) == 0;
+        registry_state.xdg_shell = registry_state.xdg_shell || std::strcmp(interface, xdg_wm_base_interface.name) == 0;
+        registry_state.color_management = registry_state.color_management ||
+                                          std::strcmp(interface, "wp_color_manager_v1") == 0 ||
+                                          std::strcmp(interface, "frog_color_management_factory_v1") == 0;
+      },
+      .global_remove = [](void *, wl_registry *, uint32_t) {
+      },
+    };
+    wl_registry *const registry {wl_display_get_registry(display)};
+    wl_registry_add_listener(registry, &listener, &state);
+    const int roundtrip_result {wl_display_roundtrip(display)};
+    wl_registry_destroy(registry);
+    wl_display_disconnect(display);
+    if (roundtrip_result < 0 || !state.compositor || !state.xdg_shell) {
+      error = "Captured host Wayland compositor lacks wl_compositor or xdg_wm_base";
+      return false;
+    }
+    if (!state.color_management) {
+      error = "Captured host Wayland compositor lacks a compatible color-management protocol";
+      return false;
+    }
+    return true;
+#else
+    error = "Wayland support is not compiled into this build";
+    return false;
+#endif
+  }
+
   /**
    * @brief Private host Wayland presentation objects.
    */

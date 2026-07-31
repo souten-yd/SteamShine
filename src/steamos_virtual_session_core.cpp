@@ -166,6 +166,161 @@ namespace steamos_virtual_session {
     return "remote_only";
   }
 
+  std::string_view to_string(const owned_backend_e backend) {
+    switch (backend) {
+      case owned_backend_e::headless:
+        return "headless";
+      case owned_backend_e::wayland_nested:
+        return "wayland_nested";
+    }
+    return "headless";
+  }
+
+  std::optional<owned_backend_e> select_owned_backend(
+    const local_presentation_policy_e policy,
+    const bool live_kwin_available,
+    const bool physical_output_connected,
+    const bool hdr_requested,
+    const bool hdr_presentation_available
+  ) {
+    if (policy == local_presentation_policy_e::off) {
+      return owned_backend_e::headless;
+    }
+    const bool nested_available {
+      live_kwin_available && physical_output_connected && (!hdr_requested || hdr_presentation_available)
+    };
+    if (nested_available) {
+      return owned_backend_e::wayland_nested;
+    }
+    if (policy == local_presentation_policy_e::mirror) {
+      return std::nullopt;
+    }
+    return owned_backend_e::headless;
+  }
+
+  std::optional<steam_migration_policy_e> parse_steam_migration_policy(const std::string_view value) {
+    if (value == "reject") {
+      return steam_migration_policy_e::reject;
+    }
+    if (value == "auto_idle") {
+      return steam_migration_policy_e::auto_idle;
+    }
+    return std::nullopt;
+  }
+
+  std::string_view to_string(const steam_migration_policy_e policy) {
+    switch (policy) {
+      case steam_migration_policy_e::reject:
+        return "reject";
+      case steam_migration_policy_e::auto_idle:
+        return "auto_idle";
+    }
+    return "auto_idle";
+  }
+
+  bool steam_migration_allowed(
+    const steam_migration_policy_e policy,
+    const bool opens_big_picture,
+    const session_origin_e origin,
+    const owned_backend_e backend
+  ) {
+    return policy == steam_migration_policy_e::auto_idle && opens_big_picture && origin == session_origin_e::owned_private &&
+           (backend == owned_backend_e::headless || backend == owned_backend_e::wayland_nested);
+  }
+
+  std::optional<stock_handoff_policy_e> parse_stock_handoff_policy(const std::string_view value) {
+    if (value == "attach") {
+      return stock_handoff_policy_e::attach;
+    }
+    if (value == "auto_idle") {
+      return stock_handoff_policy_e::auto_idle;
+    }
+    return std::nullopt;
+  }
+
+  std::string_view to_string(const stock_handoff_policy_e policy) {
+    switch (policy) {
+      case stock_handoff_policy_e::attach:
+        return "attach";
+      case stock_handoff_policy_e::auto_idle:
+        return "auto_idle";
+    }
+    return "attach";
+  }
+
+  stock_handoff_action_e select_stock_handoff_action(
+    const stock_handoff_policy_e policy,
+    const bool prefer_owned_session,
+    const bool startup_encoder_preflight,
+    const stock_activity_e activity
+  ) {
+    return policy == stock_handoff_policy_e::auto_idle && prefer_owned_session && !startup_encoder_preflight && activity == stock_activity_e::idle ?
+             stock_handoff_action_e::handoff_owned :
+             stock_handoff_action_e::attach;
+  }
+
+  std::string_view to_string(const stock_handoff_state_e state) {
+    switch (state) {
+      case stock_handoff_state_e::inactive:
+        return "inactive";
+      case stock_handoff_state_e::assessing:
+        return "assessing";
+      case stock_handoff_state_e::attached_active_game:
+        return "attached_active_game";
+      case stock_handoff_state_e::attached_unknown:
+        return "attached_unknown";
+      case stock_handoff_state_e::lease_acquired:
+        return "lease_acquired";
+      case stock_handoff_state_e::stopping_stock:
+        return "stopping_stock";
+      case stock_handoff_state_e::stock_stopped:
+        return "stock_stopped";
+      case stock_handoff_state_e::owned_active:
+        return "owned_active";
+      case stock_handoff_state_e::restoring_stock:
+        return "restoring_stock";
+      case stock_handoff_state_e::restored:
+        return "restored";
+      case stock_handoff_state_e::failed:
+        return "failed";
+    }
+    return "failed";
+  }
+
+  std::string_view to_string(const steam_migration_state_e state) {
+    switch (state) {
+      case steam_migration_state_e::not_needed:
+        return "not_needed";
+      case steam_migration_state_e::checking_idle:
+        return "checking_idle";
+      case steam_migration_state_e::shutting_down:
+        return "shutting_down";
+      case steam_migration_state_e::migrated:
+        return "migrated";
+      case steam_migration_state_e::blocked_active_game:
+        return "blocked_active_game";
+      case steam_migration_state_e::blocked_unknown:
+        return "blocked_unknown";
+      case steam_migration_state_e::shutdown_timeout:
+        return "shutdown_timeout";
+    }
+    return "blocked_unknown";
+  }
+
+  steam_migration_state_e classify_steam_shutdown_observation(
+    const std::uint64_t expected_start_time,
+    const std::optional<std::uint64_t> current_start_time,
+    const bool deadline_expired
+  ) {
+    if (!current_start_time) {
+      return steam_migration_state_e::migrated;
+    }
+    if (expected_start_time == 0 || *current_start_time != expected_start_time) {
+      return steam_migration_state_e::blocked_unknown;
+    }
+    return deadline_expired ? steam_migration_state_e::shutdown_timeout : steam_migration_state_e::shutting_down;
+  }
+
   std::optional<virtual_display_mode_e> parse_virtual_display_mode(const std::string_view value) {
     if (value == "off") {
       return virtual_display_mode_e::off;
@@ -254,6 +409,9 @@ namespace steamos_virtual_session {
     if (input.mode == virtual_display_mode_e::off) {
       return {session_route_e::physical_desktop, "mode_off"};
     }
+    if (input.verified_existing_gamescope_present && !input.live_kwin_available) {
+      return {session_route_e::attached_existing, "verified_existing_gamescope_without_kwin"};
+    }
     if (input.mode == virtual_display_mode_e::force) {
       if (input.retained_owned_session) {
         return {session_route_e::retained_owned_private, "retained_owned_private"};
@@ -277,16 +435,8 @@ namespace steamos_virtual_session {
     if (input.source_policy == session_source_policy_e::auto_select && input.prefer_physical_desktop && input.capturable_output_present) {
       return {session_route_e::physical_desktop, "desktop_application_capturable_output"};
     }
-    if (input.source_policy == session_source_policy_e::auto_select && input.startup_preflight_owned_session && input.prefer_owned_session) {
-      if (input.retained_owned_session) {
-        return {session_route_e::retained_owned_private, "startup_preflight_retained_owned_private"};
-      }
-      return {
-        input.host_supported ? session_route_e::new_owned_private : session_route_e::reject,
-        input.host_supported ? "startup_preflight_replaced_owned_private" : "startup_preflight_host_unsupported"
-      };
-    }
-    if (input.verified_existing_gamescope_present) {
+    if (input.verified_existing_gamescope_present &&
+        (input.source_policy == session_source_policy_e::existing_gamescope || !input.live_kwin_available || !input.prefer_owned_session)) {
       return {session_route_e::attached_existing, "verified_existing_gamescope"};
     }
     if (input.source_policy == session_source_policy_e::existing_gamescope) {
@@ -468,7 +618,10 @@ namespace steamos_virtual_session {
            retained.hdr == requested.hdr &&
            retained.render_node == requested.render_node &&
            retained.source_identity == requested.source_identity &&
-           retained.capture_pixel_format == requested.capture_pixel_format;
+           retained.capture_pixel_format == requested.capture_pixel_format &&
+           retained.backend == requested.backend &&
+           retained.host_endpoint_generation == requested.host_endpoint_generation &&
+           retained.local_presentation_required == requested.local_presentation_required;
   }
 
   content_rectangle_t fit_content_rectangle(const int source_width, const int source_height, const int output_width, const int output_height, const int alignment) {
@@ -523,7 +676,7 @@ namespace steamos_virtual_session {
     };
   }
 
-  std::vector<std::string> gamescope_arguments(const std::string &help_text, const int width, const int height, const int fps, const bool enable_hdr, const std::string &gpu_device, std::string &error) {
+  std::vector<std::string> gamescope_arguments(const std::string &help_text, const int width, const int height, const int fps, const bool enable_hdr, const std::string &gpu_device, std::string &error, const owned_backend_e backend) {
     const auto has_option {[&help_text](const std::string_view option) {
       return help_text.find(option) != std::string::npos;
     }};
@@ -532,8 +685,17 @@ namespace steamos_virtual_session {
       return {};
     }
     std::vector<std::string> arguments;
-    const bool modern_headless {has_option("--backend") && help_text.find("headless") != std::string::npos};
-    if (modern_headless) {
+    const bool modern_backend {has_option("--backend")};
+    const bool modern_headless {modern_backend && help_text.find("headless") != std::string::npos};
+    if (backend == owned_backend_e::wayland_nested) {
+      if (!modern_backend || help_text.find("wayland") == std::string::npos || !has_option("--fullscreen")) {
+        error = "Installed Gamescope does not advertise the fullscreen Wayland backend";
+        return {};
+      }
+      arguments.emplace_back("--backend");
+      arguments.emplace_back("wayland");
+      arguments.emplace_back("--fullscreen");
+    } else if (modern_headless) {
       if (!has_option("--output-width") || !has_option("--output-height")) {
         error = "Installed Gamescope does not advertise headless output size options";
         return {};
@@ -550,7 +712,7 @@ namespace steamos_virtual_session {
     arguments.emplace_back(std::to_string(width));
     arguments.emplace_back("--nested-height");
     arguments.emplace_back(std::to_string(height));
-    if (modern_headless) {
+    if (backend == owned_backend_e::headless && modern_headless) {
       arguments.emplace_back("--output-width");
       arguments.emplace_back(std::to_string(width));
       arguments.emplace_back("--output-height");

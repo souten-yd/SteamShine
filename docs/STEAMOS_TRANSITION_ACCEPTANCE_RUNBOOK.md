@@ -13,8 +13,11 @@ The procedure distinguishes three capture origins:
 1. **Physical Desktop**: KWin PipeWire capture of a connected display.
 2. **Attached Game Mode**: direct PipeWire capture from the stock Gamescope
    started by `gamescope-session.service`. SteamShine does not own or stop it.
-3. **Owned private**: a headless Gamescope started and owned by SteamShine when
-   no acceptable physical or resident Game Mode source exists.
+3. **Owned private headless**: a remote-only Gamescope started and owned by
+   SteamShine when no usable KWin or resident Game Mode source exists.
+4. **Owned private nested**: a fullscreen Wayland-backend Gamescope hosted by a
+   verified live KWin. Its own PipeWire source is consumed directly by
+   Moonlight, so the local window and remote stream share one virtual canvas.
 
 Automatic source selection occurs when Moonlight starts an application. A
 source is re-discovered and its process, PipeWire object, display endpoint, and
@@ -90,15 +93,17 @@ Do not put Moonlight PINs, session tokens, passwords, or private keys in it.
 
 ## Build and static verification
 
-The known SteamOS-compatible local image is
-`localhost/steamshine-ci:boost-ffmpeg-local`. The build directory name must
-retain the `cmake-build-` prefix.
+Read the immutable image and digest from `ci/steamos/image.lock`. Never use a
+mutable local tag or rolling distrobox for a binary that will run on SteamOS.
+The build directory name must retain the `cmake-build-` prefix.
 
 ```bash
 cd /home/deck/SteamShine
+steamos_image="$(sed -n 's/^image=//p' ci/steamos/image.lock)"
+steamos_digest="$(sed -n 's/^digest=//p' ci/steamos/image.lock)"
 podman run --rm --userns=keep-id \
   -v /home/deck/SteamShine:/workspace:rw -w /workspace \
-  localhost/steamshine-ci:boost-ffmpeg-local \
+  "${steamos_image}@${steamos_digest}" \
   cmake --build cmake-build-transition-fix-full -j2 \
   --target sunshine test_sunshine steamshine-input-visualizer
 ```
@@ -109,14 +114,14 @@ missing host libraries:
 ```bash
 podman run --rm --userns=keep-id \
   -v /home/deck/SteamShine:/workspace:rw -w /workspace \
-  localhost/steamshine-ci:boost-ffmpeg-local \
+  "${steamos_image}@${steamos_digest}" \
   ./cmake-build-transition-fix-full/tests/test_sunshine \
   --gtest_filter='SteamOSVirtualSessionCore.*:ProcessCommandSelectionTest/*:MainLoop.*:VideoPipelineDiagnostics.*' \
   --gtest_color=yes
 
 podman run --rm --userns=keep-id \
   -v /home/deck/SteamShine:/workspace:rw -w /workspace \
-  localhost/steamshine-ci:boost-ffmpeg-local \
+  "${steamos_image}@${steamos_digest}" \
   ./cmake-build-transition-fix-full/tests/test_sunshine \
   --gtest_filter='SteamOSVirtualSessionLifecycle.*' --gtest_color=yes
 
@@ -128,7 +133,7 @@ Run format and repository checks without rewriting unrelated files:
 ```bash
 podman run --rm --userns=keep-id \
   -v /home/deck/SteamShine:/workspace:rw -w /workspace \
-  localhost/steamshine-ci:boost-ffmpeg-local \
+  "${steamos_image}@${steamos_digest}" \
   clang-format --dry-run --Werror \
   src/platform/linux/pipewire_capture.h \
   src/platform/linux/pipewire_capture.cpp \
@@ -316,6 +321,14 @@ The PipeWire format must have positive dimensions, an encoder must initialize,
 and encoded packets/bytes must increase. The baseline SteamShine PID and start
 timestamp must remain unchanged and `NRestarts` must not increase.
 
+With `steamos_stock_session_handoff=auto_idle`, repeat after stock Game Mode is
+verified idle. A new application launch must acquire one owner-bound lease,
+stop `gamescope-session.target` normally, and start an owned headless source at
+the Moonlight geometry. End the application and require one stable stock Game
+Mode restore. Then repeat with a real stock game running: the original
+Gamescope, Steam, and game PIDs must remain unchanged and the route must stay
+`attached_existing` without creating a lease.
+
 ### C. Stock Game Mode to Desktop Mode
 
 1. Begin in stock Game Mode with Moonlight disconnected.
@@ -356,6 +369,43 @@ under the configured `XDG_RUNTIME_DIR`. The diagnostics must report an owned
 origin. This is the scenario for `scripts/test-steamos-virtual-display.sh` or
 `./steamshine.sh hardware-test --interactive` when their documented
 preconditions are satisfied.
+
+### E2. KDE fullscreen shared Big Picture canvas
+
+1. Enter Desktop Mode with a connected physical output and verified live KWin.
+2. Set `steamos_local_presentation=auto` and launch Big Picture from Moonlight.
+3. Require `owned_gamescope_backend=wayland_nested`,
+   `presentation=remote_and_local`, and `presentation_reason=verified_kwin_nested`.
+4. Verify the fullscreen local window and Moonlight show the same virtual
+   resolution and content while PipeWire reports the owned Gamescope producer,
+   not a second KWin recapture.
+5. Disconnect and reconnect. When geometry, HDR intent, backend, KWin endpoint
+   generation, and presentation requirement are unchanged, the Gamescope PID
+   and PipeWire object serial must be retained.
+
+Repeat with `steamos_local_presentation=off`; the backend must be `headless`.
+Repeat with `mirror` after making KWin unavailable; launch must be rejected with
+`nested_wayland_unavailable`. For HDR, require the verified KWin endpoint to
+advertise `wp_color_manager_v1` or `frog_color_management_factory_v1`; the
+backend must then remain `wayland_nested`. Without a compatible color protocol,
+automatic policy must preserve the remote HDR path with
+`nested_hdr_unverified_remote_only`, while mandatory `mirror` rejects.
+
+### E3. Idle Desktop Steam migration
+
+1. In KDE, start Steam and leave it idle with no game scope containing a
+   process other than a residual `reaper`.
+2. Set `steamos_steam_migration=auto_idle`, then launch Big Picture.
+3. Require the state sequence `checking_idle`, `shutting_down`, `migrated`.
+   Verify the original PID/start-time disappears after Steam's normal
+   `-shutdown` command and that the new Steam starts only inside the selected
+   owned Gamescope. Repeat with `steamos_local_presentation=off` and require
+   exact Moonlight geometry from the headless producer.
+4. Repeat with a running game. Require HTTP 503 and
+   `blocked_active_game`; the original Steam and game PIDs must remain alive.
+5. Repeat with two Steam processes, unreadable procfs metadata, a changed KWin
+   endpoint, and forced shutdown timeout. Each must return HTTP 503 without
+   SIGTERM/SIGKILL. Timeout must remove only the newly owned session.
 
 ### F. Physical connector changes before the next launch
 

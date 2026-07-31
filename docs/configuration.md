@@ -2394,6 +2394,14 @@ with a stable @code{} input_route_error @endcode.
 
 <table><tr><td>Description</td><td colspan="2">Select @code{} auto @endcode, @code{} off @endcode, or @code{} mirror @endcode for local presentation of SteamShine-owned private sessions. Existing Game Mode is not mirrored a second time.</td></tr><tr><td>Default</td><td colspan="2">@code{} auto @endcode</td></tr><tr><td>Example</td><td colspan="2">@code{} steamos_local_presentation = off @endcode</td></tr></table>
 
+### steamos_steam_migration
+
+<table><tr><td>Description</td><td colspan="2">Select @code{} auto_idle @endcode to move only a uniquely verified idle Desktop Steam into an owned headless or nested Gamescope using Steam's normal shutdown command. Active game scopes, ambiguous metadata, PID reuse, and shutdown timeout fail closed. Select @code{} reject @endcode to disable automatic migration.</td></tr><tr><td>Default</td><td colspan="2">@code{} auto_idle @endcode</td></tr><tr><td>Example</td><td colspan="2">@code{} steamos_steam_migration = reject @endcode</td></tr></table>
+
+### steamos_stock_session_handoff
+
+<table><tr><td>Description</td><td colspan="2">Select @code{} attach @endcode to preserve and mirror a verified stock Game Mode Gamescope. Select @code{} auto_idle @endcode to attach while a game is active or activity is unknown, but temporarily stop a uniquely verified idle stock session and use an owned headless Gamescope at the Moonlight-requested geometry. Stock Game Mode is restored after the owned session ends.</td></tr><tr><td>Default</td><td colspan="2">@code{} attach @endcode</td></tr><tr><td>Example</td><td colspan="2">@code{} steamos_stock_session_handoff = auto_idle @endcode</td></tr></table>
+
 ### steamos_geometry_alignment
 
 <table><tr><td>Description</td><td colspan="2">Select @code{} auto @endcode to minimally align coded dimensions and report the adjustment, or @code{} require_exact @endcode to reject an unaligned client request.</td></tr><tr><td>Default</td><td colspan="2">@code{} auto @endcode</td></tr><tr><td>Example</td><td colspan="2">@code{} steamos_geometry_alignment = require_exact @endcode</td></tr></table>

@@ -113,8 +113,8 @@ root, for example:
 The lease contains a schema version, boot ID, SteamShine PID, process start
 time, and monotonically increasing handoff generation. It is created with
 `O_CREAT|O_EXCL|O_NOFOLLOW`, mode `0600`, written completely, synchronized, and
-atomically renamed. The runtime directory and lease must be owned by the
-current UID and must not be symlinks.
+published with a no-overwrite hard link. The runtime directory and lease must
+be owned by the current UID and must not be symlinks.
 
 The Game Mode guard waits while either condition is true:
 
@@ -152,8 +152,10 @@ failed
 ```
 
 The transition is serialized with the existing virtual-session manager lock
-and a generation token. Long-running systemd waits occur outside the lock, then
-state and identities are revalidated before committing the result.
+and a generation token. The bounded 200 ms idle confirmation and systemd job
+wait run only in a new application-launch transition; there is no periodic or
+per-frame watcher. Keeping the launch transition under the same lock prevents
+a concurrent stop or reconnect from partially releasing its lease.
 
 ### Idle stock to owned headless
 
@@ -314,4 +316,3 @@ because the client connects.
    before disruptive transitions and reboots.
 7. Push validated implementation and evidence to a draft PR in the fork. Never
    create a PR or issue in the LizardByte organization.
-

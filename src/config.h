@@ -307,6 +307,8 @@ namespace config {
     steamos_virtual_session::virtual_display_mode_e mode {steamos_virtual_session::virtual_display_mode_e::auto_detect};  ///< Virtual display policy parsed once during configuration loading.
     steamos_virtual_session::session_source_policy_e session_source {steamos_virtual_session::session_source_policy_e::auto_select};  ///< Gamescope source selection policy.
     steamos_virtual_session::local_presentation_policy_e local_presentation {steamos_virtual_session::local_presentation_policy_e::auto_select};  ///< Local presentation policy for owned private sessions.
+    steamos_virtual_session::steam_migration_policy_e steam_migration {steamos_virtual_session::steam_migration_policy_e::auto_idle};  ///< Safe policy for a verified idle Desktop Steam singleton.
+    steamos_virtual_session::stock_handoff_policy_e stock_session_handoff {steamos_virtual_session::stock_handoff_policy_e::attach};  ///< Policy for replacing a verified idle stock Game Mode source.
     steamos_virtual_session::geometry_alignment_policy_e geometry_alignment {steamos_virtual_session::geometry_alignment_policy_e::auto_align};  ///< Odd coded-extent handling policy.
     steamos_virtual_session::margin_input_policy_e margin_input {steamos_virtual_session::margin_input_policy_e::clamp};  ///< Absolute-input behavior in fitted-output margins.
     bool keep_session_alive {true};  ///< Retain a prepared owned session after Moonlight disconnect.

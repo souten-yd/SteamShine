@@ -101,15 +101,24 @@ The SteamOS virtual-session path already:
 - normalizes requested width to 640–7680;
 - normalizes requested height to 480–4320;
 - normalizes requested FPS to 30–240;
-- creates an owned headless Gamescope session;
+- creates an owned headless Gamescope session for remote-only operation;
+- creates a fullscreen Wayland-backend Gamescope on verified KWin when local
+  presentation is selected;
 - passes nested width, height, and refresh to Gamescope;
 - passes `--hdr-enabled` when HDR is requested and Gamescope advertises support;
 - captures the verified Gamescope PipeWire `Video/Source` over DMA-BUF;
 - encodes on the selected AMD GPU through Vulkan Video;
 - validates one AMD render node for game, capture, and encode;
-- retains owned sessions for reconnect when integer geometry, refresh, HDR intent,
-  process identity, and socket state remain compatible;
-- refuses a second Steam singleton.
+- retains owned sessions for reconnect when geometry, refresh, HDR intent,
+  backend, KWin endpoint generation, local-presentation requirement, process
+  identity, and socket state remain compatible;
+- gracefully migrates only a uniquely verified idle Desktop Steam singleton and
+  refuses active, ambiguous, reused-PID, or timed-out migration attempts.
+- optionally lends a uniquely verified idle stock Game Mode session to an owned
+  headless canvas, while active or ambiguous game activity remains attached to
+  the unchanged stock producer;
+- binds that transition to a boot/PID/start-time lease so the stock launcher is
+  restored after normal cleanup, launch failure, process death, or reboot.
 
 The attached and owned paths also include:
 

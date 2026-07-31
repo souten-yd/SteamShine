@@ -300,9 +300,11 @@ namespace web {
      * @param local_presentation Requested local presentation: auto, off, or mirror.
      * @param keep_session_alive Whether an owned session remains available after disconnect.
      * @param existing_gamescope_pid Optional current-user resident Gamescope PID; zero selects automatically.
+     * @param steam_migration Safe Desktop Steam migration policy: reject or auto_idle.
+     * @param stock_session_handoff Stock Game Mode handoff policy: attach or auto_idle.
      * @return Non-secret result describing validation or persistence outcome.
      */
-    service_result_t save_virtual_display(bool enabled, std::string_view mode, std::string_view session_source, std::string_view local_presentation, bool keep_session_alive, int existing_gamescope_pid) const;
+    service_result_t save_virtual_display(bool enabled, std::string_view mode, std::string_view session_source, std::string_view local_presentation, bool keep_session_alive, int existing_gamescope_pid, std::string_view steam_migration = "auto_idle", std::string_view stock_session_handoff = "attach") const;
   };
 
   /**
