@@ -93,6 +93,17 @@ namespace host_desktop_endpoint {
   bool supports_wayland_presentation(std::string &error);
 
   /**
+   * @brief Verify that the host Wayland compositor can safely present HDR content.
+   *
+   * The endpoint must satisfy the normal native Wayland presentation probe and
+   * advertise a color-management protocol understood by nested Gamescope.
+   *
+   * @param error Human-readable reason when HDR presentation is unavailable.
+   * @return True only when native presentation and color management are advertised.
+   */
+  bool supports_hdr_presentation(std::string &error);
+
+  /**
    * @brief A host-owned xdg-shell surface reserved for local Vulkan presentation.
    *
    * The window owns a distinct connection to the captured host compositor. It

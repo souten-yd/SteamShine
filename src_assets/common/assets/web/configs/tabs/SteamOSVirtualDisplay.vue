@@ -40,9 +40,9 @@ const config = ref(props.config)
     <div class="mb-3">
       <label class="form-label" for="steamos_local_presentation">Local Presentation</label>
       <select id="steamos_local_presentation" v-model="config.steamos_local_presentation" class="form-select">
-        <option value="auto">Auto: mirror owned private sessions when a host display is available</option>
+        <option value="auto">Auto: fullscreen nested Gamescope when KWin is available</option>
         <option value="off">Off: remote streaming only</option>
-        <option value="mirror">Mirror SteamShine-owned private sessions locally</option>
+        <option value="mirror">Require fullscreen nested Gamescope</option>
       </select>
       <div class="form-text">Existing Game Mode retains its physical output and is never mirrored a second time.</div>
     </div>
@@ -53,7 +53,23 @@ const config = ref(props.config)
         <option value="auto">Auto</option>
         <option value="force">Force</option>
       </select>
-      <div class="form-text">Force always creates and streams from a SteamShine-owned headless Gamescope display, even when a physical display or desktop Wayland session is available.</div>
+      <div class="form-text">Force requires a SteamShine-owned Gamescope display; local presentation selects fullscreen nested or remote-only headless operation.</div>
+    </div>
+    <div class="mb-3">
+      <label class="form-label" for="steamos_steam_migration">Desktop Steam migration</label>
+      <select id="steamos_steam_migration" v-model="config.steamos_steam_migration" class="form-select">
+        <option value="auto_idle">Auto: migrate only verified idle Steam</option>
+        <option value="reject">Reject while Desktop Steam is running</option>
+      </select>
+      <div class="form-text">Auto uses Steam's normal shutdown command for owned headless or nested Gamescope. Active games, ambiguous metadata, and timeouts leave Steam running and reject the launch.</div>
+    </div>
+    <div class="mb-3">
+      <label class="form-label" for="steamos_stock_session_handoff">Stock Game Mode handoff</label>
+      <select id="steamos_stock_session_handoff" v-model="config.steamos_stock_session_handoff" class="form-select">
+        <option value="attach">Attach to stock Gamescope</option>
+        <option value="auto_idle">Use owned headless when stock Steam is idle</option>
+      </select>
+      <div class="form-text">Active games and unknown activity remain on the verified stock Gamescope. Idle handoff restores stock Game Mode after the owned session ends.</div>
     </div>
     <details class="mb-3">
       <summary class="mb-3">Advanced SteamOS session settings</summary>

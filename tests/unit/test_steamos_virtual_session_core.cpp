@@ -152,6 +152,15 @@ namespace {
          }) {
       EXPECT_FALSE(retained_session_compatible(retained, changed));
     }
+    auto changed_backend {retained};
+    changed_backend.backend = steamos_virtual_session::owned_backend_e::wayland_nested;
+    EXPECT_FALSE(retained_session_compatible(retained, changed_backend));
+    auto changed_generation {retained};
+    changed_generation.host_endpoint_generation = 2;
+    EXPECT_FALSE(retained_session_compatible(retained, changed_generation));
+    auto changed_presentation {retained};
+    changed_presentation.local_presentation_required = true;
+    EXPECT_FALSE(retained_session_compatible(retained, changed_presentation));
   }
 
   /**
@@ -299,20 +308,22 @@ namespace {
     EXPECT_EQ(select_session_route(request).route, session_route_e::attached_existing);
 
     request.prefer_physical_desktop = true;
+    request.live_kwin_available = true;
     EXPECT_EQ(select_session_route(request).route, session_route_e::physical_desktop);
     EXPECT_EQ(select_session_route(request).reason, "desktop_application_capturable_output");
     request.capturable_output_present = false;
+    request.live_kwin_available = false;
     EXPECT_EQ(select_session_route(request).route, session_route_e::attached_existing);
     request.prefer_physical_desktop = false;
 
     request.startup_preflight_owned_session = true;
     request.prefer_owned_session = true;
     request.retained_owned_session = false;
-    EXPECT_EQ(select_session_route(request).route, session_route_e::new_owned_private);
-    EXPECT_EQ(select_session_route(request).reason, "startup_preflight_replaced_owned_private");
+    EXPECT_EQ(select_session_route(request).route, session_route_e::attached_existing);
+    EXPECT_EQ(select_session_route(request).reason, "verified_existing_gamescope_without_kwin");
     request.retained_owned_session = true;
-    EXPECT_EQ(select_session_route(request).route, session_route_e::retained_owned_private);
-    EXPECT_EQ(select_session_route(request).reason, "startup_preflight_retained_owned_private");
+    EXPECT_EQ(select_session_route(request).route, session_route_e::attached_existing);
+    EXPECT_EQ(select_session_route(request).reason, "verified_existing_gamescope_without_kwin");
     request.startup_preflight_owned_session = false;
 
     request.verified_existing_gamescope_present = false;
@@ -332,6 +343,8 @@ namespace {
     request = input(virtual_display_mode_e::auto_detect, session_source_policy_e::owned_private);
     request.capturable_output_present = true;
     request.verified_existing_gamescope_present = true;
+    EXPECT_EQ(select_session_route(request).route, session_route_e::attached_existing);
+    request.live_kwin_available = true;
     EXPECT_EQ(select_session_route(request).route, session_route_e::new_owned_private);
     request.retained_owned_session = true;
     EXPECT_EQ(select_session_route(request).route, session_route_e::retained_owned_private);
@@ -344,6 +357,9 @@ namespace {
     request = input(virtual_display_mode_e::force, session_source_policy_e::auto_select);
     request.capturable_output_present = true;
     request.verified_existing_gamescope_present = true;
+    EXPECT_EQ(select_session_route(request).route, session_route_e::attached_existing);
+    EXPECT_EQ(select_session_route(request).reason, "verified_existing_gamescope_without_kwin");
+    request.live_kwin_available = true;
     EXPECT_EQ(select_session_route(request).route, session_route_e::new_owned_private);
     request.retained_owned_session = true;
     EXPECT_EQ(select_session_route(request).route, session_route_e::retained_owned_private);
@@ -492,6 +508,117 @@ namespace {
       "1002:744c"
     };
     EXPECT_EQ(arguments, expected);
+  }
+
+  /**
+   * @brief Verify nested Gamescope uses only advertised Wayland fullscreen options.
+   */
+  TEST(SteamOSVirtualSessionCore, BuildsNestedGamescopeCommand) {
+    std::string error;
+    const auto arguments {steamos_virtual_session::gamescope_arguments(
+      "--backend headless wayland --fullscreen --nested-width --nested-height --nested-refresh --expose-wayland --scaler --prefer-vk-device",
+      1920,
+      1080,
+      60,
+      false,
+      "1002:744c",
+      error,
+      steamos_virtual_session::owned_backend_e::wayland_nested
+    )};
+    EXPECT_TRUE(error.empty());
+    EXPECT_EQ(arguments, (std::vector<std::string> {"--backend", "wayland", "--fullscreen", "--nested-width", "1920", "--nested-height", "1080", "--nested-refresh", "60", "--expose-wayland", "--scaler", "fit", "--prefer-vk-device", "1002:744c"}));
+
+    EXPECT_TRUE(steamos_virtual_session::gamescope_arguments("--backend wayland --nested-width --nested-height --nested-refresh --expose-wayland", 1920, 1080, 60, false, {}, error, steamos_virtual_session::owned_backend_e::wayland_nested).empty());
+  }
+
+  /**
+   * @brief Verify local presentation selects nested, fallback, and refusal routes.
+   */
+  TEST(SteamOSVirtualSessionCore, SelectsOwnedBackendSafely) {
+    using steamos_virtual_session::local_presentation_policy_e;
+    using steamos_virtual_session::owned_backend_e;
+    using steamos_virtual_session::select_owned_backend;
+
+    EXPECT_EQ(select_owned_backend(local_presentation_policy_e::off, true, true, false, false), owned_backend_e::headless);
+    EXPECT_EQ(select_owned_backend(local_presentation_policy_e::auto_select, true, true, false, false), owned_backend_e::wayland_nested);
+    EXPECT_EQ(select_owned_backend(local_presentation_policy_e::auto_select, true, true, true, true), owned_backend_e::wayland_nested);
+    EXPECT_EQ(select_owned_backend(local_presentation_policy_e::auto_select, true, true, true, false), owned_backend_e::headless);
+    EXPECT_EQ(select_owned_backend(local_presentation_policy_e::auto_select, false, true, false, false), owned_backend_e::headless);
+    EXPECT_FALSE(select_owned_backend(local_presentation_policy_e::mirror, false, true, false, false));
+    EXPECT_FALSE(select_owned_backend(local_presentation_policy_e::mirror, true, true, true, false));
+    EXPECT_EQ(select_owned_backend(local_presentation_policy_e::mirror, true, true, true, true), owned_backend_e::wayland_nested);
+    EXPECT_EQ(steamos_virtual_session::to_string(owned_backend_e::headless), "headless");
+    EXPECT_EQ(steamos_virtual_session::to_string(owned_backend_e::wayland_nested), "wayland_nested");
+  }
+
+  /**
+   * @brief Verify Steam migration policies and observable states use stable spellings.
+   */
+  TEST(SteamOSVirtualSessionCore, ParsesSteamMigrationPolicyAndStates) {
+    using steamos_virtual_session::parse_steam_migration_policy;
+    using steamos_virtual_session::steam_migration_policy_e;
+    using steamos_virtual_session::steam_migration_state_e;
+
+    EXPECT_EQ(parse_steam_migration_policy("reject"), steam_migration_policy_e::reject);
+    EXPECT_EQ(parse_steam_migration_policy("auto_idle"), steam_migration_policy_e::auto_idle);
+    EXPECT_FALSE(parse_steam_migration_policy("auto"));
+    EXPECT_EQ(steamos_virtual_session::to_string(steam_migration_policy_e::reject), "reject");
+    EXPECT_EQ(steamos_virtual_session::to_string(steam_migration_policy_e::auto_idle), "auto_idle");
+    EXPECT_EQ(steamos_virtual_session::to_string(steam_migration_state_e::not_needed), "not_needed");
+    EXPECT_EQ(steamos_virtual_session::to_string(steam_migration_state_e::checking_idle), "checking_idle");
+    EXPECT_EQ(steamos_virtual_session::to_string(steam_migration_state_e::shutting_down), "shutting_down");
+    EXPECT_EQ(steamos_virtual_session::to_string(steam_migration_state_e::migrated), "migrated");
+    EXPECT_EQ(steamos_virtual_session::to_string(steam_migration_state_e::blocked_active_game), "blocked_active_game");
+    EXPECT_EQ(steamos_virtual_session::to_string(steam_migration_state_e::blocked_unknown), "blocked_unknown");
+    EXPECT_EQ(steamos_virtual_session::to_string(steam_migration_state_e::shutdown_timeout), "shutdown_timeout");
+  }
+
+  /**
+   * @brief Verify stock handoff is limited to an explicit idle application launch.
+   */
+  TEST(SteamOSVirtualSessionCore, SelectsStockSessionHandoffSafely) {
+    using steamos_virtual_session::parse_stock_handoff_policy;
+    using steamos_virtual_session::select_stock_handoff_action;
+    using steamos_virtual_session::stock_activity_e;
+    using steamos_virtual_session::stock_handoff_action_e;
+    using steamos_virtual_session::stock_handoff_policy_e;
+    using steamos_virtual_session::stock_handoff_state_e;
+
+    EXPECT_EQ(parse_stock_handoff_policy("attach"), stock_handoff_policy_e::attach);
+    EXPECT_EQ(parse_stock_handoff_policy("auto_idle"), stock_handoff_policy_e::auto_idle);
+    EXPECT_FALSE(parse_stock_handoff_policy("always"));
+    EXPECT_EQ(steamos_virtual_session::to_string(stock_handoff_policy_e::attach), "attach");
+    EXPECT_EQ(steamos_virtual_session::to_string(stock_handoff_policy_e::auto_idle), "auto_idle");
+    EXPECT_EQ(select_stock_handoff_action(stock_handoff_policy_e::auto_idle, true, false, stock_activity_e::idle), stock_handoff_action_e::handoff_owned);
+    EXPECT_EQ(select_stock_handoff_action(stock_handoff_policy_e::attach, true, false, stock_activity_e::idle), stock_handoff_action_e::attach);
+    EXPECT_EQ(select_stock_handoff_action(stock_handoff_policy_e::auto_idle, false, false, stock_activity_e::idle), stock_handoff_action_e::attach);
+    EXPECT_EQ(select_stock_handoff_action(stock_handoff_policy_e::auto_idle, true, true, stock_activity_e::idle), stock_handoff_action_e::attach);
+    EXPECT_EQ(select_stock_handoff_action(stock_handoff_policy_e::auto_idle, true, false, stock_activity_e::active_game), stock_handoff_action_e::attach);
+    EXPECT_EQ(select_stock_handoff_action(stock_handoff_policy_e::auto_idle, true, false, stock_activity_e::unknown), stock_handoff_action_e::attach);
+    EXPECT_FALSE(steamos_virtual_session::systemctl_job_mode_argument(true));
+    ASSERT_TRUE(steamos_virtual_session::systemctl_job_mode_argument(false));
+    EXPECT_EQ(*steamos_virtual_session::systemctl_job_mode_argument(false), "--no-block");
+    EXPECT_EQ(steamos_virtual_session::to_string(stock_handoff_state_e::inactive), "inactive");
+    EXPECT_EQ(steamos_virtual_session::to_string(stock_handoff_state_e::attached_active_game), "attached_active_game");
+    EXPECT_EQ(steamos_virtual_session::to_string(stock_handoff_state_e::owned_active), "owned_active");
+    EXPECT_EQ(steamos_virtual_session::to_string(stock_handoff_state_e::restored), "restored");
+    EXPECT_EQ(steamos_virtual_session::to_string(stock_handoff_state_e::failed), "failed");
+  }
+
+  /**
+   * @brief Verify Desktop Steam may migrate into either owned compositor backend.
+   */
+  TEST(SteamOSVirtualSessionCore, AllowsDesktopSteamMigrationIntoOwnedBackends) {
+    using steamos_virtual_session::owned_backend_e;
+    using steamos_virtual_session::session_origin_e;
+    using steamos_virtual_session::steam_migration_allowed;
+    using steamos_virtual_session::steam_migration_policy_e;
+
+    EXPECT_TRUE(steam_migration_allowed(steam_migration_policy_e::auto_idle, true, session_origin_e::owned_private, owned_backend_e::headless));
+    EXPECT_TRUE(steam_migration_allowed(steam_migration_policy_e::auto_idle, true, session_origin_e::owned_private, owned_backend_e::wayland_nested));
+    EXPECT_FALSE(steam_migration_allowed(steam_migration_policy_e::reject, true, session_origin_e::owned_private, owned_backend_e::headless));
+    EXPECT_FALSE(steam_migration_allowed(steam_migration_policy_e::auto_idle, false, session_origin_e::owned_private, owned_backend_e::headless));
+    EXPECT_FALSE(steam_migration_allowed(steam_migration_policy_e::auto_idle, true, session_origin_e::attached_existing, owned_backend_e::headless));
   }
 
   /**
@@ -709,6 +836,7 @@ namespace {
     EXPECT_TRUE(gamescope_source::has_game_mode_session_identity("gamescope --steam", "0::/user.slice/steam-session.scope\n"));
     EXPECT_FALSE(gamescope_source::has_game_mode_session_identity(stock_command, "0::/user.slice/not-gamescope-session.service\n"));
     EXPECT_FALSE(gamescope_source::has_game_mode_session_identity("gamescope", "0::/user.slice/steam-session.scope\n"));
+    EXPECT_FALSE(gamescope_source::has_game_mode_session_identity("gamescope --steam", "0::/user.slice/user@1000.service/app.slice/steamshine.service\n"));
   }
 
   /**
@@ -874,6 +1002,121 @@ namespace {
     EXPECT_FALSE(steam_session::command_opens_big_picture("setsid steam steam://close/bigpicture"));
     EXPECT_FALSE(steam_session::command_references_steam("steamwebhelper --type=renderer"));
     EXPECT_FALSE(steam_session::command_references_steam("/usr/bin/gamescope --steamcompmgr"));
+  }
+
+  /**
+   * @brief Verify Desktop Steam migration fails closed unless one idle instance is proven.
+   */
+  TEST(SteamOSVirtualSessionCore, AssessesIdleDesktopSteamMigration) {
+    const steam_session::process_record_t steam {
+      .pid = 40,
+      .uid = 1000,
+      .parent_pid = 1,
+      .start_time = 400,
+      .executable_name = "steam",
+      .executable_path = "/usr/bin/steam",
+      .xdg_runtime_directory = "/run/user/1000",
+      .wayland_display = "wayland-0",
+      .dbus_session_bus_address = "unix:path=/run/user/1000/bus",
+      .cgroup = "0::/user.slice/user-1000.slice/user@1000.service/app.slice/app-steam@autostart.service\n",
+    };
+    auto result {steam_session::assess_idle_desktop_migration({steam}, "/run/user/1000", "wayland-0", 1000)};
+    EXPECT_EQ(result.result, steam_session::migration_idle_result_e::idle);
+    EXPECT_EQ(result.steam_pid, 40);
+    EXPECT_EQ(result.steam_start_time, 400U);
+
+    auto reaper {steam};
+    reaper.pid = 41;
+    reaper.executable_name = "reaper";
+    reaper.executable_path = "/usr/lib/steam/reaper";
+    reaper.cgroup = "0::/user.slice/app-steam-123.scope\n";
+    EXPECT_EQ(steam_session::assess_idle_desktop_migration({steam, reaper}, "/run/user/1000", "wayland-0", 1000).result, steam_session::migration_idle_result_e::idle);
+
+    auto game {reaper};
+    game.executable_name = "game";
+    EXPECT_EQ(steam_session::assess_idle_desktop_migration({steam, game}, "/run/user/1000", "wayland-0", 1000).result, steam_session::migration_idle_result_e::active_game);
+
+    auto alternate_game_scope {game};
+    alternate_game_scope.cgroup = "0::/user.slice/steam-app-123.scope\n";
+    EXPECT_EQ(steam_session::assess_idle_desktop_migration({steam, alternate_game_scope}, "/run/user/1000", "wayland-0", 1000).result, steam_session::migration_idle_result_e::active_game);
+
+    auto misleading_scope {game};
+    misleading_scope.cgroup = "0::/user.slice/not-app-steam-123.scope\n";
+    EXPECT_EQ(steam_session::assess_idle_desktop_migration({steam, misleading_scope}, "/run/user/1000", "wayland-0", 1000).result, steam_session::migration_idle_result_e::idle);
+
+    auto duplicate {steam};
+    duplicate.pid = 42;
+    duplicate.start_time = 420;
+    EXPECT_EQ(steam_session::assess_idle_desktop_migration({steam, duplicate}, "/run/user/1000", "wayland-0", 1000).result, steam_session::migration_idle_result_e::unknown);
+
+    auto unreadable {steam};
+    unreadable.metadata_readable = false;
+    EXPECT_EQ(steam_session::assess_idle_desktop_migration({unreadable}, "/run/user/1000", "wayland-0", 1000).result, steam_session::migration_idle_result_e::unknown);
+    EXPECT_EQ(steam_session::assess_idle_desktop_migration({steam}, "/run/user/1000", "wayland-1", 1000).result, steam_session::migration_idle_result_e::unknown);
+    EXPECT_EQ(steam_session::assess_idle_desktop_migration({}, "/run/user/1000", "wayland-0", 1000).result, steam_session::migration_idle_result_e::unknown);
+  }
+
+  /**
+   * @brief Verify stock Game Mode handoff requires one idle vendor Steam instance.
+   */
+  TEST(SteamOSVirtualSessionCore, AssessesIdleStockSteamSession) {
+    const steam_session::target_session_t target {
+      .gamescope_pid = 50,
+      .cgroup = "0::/user.slice/user-1000.slice/user@1000.service/session.slice/gamescope-session.service\n",
+    };
+    const steam_session::process_record_t steam {
+      .pid = 51,
+      .uid = 1000,
+      .parent_pid = 1,
+      .start_time = 510,
+      .executable_name = "steam",
+      .executable_path = "/usr/bin/steam",
+      .cgroup = "0::/user.slice/user-1000.slice/user@1000.service/session.slice/steam-launcher.service\n",
+    };
+    auto result {steam_session::assess_idle_stock_session({steam}, target, 1000)};
+    EXPECT_EQ(result.result, steam_session::migration_idle_result_e::idle);
+    EXPECT_EQ(result.steam_pid, 51);
+    EXPECT_EQ(result.steam_start_time, 510U);
+
+    auto reaper {steam};
+    reaper.pid = 52;
+    reaper.executable_name = "reaper";
+    reaper.cgroup = "0::/user.slice/app-steam-123.scope\n";
+    EXPECT_EQ(steam_session::assess_idle_stock_session({steam, reaper}, target, 1000).result, steam_session::migration_idle_result_e::idle);
+
+    auto game {reaper};
+    game.executable_name = "game";
+    EXPECT_EQ(steam_session::assess_idle_stock_session({steam, game}, target, 1000).result, steam_session::migration_idle_result_e::active_game);
+
+    auto unreadable_game {game};
+    unreadable_game.metadata_readable = false;
+    EXPECT_EQ(steam_session::assess_idle_stock_session({steam, unreadable_game}, target, 1000).result, steam_session::migration_idle_result_e::unknown);
+
+    auto duplicate {steam};
+    duplicate.pid = 53;
+    EXPECT_EQ(steam_session::assess_idle_stock_session({steam, duplicate}, target, 1000).result, steam_session::migration_idle_result_e::unknown);
+
+    auto desktop_steam {steam};
+    desktop_steam.cgroup = "0::/user.slice/app-steam@autostart.service\n";
+    EXPECT_EQ(steam_session::assess_idle_stock_session({desktop_steam}, target, 1000).result, steam_session::migration_idle_result_e::unknown);
+
+    auto non_vendor_target {target};
+    non_vendor_target.cgroup = "0::/user.slice/app-gamescope.scope\n";
+    EXPECT_EQ(steam_session::assess_idle_stock_session({steam}, non_vendor_target, 1000).result, steam_session::migration_idle_result_e::unknown);
+  }
+
+  /**
+   * @brief Verify graceful shutdown observations reject PID reuse and report timeout.
+   */
+  TEST(SteamOSVirtualSessionCore, ClassifiesSteamShutdownObservations) {
+    using steamos_virtual_session::classify_steam_shutdown_observation;
+    using steamos_virtual_session::steam_migration_state_e;
+
+    EXPECT_EQ(classify_steam_shutdown_observation(400, 400, false), steam_migration_state_e::shutting_down);
+    EXPECT_EQ(classify_steam_shutdown_observation(400, std::nullopt, false), steam_migration_state_e::migrated);
+    EXPECT_EQ(classify_steam_shutdown_observation(400, 401, false), steam_migration_state_e::blocked_unknown);
+    EXPECT_EQ(classify_steam_shutdown_observation(400, 400, true), steam_migration_state_e::shutdown_timeout);
+    EXPECT_EQ(classify_steam_shutdown_observation(0, 400, false), steam_migration_state_e::blocked_unknown);
   }
 
   /**

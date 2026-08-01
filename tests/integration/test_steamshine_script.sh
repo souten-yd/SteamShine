@@ -26,7 +26,9 @@ done
 # becomes connected.
 guard_drm="${test_root}/guard-drm"
 guard_marker="${test_root}/guard-launcher-called"
-mkdir -p "${guard_drm}/card0-Writeback-1" "${guard_drm}/card0-HDMI-A-1"
+guard_runtime="${test_root}/guard-runtime"
+guard_lease="${guard_runtime}/steamshine/stock-session-handoff.lease"
+mkdir -p "${guard_drm}/card0-Writeback-1" "${guard_drm}/card0-HDMI-A-1" "$(dirname "${guard_lease}")"
 printf 'connected\n' >"${guard_drm}/card0-Writeback-1/status"
 printf 'disconnected\n' >"${guard_drm}/card0-HDMI-A-1/status"
 cat >"${test_root}/vendor-gamescope-session" <<'EOF'
@@ -37,12 +39,94 @@ chmod 755 "${test_root}/vendor-gamescope-session"
 STEAMSHINE_DRM_ROOT="${guard_drm}" \
   STEAMSHINE_CONNECTOR_POLL_SECONDS=0.01 \
   STEAMSHINE_GUARD_TEST_MARKER="${guard_marker}" \
+  XDG_RUNTIME_DIR="${guard_runtime}" \
   "${root_dir}/scripts/steamshine-gamescope-session-guard.sh" "${test_root}/vendor-gamescope-session" &
 guard_pid=$!
 sleep 0.05
 test ! -e "${guard_marker}"
 printf 'connected\n' >"${guard_drm}/card0-HDMI-A-1/status"
 wait "${guard_pid}"
+grep -Fxq 'called' "${guard_marker}"
+
+# A live owner lease also holds a connected stock launcher, then releasing the
+# lease resumes it exactly once. A stale owner must be removed automatically.
+rm -f "${guard_marker}"
+guard_boot_id="$(< /proc/sys/kernel/random/boot_id)"
+guard_owner_start="$(awk '{print $22}' "/proc/$$/stat")"
+printf 'version=1\nboot_id=%s\nowner_pid=%s\nowner_start_time=%s\ngeneration=1\n' \
+  "${guard_boot_id}" "$$" "${guard_owner_start}" >"${guard_lease}"
+chmod 600 "${guard_lease}"
+STEAMSHINE_DRM_ROOT="${guard_drm}" \
+  STEAMSHINE_CONNECTOR_POLL_SECONDS=0.01 \
+  STEAMSHINE_GUARD_TEST_MARKER="${guard_marker}" \
+  XDG_RUNTIME_DIR="${guard_runtime}" \
+  "${root_dir}/scripts/steamshine-gamescope-session-guard.sh" "${test_root}/vendor-gamescope-session" &
+guard_pid=$!
+sleep 0.05
+test ! -e "${guard_marker}"
+rm -f "${guard_lease}"
+wait "${guard_pid}"
+grep -Fxq 'called' "${guard_marker}"
+
+rm -f "${guard_marker}"
+printf 'version=1\nboot_id=%s\nowner_pid=99999999\nowner_start_time=1\ngeneration=2\n' \
+  "${guard_boot_id}" >"${guard_lease}"
+chmod 600 "${guard_lease}"
+STEAMSHINE_DRM_ROOT="${guard_drm}" \
+  STEAMSHINE_CONNECTOR_POLL_SECONDS=0.01 \
+  STEAMSHINE_GUARD_TEST_MARKER="${guard_marker}" \
+  XDG_RUNTIME_DIR="${guard_runtime}" \
+  "${root_dir}/scripts/steamshine-gamescope-session-guard.sh" "${test_root}/vendor-gamescope-session"
+test ! -e "${guard_lease}"
+grep -Fxq 'called' "${guard_marker}"
+
+# PID reuse, a different boot, malformed data, and insecure mode are all stale
+# rather than authoritative. The guard removes each regular owner file and
+# immediately permits the connected vendor launcher.
+for guard_invalid_case in pid-reuse boot-id malformed mode; do
+  rm -f "${guard_marker}" "${guard_lease}"
+  case "${guard_invalid_case}" in
+    pid-reuse)
+      printf 'version=1\nboot_id=%s\nowner_pid=%s\nowner_start_time=%s\ngeneration=3\n' \
+        "${guard_boot_id}" "$$" "$((guard_owner_start + 1))" >"${guard_lease}"
+      ;;
+    boot-id)
+      printf 'version=1\nboot_id=other-boot\nowner_pid=%s\nowner_start_time=%s\ngeneration=4\n' \
+        "$$" "${guard_owner_start}" >"${guard_lease}"
+      ;;
+    malformed)
+      printf 'not-a-valid-lease\n' >"${guard_lease}"
+      ;;
+    mode)
+      printf 'version=1\nboot_id=%s\nowner_pid=%s\nowner_start_time=%s\ngeneration=5\n' \
+        "${guard_boot_id}" "$$" "${guard_owner_start}" >"${guard_lease}"
+      chmod 644 "${guard_lease}"
+      ;;
+  esac
+  if [[ "${guard_invalid_case}" != mode ]]; then
+    chmod 600 "${guard_lease}"
+  fi
+  STEAMSHINE_DRM_ROOT="${guard_drm}" \
+    STEAMSHINE_CONNECTOR_POLL_SECONDS=0.01 \
+    STEAMSHINE_GUARD_TEST_MARKER="${guard_marker}" \
+    XDG_RUNTIME_DIR="${guard_runtime}" \
+    "${root_dir}/scripts/steamshine-gamescope-session-guard.sh" "${test_root}/vendor-gamescope-session"
+  test ! -e "${guard_lease}"
+  grep -Fxq 'called' "${guard_marker}"
+done
+
+# A symlink can neither become a lease nor cause deletion of its target.
+rm -f "${guard_marker}" "${guard_lease}"
+guard_symlink_target="${test_root}/guard-symlink-target"
+printf 'do-not-delete\n' >"${guard_symlink_target}"
+ln -s "${guard_symlink_target}" "${guard_lease}"
+STEAMSHINE_DRM_ROOT="${guard_drm}" \
+  STEAMSHINE_CONNECTOR_POLL_SECONDS=0.01 \
+  STEAMSHINE_GUARD_TEST_MARKER="${guard_marker}" \
+  XDG_RUNTIME_DIR="${guard_runtime}" \
+  "${root_dir}/scripts/steamshine-gamescope-session-guard.sh" "${test_root}/vendor-gamescope-session"
+test -L "${guard_lease}"
+grep -Fxq 'do-not-delete' "${guard_symlink_target}"
 grep -Fxq 'called' "${guard_marker}"
 
 # The CI timing report must split compiler work from the final runtime link
@@ -263,7 +347,14 @@ case "${command_name}" in
     [[ "${SYSTEMCTL_FAIL_START:-0}" == 1 ]] && exit 1
     touch "${state}/active"
     mkdir -p "${STEAMSHINE_PROC_ROOT:?}/4242"
-    ln -sfn "$(readlink -f -- "${HOME}/.local/bin/steamshine")" "${STEAMSHINE_PROC_ROOT}/4242/exe"
+    expected_binary="$(readlink -f -- "${HOME}/.local/bin/steamshine")"
+    if [[ -n "${SYSTEMCTL_TRANSIENT_EXECUTABLE:-}" ]]; then
+      ln -sfn "${SYSTEMCTL_TRANSIENT_EXECUTABLE}" "${STEAMSHINE_PROC_ROOT}/4242/exe"
+      nohup bash -c 'sleep 0.1; ln -sfn "$1" "$2"' bash \
+        "${expected_binary}" "${STEAMSHINE_PROC_ROOT}/4242/exe" >/dev/null 2>&1 &
+    else
+      ln -sfn "${expected_binary}" "${STEAMSHINE_PROC_ROOT}/4242/exe"
+    fi
     ;;
   stop)
     rm -f "${state}/active"
@@ -378,6 +469,19 @@ HOME="${test_root}/home" XDG_RUNTIME_DIR="${test_root}/home/run" PATH="${test_ro
   "${root_dir}/steamshine.sh" install --artifact "${test_root}/steamshine-steamos-x86_64-test.tar.zst" --non-interactive --yes
 test "$(sha256sum "${service_unit}")" = "${service_unit_checksum}"
 grep -Fq -- '--user restart steamshine.service' "${systemctl_log}"
+
+# Type=simple may briefly expose systemd's executor at MainPID before execve
+# reaches the new immutable binary. Installation must retry that identity
+# check for a bounded interval instead of reporting a false wrong_binary.
+transient_executable="${test_root}/transient-systemd-executor"
+printf '#!/bin/sh\nexit 0\n' >"${transient_executable}"
+chmod 755 "${transient_executable}"
+: >"${systemctl_log}"
+HOME="${test_root}/home" XDG_RUNTIME_DIR="${test_root}/home/run" PATH="${test_root}/mock-bin:${PATH}" \
+  SYSTEMCTL_STATE_DIR="${systemctl_state}" STEAMSHINE_PROC_ROOT="${mock_proc}" SYSTEMCTL_LOG="${systemctl_log}" \
+  SYSTEMCTL_TRANSIENT_EXECUTABLE="${transient_executable}" \
+  "${root_dir}/steamshine.sh" install --artifact "${test_root}/steamshine-steamos-x86_64-test.tar.zst" --non-interactive --yes
+test "$(readlink -f -- "${mock_proc}/4242/exe")" = "$(readlink -f -- "${test_root}/home/.local/bin/steamshine")"
 
 # Repair recreates a missing default.target link without needlessly restarting
 # an already-active process that resolves to the current installed binary.

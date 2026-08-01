@@ -1775,6 +1775,30 @@ namespace config {
       }
     }
     {
+      std::string migration_value;
+      string_f(vars, "steamos_steam_migration", migration_value);
+      if (!migration_value.empty()) {
+        const auto migration {steamos_virtual_session::parse_steam_migration_policy(migration_value)};
+        if (!migration) {
+          BOOST_LOG(error) << "config: invalid steamos_steam_migration value: " << migration_value << "; expected reject or auto_idle";
+          throw std::invalid_argument {"invalid steamos_steam_migration"};
+        }
+        steamos_virtual_display.steam_migration = *migration;
+      }
+    }
+    {
+      std::string handoff_value;
+      string_f(vars, "steamos_stock_session_handoff", handoff_value);
+      if (!handoff_value.empty()) {
+        const auto handoff {steamos_virtual_session::parse_stock_handoff_policy(handoff_value)};
+        if (!handoff) {
+          BOOST_LOG(error) << "config: invalid steamos_stock_session_handoff value: " << handoff_value << "; expected attach or auto_idle";
+          throw std::invalid_argument {"invalid steamos_stock_session_handoff"};
+        }
+        steamos_virtual_display.stock_session_handoff = *handoff;
+      }
+    }
+    {
       std::string alignment_value;
       string_f(vars, "steamos_geometry_alignment", alignment_value);
       if (!alignment_value.empty()) {

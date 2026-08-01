@@ -107,6 +107,192 @@ namespace steamos_virtual_session {
   std::string_view to_string(presentation_e presentation);
 
   /**
+   * @brief Backend used by a SteamShine-owned Gamescope compositor.
+   */
+  enum class owned_backend_e {
+    headless,  ///< No local window or DRM output is created.
+    wayland_nested,  ///< A fullscreen Gamescope window is presented by the verified host KWin.
+  };
+
+  /**
+   * @brief Return the stable status spelling for an owned Gamescope backend.
+   *
+   * @param backend Backend to serialize.
+   * @return Lowercase status value.
+   */
+  std::string_view to_string(owned_backend_e backend);
+
+  /**
+   * @brief Select the owned Gamescope backend for one launch.
+   *
+   * HDR nested presentation requires a separately verified host color path;
+   * automatic policy retains the remote HDR path by selecting headless when
+   * that verification is unavailable.
+   *
+   * @param policy Configured local-presentation policy.
+   * @param live_kwin_available Whether a verified live KWin Wayland endpoint exists.
+   * @param physical_output_connected Whether a physical connector is present.
+   * @param hdr_requested Whether the client requested HDR.
+   * @param hdr_presentation_available Whether the host color path passed verification.
+   * @return Selected backend, or no value when mandatory mirroring is unavailable.
+   */
+  std::optional<owned_backend_e> select_owned_backend(local_presentation_policy_e policy, bool live_kwin_available, bool physical_output_connected, bool hdr_requested, bool hdr_presentation_available);
+
+  /**
+   * @brief Policy for moving an already-running Desktop Steam into owned Gamescope.
+   */
+  enum class steam_migration_policy_e {
+    reject,  ///< Reject an outer Steam singleton without changing it.
+    auto_idle,  ///< Gracefully migrate only a verified idle Desktop Steam singleton.
+  };
+
+  /**
+   * @brief Parse a canonical Steam migration policy.
+   *
+   * @param value Configuration text.
+   * @return Parsed policy, or no value for unsupported text.
+   */
+  std::optional<steam_migration_policy_e> parse_steam_migration_policy(std::string_view value);
+
+  /**
+   * @brief Return the canonical Steam migration policy spelling.
+   *
+   * @param policy Policy to serialize.
+   * @return Lowercase configuration value.
+   */
+  std::string_view to_string(steam_migration_policy_e policy);
+
+  /**
+   * @brief Decide whether an outer Desktop Steam may enter verified migration.
+   *
+   * @param policy Configured migration policy.
+   * @param opens_big_picture Whether the command opens Big Picture.
+   * @param origin Ownership origin of the target session.
+   * @param backend Backend of the owned target compositor.
+   * @return True for either owned backend when automatic idle migration applies.
+   */
+  bool steam_migration_allowed(steam_migration_policy_e policy, bool opens_big_picture, session_origin_e origin, owned_backend_e backend);
+
+  /**
+   * @brief Policy for temporarily replacing an idle stock Game Mode session.
+   */
+  enum class stock_handoff_policy_e {
+    attach,  ///< Always consume a verified stock Gamescope without changing it.
+    auto_idle,  ///< Hand off verified idle stock Game Mode to an owned compositor.
+  };
+
+  /**
+   * @brief Parse a canonical stock-session handoff policy.
+   *
+   * @param value Configuration text.
+   * @return Parsed policy, or no value for unsupported text.
+   */
+  std::optional<stock_handoff_policy_e> parse_stock_handoff_policy(std::string_view value);
+
+  /**
+   * @brief Return the canonical stock-session handoff policy spelling.
+   *
+   * @param policy Policy to serialize.
+   * @return Lowercase configuration value.
+   */
+  std::string_view to_string(stock_handoff_policy_e policy);
+
+  /**
+   * @brief Action selected for a verified stock Game Mode source.
+   */
+  enum class stock_handoff_action_e {
+    attach,  ///< Preserve and mirror the stock source.
+    handoff_owned,  ///< Stop idle stock Game Mode and start an owned source.
+  };
+
+  /**
+   * @brief Verified activity state of a stock Steam session.
+   */
+  enum class stock_activity_e {
+    idle,  ///< Stock Steam is uniquely verified with no active game.
+    active_game,  ///< A non-reaper process exists in a Steam game scope.
+    unknown,  ///< Required process or scope metadata is ambiguous.
+  };
+
+  /**
+   * @brief Select whether one verified stock source may be handed off.
+   *
+   * @param policy Configured handoff policy.
+   * @param prefer_owned_session Whether the application requested an owned canvas.
+   * @param startup_encoder_preflight Whether this is the startup HDR probe.
+   * @param activity Verified stock Steam activity classification.
+   * @return Attach for active, unknown, or preflight sources; otherwise handoff.
+   */
+  stock_handoff_action_e select_stock_handoff_action(stock_handoff_policy_e policy, bool prefer_owned_session, bool startup_encoder_preflight, stock_activity_e activity);
+
+  /**
+   * @brief Select the optional systemctl job-mode argument.
+   *
+   * Synchronous systemctl operation is the default and is also the only
+   * blocking form supported by `stop`; `--wait` is limited to other verbs.
+   *
+   * @param wait_for_completion Whether the caller must wait for the unit job.
+   * @return No argument for synchronous operation, or `--no-block` otherwise.
+   */
+  std::optional<std::string_view> systemctl_job_mode_argument(bool wait_for_completion);
+
+  /**
+   * @brief Observable lifecycle state of a stock Game Mode handoff.
+   */
+  enum class stock_handoff_state_e {
+    inactive,  ///< No stock handoff is active.
+    assessing,  ///< Stock Steam activity is being verified.
+    attached_active_game,  ///< An active game kept the verified stock source.
+    attached_unknown,  ///< Ambiguous activity kept the verified stock source.
+    lease_acquired,  ///< The crash-recovery lease is durable.
+    stopping_stock,  ///< The user systemd target is stopping.
+    stock_stopped,  ///< The original stock identities disappeared.
+    owned_active,  ///< An owned session is running under the lease.
+    restoring_stock,  ///< The lease is released and stock restoration was requested.
+    restored,  ///< Stock restoration was requested successfully.
+    failed,  ///< Handoff or restore failed safely.
+  };
+
+  /**
+   * @brief Return the stable stock-handoff state spelling.
+   *
+   * @param state State to serialize.
+   * @return Lowercase diagnostic value.
+   */
+  std::string_view to_string(stock_handoff_state_e state);
+
+  /**
+   * @brief Observable state of the latest Steam migration attempt.
+   */
+  enum class steam_migration_state_e {
+    not_needed,  ///< No outer Steam singleton needed migration.
+    checking_idle,  ///< Steam and game-scope metadata are being verified.
+    shutting_down,  ///< A graceful Steam shutdown was requested.
+    migrated,  ///< The verified original Steam process exited normally.
+    blocked_active_game,  ///< A non-reaper process remains in a Steam game scope.
+    blocked_unknown,  ///< Required identity or scope metadata was ambiguous or unreadable.
+    shutdown_timeout,  ///< Steam did not exit within the configured timeout.
+  };
+
+  /**
+   * @brief Return the stable migration-state spelling.
+   *
+   * @param state State to serialize.
+   * @return Lowercase status value.
+   */
+  std::string_view to_string(steam_migration_state_e state);
+
+  /**
+   * @brief Classify one observation while waiting for graceful Steam shutdown.
+   *
+   * @param expected_start_time Start time of the Steam process that received the request.
+   * @param current_start_time Current PID start time, or no value after the PID disappears.
+   * @param deadline_expired Whether the configured wait deadline has expired.
+   * @return Migrated, PID-reuse rejection, timeout, or continued shutdown state.
+   */
+  steam_migration_state_e classify_steam_shutdown_observation(std::uint64_t expected_start_time, std::optional<std::uint64_t> current_start_time, bool deadline_expired);
+
+  /**
    * @brief Policy governing whether SteamShine owns a virtual display.
    */
   enum class virtual_display_mode_e {
@@ -161,6 +347,7 @@ namespace steamos_virtual_session {
     bool prefer_physical_desktop;  ///< Whether a capture-only Desktop app prefers a usable physical compositor over resident Game Mode.
     bool startup_preflight_owned_session;  ///< Whether startup prepared an owned encoder-probe canvas that must survive the first launch decision.
     bool capturable_output_present;  ///< Whether a normal capture target is available.
+    bool live_kwin_available;  ///< Whether a verified live KWin endpoint can host nested Gamescope.
     bool retained_owned_session;  ///< Whether SteamShine owns a compatible retained session.
     bool host_supported;  ///< Whether the host can create an owned Gamescope session.
     bool verified_existing_gamescope_present;  ///< Whether a verified resident Game Mode source is available.
@@ -180,10 +367,10 @@ namespace steamos_virtual_session {
    * Automatic policy normally prefers a verified stock Game Mode source. A
    * capture-only Desktop application instead selects a usable physical
    * compositor after the host has entered Desktop Mode. The first Big Picture
-   * launch preserves a startup encoder-preflight canvas instead of racing a
-   * transient stock Game Mode source. Other Big Picture launches still prefer
-   * verified stock Game Mode, then compatible retained or new owned Gamescope
-   * before physical Desktop. Explicit source policies remain authoritative.
+   * launch never lets a startup encoder-preflight canvas override a verified
+   * stock Game Mode source when KWin is absent. With live KWin, an application
+   * that prefers an owned canvas may instead select fullscreen nested
+   * Gamescope. Explicit source policies remain authoritative.
    *
    * @param input Immutable policy and host-observation inputs.
    * @return Deterministic route and diagnostic reason.
@@ -409,6 +596,9 @@ namespace steamos_virtual_session {
     std::string render_node;  ///< GPU render node shared by game, capture, and encoder.
     std::string source_identity;  ///< Stable owned source identity.
     std::string capture_pixel_format;  ///< Required capture format class such as NV12 or P010.
+    owned_backend_e backend {owned_backend_e::headless};  ///< Owned compositor backend.
+    std::uint64_t host_endpoint_generation {0};  ///< Outer KWin endpoint generation, or zero for headless.
+    bool local_presentation_required {false};  ///< Whether the request requires local presentation.
   };
 
   /**
@@ -472,8 +662,8 @@ namespace steamos_virtual_session {
    *
    * @param help_text Output captured from `gamescope --help`.
    * Modern headless Gamescope receives both nested game dimensions and output
-   * canvas dimensions. Omitting the latter silently selects its 1280x720
-   * default and forces an unintended encode upscale.
+   * canvas dimensions. Wayland-nested Gamescope receives a fullscreen outer
+   * window and keeps the inner display sockets in the private runtime.
    *
    * @param width Normalized nested and output-canvas width.
    * @param height Normalized nested and output-canvas height.
@@ -481,7 +671,8 @@ namespace steamos_virtual_session {
    * @param enable_hdr Whether the client requested HDR output.
    * @param gpu_device PCI vendor/device identifier accepted by Gamescope, if selected.
    * @param error Receives a reason when the advertised option set is insufficient.
+   * @param backend Owned compositor backend to construct.
    * @return Arguments after the executable, or an empty vector on failure.
    */
-  std::vector<std::string> gamescope_arguments(const std::string &help_text, int width, int height, int fps, bool enable_hdr, const std::string &gpu_device, std::string &error);
+  std::vector<std::string> gamescope_arguments(const std::string &help_text, int width, int height, int fps, bool enable_hdr, const std::string &gpu_device, std::string &error, owned_backend_e backend = owned_backend_e::headless);
 }  // namespace steamos_virtual_session

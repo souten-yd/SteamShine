@@ -71,6 +71,35 @@ namespace steam_session {
     }
 
     /**
+     * @brief Determine whether a cgroup contains an exact Steam game scope component.
+     *
+     * Desktop Steam commonly runs in `app-steam@autostart.service`; requiring
+     * the scope suffix and launcher prefix prevents that service from being
+     * mistaken for a running game.
+     *
+     * @param cgroup Raw cgroup membership text.
+     * @return True only for a Steam game `.scope` unit component.
+     */
+    bool has_steam_game_scope_component(const std::string_view cgroup) {
+      size_t component_start {};
+      while (component_start < cgroup.size()) {
+        const auto separator {cgroup.find('/', component_start)};
+        component_start = separator == std::string_view::npos ? cgroup.size() : separator + 1;
+        if (separator == std::string_view::npos) {
+          break;
+        }
+        const auto component_end {cgroup.find_first_of("/\n", component_start)};
+        const auto component {cgroup.substr(component_start, component_end - component_start)};
+        const bool steam_prefix {component.starts_with("app-steam-") || component.starts_with("steam-app-")};
+        if (steam_prefix && component.ends_with(".scope")) {
+          return true;
+        }
+        component_start = component_end == std::string_view::npos ? cgroup.size() : component_end;
+      }
+      return false;
+    }
+
+    /**
      * @brief Match SteamOS vendor Gamescope and Steam launcher sibling units.
      *
      * Stock SteamOS starts Gamescope and Steam in separate services which are
@@ -215,9 +244,10 @@ namespace steam_session {
       const auto executable {std::filesystem::canonical(process_directory / "exe", error)};
       if (error || executable.empty()) {
         record.metadata_readable = false;
-        return record;
+      } else {
+        record.executable_name = executable.filename().string();
+        record.executable_path = executable.string();
       }
-      record.executable_name = executable.filename().string();
       std::ifstream stat_file {process_directory / "stat"};
       const std::string stat_contents {std::istreambuf_iterator<char> {stat_file}, {}};
       record.parent_pid = parent_pid_from_stat(stat_contents);
@@ -228,7 +258,7 @@ namespace steam_session {
       std::ifstream cgroup_file {process_directory / "cgroup"};
       const bool cgroup_readable {static_cast<bool>(cgroup_file)};
       record.cgroup.assign(std::istreambuf_iterator<char> {cgroup_file}, {});
-      record.metadata_readable = record.parent_pid > 0 && record.start_time != 0 && environment_readable && cgroup_readable;
+      record.metadata_readable = record.metadata_readable && record.parent_pid > 0 && record.start_time != 0 && environment_readable && cgroup_readable;
       record.xdg_runtime_directory = environment_value(environment_contents, "XDG_RUNTIME_DIR");
       record.wayland_display = environment_value(environment_contents, "WAYLAND_DISPLAY");
       record.x11_display = environment_value(environment_contents, "DISPLAY");
@@ -274,6 +304,170 @@ namespace steam_session {
       return instance_location_e::outside_target_gamescope;
     }
     return steam_inside_target ? instance_location_e::inside_target_gamescope : instance_location_e::absent;
+  }
+
+  migration_candidate_t assess_idle_desktop_migration(
+    const std::vector<process_record_t> &records,
+    const std::string_view desktop_runtime,
+    const std::string_view desktop_wayland,
+    const int current_uid
+  ) {
+    migration_candidate_t candidate;
+    if (desktop_runtime.empty() || desktop_wayland.empty()) {
+      return candidate;
+    }
+    const process_record_t *steam {};
+    for (const auto &record : records) {
+      if (record.uid != current_uid) {
+        continue;
+      }
+      if (record.executable_name != "steam") {
+        continue;
+      }
+      if (steam || !record.metadata_readable || record.start_time == 0 || record.executable_path.empty()) {
+        return candidate;
+      }
+      steam = &record;
+    }
+    if (!steam || steam->xdg_runtime_directory != desktop_runtime || steam->wayland_display != desktop_wayland) {
+      return candidate;
+    }
+    for (const auto &record : records) {
+      if (record.uid != current_uid) {
+        continue;
+      }
+      if (!has_steam_game_scope_component(record.cgroup)) {
+        continue;
+      }
+      if (!record.metadata_readable) {
+        return candidate;
+      }
+      if (record.executable_name != "reaper") {
+        candidate.result = migration_idle_result_e::active_game;
+        return candidate;
+      }
+    }
+    candidate.result = migration_idle_result_e::idle;
+    candidate.steam_pid = steam->pid;
+    candidate.steam_start_time = steam->start_time;
+    candidate.executable_path = steam->executable_path;
+    candidate.environment = {
+      .steam_pid = steam->pid,
+      .steam_start_time = steam->start_time,
+      .xdg_runtime_directory = steam->xdg_runtime_directory,
+      .wayland_display = steam->wayland_display,
+      .gamescope_wayland_display = steam->gamescope_wayland_display,
+      .x11_display = steam->x11_display,
+      .xauthority = steam->xauthority,
+      .dbus_session_bus_address = steam->dbus_session_bus_address,
+      .xdg_session_type = steam->xdg_session_type,
+      .xdg_current_desktop = steam->xdg_current_desktop,
+    };
+    return candidate;
+  }
+
+  migration_candidate_t inspect_idle_desktop_migration(const std::string_view desktop_runtime, const std::string_view desktop_wayland) {
+#if defined(__linux__)
+    std::error_code error;
+    std::vector<process_record_t> records;
+    for (const auto &entry : std::filesystem::directory_iterator {"/proc", error}) {
+      if (error || !entry.is_directory(error)) {
+        continue;
+      }
+      const auto name {entry.path().filename().string()};
+      if (name.empty() || !std::ranges::all_of(name, [](const unsigned char character) {
+            return std::isdigit(character);
+          })) {
+        continue;
+      }
+      if (const auto record {read_process_record(entry.path())}) {
+        records.emplace_back(*record);
+      }
+    }
+    return assess_idle_desktop_migration(records, desktop_runtime, desktop_wayland, static_cast<int>(::getuid()));
+#else
+    (void) desktop_runtime;
+    (void) desktop_wayland;
+    return {};
+#endif
+  }
+
+  migration_candidate_t assess_idle_stock_session(
+    const std::vector<process_record_t> &records,
+    const target_session_t &target,
+    const int current_uid
+  ) {
+    migration_candidate_t candidate;
+    if (target.gamescope_pid <= 0 || !has_cgroup_unit_component(target.cgroup, "gamescope-session.service")) {
+      return candidate;
+    }
+    const process_record_t *steam {};
+    for (const auto &record : records) {
+      if (record.uid != current_uid || record.executable_name != "steam") {
+        continue;
+      }
+      if (steam || !record.metadata_readable || record.start_time == 0 || !belongs_to_vendor_game_mode(record, target)) {
+        return candidate;
+      }
+      steam = &record;
+    }
+    if (!steam) {
+      return candidate;
+    }
+    for (const auto &record : records) {
+      if (record.uid != current_uid || !has_steam_game_scope_component(record.cgroup)) {
+        continue;
+      }
+      if (!record.metadata_readable) {
+        return candidate;
+      }
+      if (record.executable_name != "reaper") {
+        candidate.result = migration_idle_result_e::active_game;
+        return candidate;
+      }
+    }
+    candidate.result = migration_idle_result_e::idle;
+    candidate.steam_pid = steam->pid;
+    candidate.steam_start_time = steam->start_time;
+    candidate.executable_path = steam->executable_path;
+    candidate.environment = {
+      .steam_pid = steam->pid,
+      .steam_start_time = steam->start_time,
+      .xdg_runtime_directory = steam->xdg_runtime_directory,
+      .wayland_display = steam->wayland_display,
+      .gamescope_wayland_display = steam->gamescope_wayland_display,
+      .x11_display = steam->x11_display,
+      .xauthority = steam->xauthority,
+      .dbus_session_bus_address = steam->dbus_session_bus_address,
+      .xdg_session_type = steam->xdg_session_type,
+      .xdg_current_desktop = steam->xdg_current_desktop,
+    };
+    return candidate;
+  }
+
+  migration_candidate_t inspect_idle_stock_session(const target_session_t &target) {
+#if defined(__linux__)
+    std::error_code error;
+    std::vector<process_record_t> records;
+    for (const auto &entry : std::filesystem::directory_iterator {"/proc", error}) {
+      if (error || !entry.is_directory(error)) {
+        continue;
+      }
+      const auto name {entry.path().filename().string()};
+      if (name.empty() || !std::ranges::all_of(name, [](const unsigned char character) {
+            return std::isdigit(character);
+          })) {
+        continue;
+      }
+      if (const auto record {read_process_record(entry.path())}) {
+        records.emplace_back(*record);
+      }
+    }
+    return assess_idle_stock_session(records, target, static_cast<int>(::getuid()));
+#else
+    (void) target;
+    return {};
+#endif
   }
 
   instance_location_e classify_current_user_instance(const target_session_t &target) {
@@ -411,6 +605,18 @@ namespace steam_session {
       case instance_location_e::outside_target_gamescope:
         return "outside_target_gamescope";
       case instance_location_e::unknown:
+        return "unknown";
+    }
+    return "unknown";
+  }
+
+  std::string_view to_string(const migration_idle_result_e result) {
+    switch (result) {
+      case migration_idle_result_e::idle:
+        return "idle";
+      case migration_idle_result_e::active_game:
+        return "active_game";
+      case migration_idle_result_e::unknown:
         return "unknown";
     }
     return "unknown";

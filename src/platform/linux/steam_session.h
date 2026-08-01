@@ -30,6 +30,7 @@ namespace steam_session {
     int parent_pid {-1};  ///< Parent process ID.
     uint64_t start_time {0};  ///< Kernel process start time used to reject PID reuse.
     std::string executable_name;  ///< Basename of `/proc/<pid>/exe`.
+    std::string executable_path;  ///< Canonical executable path used for a verified graceful shutdown request.
     std::string xdg_runtime_directory;  ///< `XDG_RUNTIME_DIR` environment value.
     std::string wayland_display;  ///< `WAYLAND_DISPLAY` environment value.
     std::string x11_display;  ///< `DISPLAY` environment value.
@@ -68,6 +69,72 @@ namespace steam_session {
     std::string wayland_display;  ///< Target private Wayland display name, when owned.
     std::string cgroup;  ///< Target Gamescope cgroup, when available.
   };
+
+  /**
+   * @brief Result of checking whether Desktop Steam can be migrated safely.
+   */
+  enum class migration_idle_result_e {
+    idle,  ///< One verified Desktop Steam exists and no game process is active.
+    active_game,  ///< A non-reaper process remains in a Steam game scope.
+    unknown,  ///< Steam identity, endpoint, or scope metadata is ambiguous.
+  };
+
+  /**
+   * @brief Verified Desktop Steam process and allow-listed shutdown environment.
+   */
+  struct migration_candidate_t {
+    migration_idle_result_e result {migration_idle_result_e::unknown};  ///< Safety classification.
+    int steam_pid {-1};  ///< Unique Steam PID when verified.
+    uint64_t steam_start_time {0};  ///< Start time binding the candidate against PID reuse.
+    std::string executable_path;  ///< Canonical Steam executable invoked with `-shutdown`.
+    resident_environment_t environment;  ///< Allow-listed original Desktop environment.
+  };
+
+  /**
+   * @brief Assess immutable process metadata for safe Desktop Steam migration.
+   *
+   * A game scope containing only residual `reaper` processes is idle. Any
+   * other process in such a scope blocks migration. Missing metadata,
+   * multiple Steam executables, or endpoint mismatches fail closed.
+   *
+   * @param records Current-user process snapshot.
+   * @param desktop_runtime Verified KWin runtime directory.
+   * @param desktop_wayland Verified KWin Wayland display name.
+   * @param current_uid Required process owner.
+   * @return Candidate and classification.
+   */
+  migration_candidate_t assess_idle_desktop_migration(const std::vector<process_record_t> &records, std::string_view desktop_runtime, std::string_view desktop_wayland, int current_uid);
+
+  /**
+   * @brief Inspect live procfs for a safe idle Desktop Steam candidate.
+   *
+   * @param desktop_runtime Verified KWin runtime directory.
+   * @param desktop_wayland Verified KWin Wayland display name.
+   * @return Candidate and fail-closed classification.
+   */
+  migration_candidate_t inspect_idle_desktop_migration(std::string_view desktop_runtime, std::string_view desktop_wayland);
+
+  /**
+   * @brief Assess whether a verified stock Game Mode Steam session is idle.
+   *
+   * The target must belong to the exact vendor Gamescope unit and Steam must
+   * be the unique current-user singleton in the sibling launcher unit. Any
+   * non-reaper Steam game-scope process reports an active game.
+   *
+   * @param records Current-user process snapshot.
+   * @param target Verified stock Gamescope identity.
+   * @param current_uid Required process owner.
+   * @return Candidate and fail-closed activity classification.
+   */
+  migration_candidate_t assess_idle_stock_session(const std::vector<process_record_t> &records, const target_session_t &target, int current_uid);
+
+  /**
+   * @brief Inspect live procfs for a safe idle stock Game Mode candidate.
+   *
+   * @param target Verified stock Gamescope identity.
+   * @return Candidate and fail-closed activity classification.
+   */
+  migration_candidate_t inspect_idle_stock_session(const target_session_t &target);
 
   /**
    * @brief Classify the current-user Steam singleton relative to one Gamescope target.
@@ -156,4 +223,12 @@ namespace steam_session {
    * @return Lowercase status label.
    */
   std::string_view to_string(instance_location_e location);
+
+  /**
+   * @brief Return the stable idle-migration classification spelling.
+   *
+   * @param result Classification to serialize.
+   * @return Lowercase status label.
+   */
+  std::string_view to_string(migration_idle_result_e result);
 }  // namespace steam_session

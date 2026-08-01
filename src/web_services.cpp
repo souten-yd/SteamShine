@@ -657,6 +657,8 @@ namespace web {
     const auto mode = persisted.contains("steamos_virtual_display_mode") ? persisted.at("steamos_virtual_display_mode") : std::string {steamos_virtual_session::to_string(config::steamos_virtual_display.mode)};
     const auto session_source = persisted.contains("steamos_session_source") ? persisted.at("steamos_session_source") : std::string {steamos_virtual_session::to_string(config::steamos_virtual_display.session_source)};
     const auto local_presentation = persisted.contains("steamos_local_presentation") ? persisted.at("steamos_local_presentation") : std::string {steamos_virtual_session::to_string(config::steamos_virtual_display.local_presentation)};
+    const auto steam_migration = persisted.contains("steamos_steam_migration") ? persisted.at("steamos_steam_migration") : std::string {steamos_virtual_session::to_string(config::steamos_virtual_display.steam_migration)};
+    const auto stock_session_handoff = persisted.contains("steamos_stock_session_handoff") ? persisted.at("steamos_stock_session_handoff") : std::string {steamos_virtual_session::to_string(config::steamos_virtual_display.stock_session_handoff)};
     const auto keep_session_alive = persisted.contains("steamos_keep_session_alive") ? persisted.at("steamos_keep_session_alive") : (config::steamos_virtual_display.keep_session_alive ? "enabled" : "disabled");
     const auto existing_gamescope_pid = persisted.contains("steamos_existing_gamescope_pid") ? persisted.at("steamos_existing_gamescope_pid") : std::to_string(config::steamos_virtual_display.existing_gamescope_pid);
     return {
@@ -668,6 +670,8 @@ namespace web {
       {"steamos_virtual_display_mode", mode},
       {"steamos_session_source", session_source},
       {"steamos_local_presentation", local_presentation},
+      {"steamos_steam_migration", steam_migration},
+      {"steamos_stock_session_handoff", stock_session_handoff},
       {"steamos_keep_session_alive", keep_session_alive},
       {"steamos_existing_gamescope_pid", existing_gamescope_pid},
     };
@@ -699,7 +703,7 @@ namespace web {
     };
   }
 
-  service_result_t ConfigurationService::save_virtual_display(const bool enabled, const std::string_view mode, const std::string_view session_source, const std::string_view local_presentation, const bool keep_session_alive, const int existing_gamescope_pid) const {
+  service_result_t ConfigurationService::save_virtual_display(const bool enabled, const std::string_view mode, const std::string_view session_source, const std::string_view local_presentation, const bool keep_session_alive, const int existing_gamescope_pid, const std::string_view steam_migration, const std::string_view stock_session_handoff) const {
     if (!steamos_virtual_session::parse_virtual_display_mode(mode).has_value()) {
       return {false, "invalid_virtual_display_mode", "Virtual display mode must be off, auto, or force."};
     }
@@ -708,6 +712,12 @@ namespace web {
     }
     if (!steamos_virtual_session::parse_local_presentation_policy(local_presentation).has_value()) {
       return {false, "invalid_steamos_local_presentation", "Local presentation must be auto, off, or mirror."};
+    }
+    if (!steamos_virtual_session::parse_steam_migration_policy(steam_migration).has_value()) {
+      return {false, "invalid_steamos_steam_migration", "Steam migration must be reject or auto_idle."};
+    }
+    if (!steamos_virtual_session::parse_stock_handoff_policy(stock_session_handoff).has_value()) {
+      return {false, "invalid_steamos_stock_session_handoff", "Stock session handoff must be attach or auto_idle."};
     }
     if (existing_gamescope_pid < 0) {
       return {false, "invalid_steamos_existing_gamescope_pid", "Gamescope PID must be zero or a positive process ID."};
@@ -719,6 +729,8 @@ namespace web {
       persisted["steamos_virtual_display_mode"] = std::string {mode};
       persisted["steamos_session_source"] = std::string {session_source};
       persisted["steamos_local_presentation"] = std::string {local_presentation};
+      persisted["steamos_steam_migration"] = std::string {steam_migration};
+      persisted["steamos_stock_session_handoff"] = std::string {stock_session_handoff};
       persisted["steamos_keep_session_alive"] = keep_session_alive ? "enabled" : "disabled";
       persisted["steamos_existing_gamescope_pid"] = std::to_string(existing_gamescope_pid);
 
@@ -763,6 +775,8 @@ namespace web {
       {"virtual_display_mode", std::string {steamos_virtual_session::to_string(config::steamos_virtual_display.mode)}},
       {"steamos_session_source", std::string {steamos_virtual_session::to_string(config::steamos_virtual_display.session_source)}},
       {"steamos_local_presentation", std::string {steamos_virtual_session::to_string(config::steamos_virtual_display.local_presentation)}},
+      {"steamos_steam_migration", std::string {steamos_virtual_session::to_string(config::steamos_virtual_display.steam_migration)}},
+      {"steamos_stock_session_handoff", std::string {steamos_virtual_session::to_string(config::steamos_virtual_display.stock_session_handoff)}},
       {"steamos_keep_session_alive", config::steamos_virtual_display.keep_session_alive},
       {"game_gpu", config::steamos_virtual_display.game_gpu},
       {"capture_gpu", config::steamos_virtual_display.capture_gpu},
@@ -806,6 +820,10 @@ namespace web {
       {"virtual_display_source_process_start_time", virtual_session.source_process_start_time},
       {"steam_location", virtual_session.steam_location},
       {"migration_required", virtual_session.migration_required},
+      {"steam_migration_state", std::string {steamos_virtual_session::to_string(virtual_session.migration_state)}},
+      {"stock_handoff_state", std::string {steamos_virtual_session::to_string(virtual_session.stock_handoff_state)}},
+      {"stock_handoff_reason", virtual_session.stock_handoff_reason},
+      {"stock_handoff_generation", virtual_session.stock_handoff_generation},
       {"app_launch_rejected_reason", virtual_session.app_launch_rejected_reason},
       {"app_launch_rejected_message", virtual_session.app_launch_rejected_message},
       {"requested_display_endpoint", std::string {steamos_virtual_session::to_string(config::steamos_virtual_display.session_source)}},
@@ -820,6 +838,8 @@ namespace web {
       {"active_display_endpoint_environment_start_time", virtual_session.display_endpoint.environment_source_start_time},
       {"active_display_endpoint_generation", virtual_session.display_endpoint.generation},
       {"capture_selection_reason", virtual_session.selection_reason},
+      {"owned_gamescope_backend", std::string {steamos_virtual_session::to_string(virtual_session.owned_backend)}},
+      {"presentation_reason", virtual_session.presentation_reason},
       {"presentation", std::string {steamos_virtual_session::to_string(virtual_session.presentation)}},
       {"local_presenter_active", virtual_session.local_presenter_active},
       {"local_presented_frames", virtual_session.local_presented_frames},

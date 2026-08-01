@@ -264,7 +264,7 @@ service_process_executable() {
   readlink -f -- "${proc_root}/${pid}/exe" 2>/dev/null
 }
 verify_service() {
-  local require_active="$1" load_state main_pid process_executable expected_executable exec_start
+  local require_active="$1" load_state main_pid process_executable expected_executable exec_start attempt
   "${DRY_RUN}" && return 0
   [[ -f "$(service_file)" ]] || die 'SteamShine autostart verification failed: unit_missing.' "${EXIT_SERVICE}"
   service_enabled || die 'SteamShine autostart verification failed: unit_not_enabled.' "${EXIT_SERVICE}"
@@ -277,10 +277,20 @@ verify_service() {
   [[ "${exec_start}" == *"${PREFIX}/bin/steamshine"* && "${exec_start}" == *"${CONFIG_FILE}"* ]] || die 'SteamShine autostart verification failed: ExecStart does not reference the installed binary and configuration.' "${EXIT_SERVICE}"
   if "${require_active}"; then
     service_active || die 'SteamShine autostart verification failed: service_failed.' "${EXIT_SERVICE}"
-    main_pid="$(service_main_pid)"
-    [[ "${main_pid}" =~ ^[1-9][0-9]*$ ]] || die 'SteamShine autostart verification failed: MainPID is unavailable.' "${EXIT_SERVICE}"
-    process_executable="$(service_process_executable "${main_pid}" || true)"
     expected_executable="$(readlink -f -- "${PREFIX}/bin/steamshine")"
+    # A Type=simple unit becomes active when systemd forks its executor, just
+    # before that process finishes execve() into the new immutable binary.
+    # Bound the identity check so a successful update is not rejected during
+    # this short transition, while a genuinely stale process still fails.
+    for ((attempt = 0; attempt < 50; ++attempt)); do
+      main_pid="$(service_main_pid)"
+      process_executable="$(service_process_executable "${main_pid}" || true)"
+      if [[ "${main_pid}" =~ ^[1-9][0-9]*$ && "${process_executable}" == "${expected_executable}" ]]; then
+        break
+      fi
+      sleep 0.05
+    done
+    [[ "${main_pid}" =~ ^[1-9][0-9]*$ ]] || die 'SteamShine autostart verification failed: MainPID is unavailable.' "${EXIT_SERVICE}"
     [[ "${process_executable}" == "${expected_executable}" ]] || die 'SteamShine autostart verification failed: wrong_binary.' "${EXIT_SERVICE}"
   fi
 }
