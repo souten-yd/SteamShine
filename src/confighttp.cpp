@@ -85,7 +85,7 @@ namespace confighttp {
 
   std::string steamshine_page_content_security_policy(const std::string_view host_header, const std::uint16_t terminal_ws_port) {
     constexpr std::string_view prefix {"default-src 'self'; connect-src 'self'"};
-    constexpr std::string_view suffix {"; style-src 'self'; style-src-attr 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'self';"};
+    constexpr std::string_view suffix {"; style-src 'self' 'unsafe-inline'; style-src-attr 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'self';"};
     std::string_view hostname {host_header};
 
     if (hostname.starts_with('[')) {
@@ -764,8 +764,8 @@ namespace confighttp {
    *
    * @param response The HTTP response object.
    * @param request The HTTP request object.
-   * @note Inline scripts and style elements remain forbidden. Style attributes are allowed because
-   *       live metric bars and the bundled terminal renderer update element geometry at runtime.
+   * @note Inline scripts remain forbidden. Inline styles are allowed because live metric bars and
+   *       the bundled xterm renderer create style elements and update geometry at runtime.
    */
   void getSteamshinePage(const resp_https_t &response, const req_https_t &request) {
     if (!config::sunshine.steamshine_web_ui_enabled) {
@@ -2323,7 +2323,7 @@ namespace confighttp {
   }
 
   /**
-   * @brief Report whether a Terminal shell session is currently running.
+   * @brief Report every retained Terminal shell session.
    *
    * @param response The HTTP response object.
    * @param request The HTTP request object.
@@ -2336,11 +2336,22 @@ namespace confighttp {
     // for every other route, has no WebSocket support); the frontend needs
     // this to know where to connect since it cannot be the same port as the
     // page it was loaded from.
-    send_steamshine_response(response, {{"running", steamshine_terminal::running()}, {"ws_port", net::map_port(PORT_STEAMSHINE_TERMINAL)}});
+    nlohmann::json sessions = nlohmann::json::array();
+    bool any_running {false};
+    for (const auto &session : steamshine_terminal::list()) {
+      any_running = any_running || session.running;
+      sessions.push_back({
+        {"id", session.id},
+        {"name", session.name},
+        {"created_at", session.created_at},
+        {"running", session.running},
+      });
+    }
+    send_steamshine_response(response, {{"running", any_running}, {"sessions", std::move(sessions)}, {"ws_port", net::map_port(PORT_STEAMSHINE_TERMINAL)}});
   }
 
   /**
-   * @brief Start the single Terminal shell session if one is not already running.
+   * @brief Create a new independent Terminal shell session.
    *
    * @param response The HTTP response object.
    * @param request The HTTP request object.
@@ -2349,11 +2360,16 @@ namespace confighttp {
     if (require_steamshine_mutation(response, request).empty()) {
       return;
     }
-    send_steamshine_response(response, {{"running", steamshine_terminal::ensure_started()}});
+    const auto session_id {steamshine_terminal::create()};
+    if (session_id.empty()) {
+      response->write(SimpleWeb::StatusCode::server_error_internal_server_error);
+      return;
+    }
+    send_steamshine_response(response, {{"status", true}, {"running", true}, {"id", session_id}});
   }
 
   /**
-   * @brief Terminate the current Terminal shell session, if any.
+   * @brief Terminate one Terminal shell session.
    *
    * @param response The HTTP response object.
    * @param request The HTTP request object.
@@ -2362,7 +2378,15 @@ namespace confighttp {
     if (require_steamshine_mutation(response, request).empty()) {
       return;
     }
-    steamshine_terminal::stop();
+    nlohmann::json input;
+    if (!read_steamshine_json(response, request, input)) {
+      return;
+    }
+    const auto session_id {input.value("session_id", "")};
+    if (session_id.empty() || !steamshine_terminal::stop(session_id)) {
+      not_found(response, request, "Terminal session was not found");
+      return;
+    }
     send_steamshine_response(response, {{"status", true}});
   }
 
@@ -2942,18 +2966,20 @@ namespace confighttp {
       // callback can still be executing (or start) once they go away.
       std::mutex write_mutex;
       bool authenticated {false};
+      std::string terminal_session_id;
       std::uint64_t subscription_id {0};
 
       struct unsubscribe_guard_t {
         bool &authenticated;
+        std::string &terminal_session_id;
         std::uint64_t &subscription_id;
 
         ~unsubscribe_guard_t() {
           if (authenticated) {
-            steamshine_terminal::unsubscribe(subscription_id);
+            steamshine_terminal::unsubscribe(terminal_session_id, subscription_id);
           }
         }
-      } unsubscribe_guard {authenticated, subscription_id};
+      } unsubscribe_guard {authenticated, terminal_session_id, subscription_id};
 
       boost::beast::flat_buffer read_buffer;
       while (true) {
@@ -2971,8 +2997,11 @@ namespace confighttp {
           if (!session.has_value() || payload.value("type", "") != "auth" || payload.value("csrf_token", "") != session->csrf_token) {
             break;
           }
-          steamshine_terminal::ensure_started();
-          subscription_id = steamshine_terminal::subscribe([&ws, &write_mutex](std::string_view chunk) {
+          terminal_session_id = payload.value("session_id", "");
+          if (!steamshine_terminal::running(terminal_session_id)) {
+            break;
+          }
+          subscription_id = steamshine_terminal::subscribe(terminal_session_id, [&ws, &write_mutex](std::string_view chunk) {
             std::lock_guard lock {write_mutex};
             try {
               ws.write(boost::asio::buffer(chunk.data(), chunk.size()));
@@ -2980,14 +3009,25 @@ namespace confighttp {
               // The read loop will observe the same failure and clean up.
             }
           });
+          if (subscription_id == 0) {
+            break;
+          }
+          {
+            std::lock_guard lock {write_mutex};
+            ws.text(true);
+            constexpr std::string_view ready_message {R"({"type":"ready"})"};
+            ws.write(boost::asio::buffer(ready_message));
+            ws.binary(true);
+          }
           authenticated = true;
           continue;
         }
         const auto type {payload.value("type", "")};
         if (type == "input") {
-          steamshine_terminal::write_input(payload.value("data", ""));
+          steamshine_terminal::write_input(terminal_session_id, payload.value("data", ""));
         } else if (type == "resize") {
           steamshine_terminal::resize(
+            terminal_session_id,
             static_cast<unsigned short>(std::clamp(payload.value("cols", 80), 1, 500)),
             static_cast<unsigned short>(std::clamp(payload.value("rows", 24), 1, 200))
           );
@@ -3172,7 +3212,7 @@ namespace confighttp {
 
     // SteamShine Terminal: a dedicated Secure WebSocket acceptor (the shared
     // Simple-Web-Server fork used above has no WebSocket support) carrying a
-    // single PTY-backed shell session (see steamshine_terminal.cpp). The
+    // multiple PTY-backed shell sessions (see steamshine_terminal.cpp). The
     // handshake's `steamshine_session` cookie is validated before the
     // WebSocket handshake completes, and no input/output is allowed until the
     // client proves CSRF-token possession with its first message -- the same
@@ -3228,5 +3268,6 @@ namespace confighttp {
 
     tcp.join();
     terminal_ws_thread.join();
+    steamshine_terminal::stop_all();
   }
 }  // namespace confighttp

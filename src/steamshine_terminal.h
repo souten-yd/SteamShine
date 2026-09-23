@@ -1,66 +1,109 @@
 /**
  * @file src/steamshine_terminal.h
- * @brief Single-session PTY-backed shell for the SteamShine web Terminal.
+ * @brief Multi-session PTY-backed shells for the SteamShine web Terminal.
  *
- * The shell runs as the same unprivileged user as the Sunshine process
- * itself -- no capability is raised for this feature, unlike
- * `steamshine_gpuctl`. Authenticating the WebSocket transport (session
- * cookie + CSRF handshake) is the caller's responsibility, in
- * `confighttp.cpp`; this module only owns the PTY lifecycle and a small
- * output ring buffer so a reconnecting browser can see what it missed.
+ * Each session runs as the same unprivileged user as Sunshine. The HTTP and
+ * WebSocket layers own authentication; this module owns PTY lifecycle,
+ * session metadata, and bounded output replay for reconnecting browsers.
  */
 #pragma once
 
 #include <cstdint>
 #include <functional>
+#include <string>
 #include <string_view>
+#include <vector>
 
 namespace steamshine_terminal {
 
-  using output_callback_t = std::function<void(std::string_view)>;
+  using output_callback_t = std::function<void(std::string_view)>;  ///< Callback invoked for one PTY output chunk.
 
   /**
-   * @brief Start the single global shell session if one is not already running.
+   * @brief Public state for one web terminal session.
+   */
+  struct session_snapshot_t {
+    std::string id;  ///< Stable identifier used by the HTTP and WebSocket APIs.
+    std::string name;  ///< Short user-facing session name.
+    std::uint64_t created_at;  ///< Unix creation time in seconds.
+    bool running;  ///< Whether the login shell is still alive.
+  };
+
+  /**
+   * @brief Create and start a new login-shell session.
    *
-   * @return True when a session is running after this call.
+   * @return New session identifier, or an empty string when the PTY could not be created.
    */
-  bool ensure_started();
+  std::string create();
 
   /**
-   * @brief Terminate the current shell session, if any, and wait for cleanup to finish.
-   */
-  void stop();
-
-  /**
-   * @brief Whether a shell session is currently running.
-   */
-  bool running();
-
-  /**
-   * @brief Write raw bytes to the shell's stdin. No-op when no session is running.
-   */
-  void write_input(std::string_view data);
-
-  /**
-   * @brief Resize the PTY window. No-op when no session is running.
-   */
-  void resize(unsigned short cols, unsigned short rows);
-
-  /**
-   * @brief Subscribe to PTY output chunks.
+   * @brief Return snapshots for every retained session, oldest first.
    *
-   * The current backlog (bounded ring buffer, most-recent ~64 KiB) is
-   * delivered synchronously to `callback` before this call returns, so a
-   * reconnecting client immediately sees what it missed.
+   * Exited sessions remain visible until explicitly stopped so the UI can
+   * explain that they ended instead of silently losing the tab.
    *
-   * @param callback Invoked with each output chunk as it arrives.
-   * @return Subscription id to pass to unsubscribe().
+   * @return Current session snapshots.
    */
-  std::uint64_t subscribe(output_callback_t callback);
+  std::vector<session_snapshot_t> list();
 
   /**
-   * @brief Remove a previously registered subscription.
+   * @brief Terminate and remove one session.
+   *
+   * @param session_id Session to terminate.
+   * @return True when the session existed and was removed.
    */
-  void unsubscribe(std::uint64_t id);
+  bool stop(std::string_view session_id);
+
+  /**
+   * @brief Terminate and remove every session.
+   */
+  void stop_all();
+
+  /**
+   * @brief Test whether one session is running.
+   *
+   * @param session_id Session to inspect.
+   * @return True when the session exists and its shell is alive.
+   */
+  bool running(std::string_view session_id);
+
+  /**
+   * @brief Write raw bytes to one shell's standard input.
+   *
+   * @param session_id Destination session.
+   * @param data Bytes to write.
+   * @return True when all bytes were written to a running PTY.
+   */
+  bool write_input(std::string_view session_id, std::string_view data);
+
+  /**
+   * @brief Resize one PTY window.
+   *
+   * @param session_id Destination session.
+   * @param cols Terminal column count.
+   * @param rows Terminal row count.
+   * @return True when the resize was applied to a running PTY.
+   */
+  bool resize(std::string_view session_id, unsigned short cols, unsigned short rows);
+
+  /**
+   * @brief Subscribe to one session's PTY output.
+   *
+   * The bounded backlog is delivered synchronously before live output. The
+   * callback is serialized with unsubscribe(), allowing a connection to
+   * destroy callback state immediately after unsubscribe() returns.
+   *
+   * @param session_id Session to observe.
+   * @param callback Callback receiving backlog and live chunks.
+   * @return Subscription identifier, or zero when the session does not exist.
+   */
+  std::uint64_t subscribe(std::string_view session_id, output_callback_t callback);
+
+  /**
+   * @brief Remove a subscription from one session.
+   *
+   * @param session_id Session holding the subscription.
+   * @param subscription_id Identifier returned by subscribe().
+   */
+  void unsubscribe(std::string_view session_id, std::uint64_t subscription_id);
 
 }  // namespace steamshine_terminal

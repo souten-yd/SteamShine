@@ -723,6 +723,7 @@ TEST_F(ConfigHttpTest, GetPageNoRedirectWhenUsernameEmpty) {
 TEST(ConfigHttpHelpersTest, SteamshinePageContentSecurityPolicyAllowsOnlyRequestedTerminalHost) {
   const auto localhost_policy = confighttp::steamshine_page_content_security_policy("localhost:47990", 47991);
   EXPECT_NE(localhost_policy.find("connect-src 'self' wss://localhost:47991;"), std::string::npos);
+  EXPECT_NE(localhost_policy.find("style-src 'self' 'unsafe-inline';"), std::string::npos);
 
   const auto ipv4_policy = confighttp::steamshine_page_content_security_policy("192.168.68.71:47990", 47991);
   EXPECT_NE(ipv4_policy.find("connect-src 'self' wss://192.168.68.71:47991;"), std::string::npos);

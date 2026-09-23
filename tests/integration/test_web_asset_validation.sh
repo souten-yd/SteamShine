@@ -9,7 +9,7 @@ trap 'rm -rf -- "${test_root}"' EXIT
 web_root="${test_root}/web"
 steamshine_root="${test_root}/steamshine"
 mkdir -p "${web_root}/assets/locale" "${web_root}/.vite"
-mkdir -p "${steamshine_root}"
+mkdir -p "${steamshine_root}/vendor/xterm"
 
 cat >"${web_root}/index.html" <<'EOF'
 <!doctype html><html><head><link href="assets/app.css" rel="stylesheet"></head><body><script src="assets/app.js"></script></body></html>
@@ -21,7 +21,10 @@ printf '{"index.html":{"file":"assets/app.js","css":["assets/app.css"]}}\n' >"${
 printf '<!doctype html><link rel="stylesheet" href="/steamshine/app.css"><script type="module" src="/steamshine/app.js"></script>\n' >"${steamshine_root}/index.html"
 printf 'body { color: white; }\n' >"${steamshine_root}/app.css"
 printf 'console.log("steamshine validation");\n' >"${steamshine_root}/app.js"
-printf '{"version":1,"files":{"index.html":{},"app.css":{},"app.js":{}}}\n' >"${steamshine_root}/manifest.json"
+printf '/* xterm css */\n' >"${steamshine_root}/vendor/xterm/xterm.css"
+printf 'console.log("xterm");\n' >"${steamshine_root}/vendor/xterm/xterm.js"
+printf 'console.log("xterm fit");\n' >"${steamshine_root}/vendor/xterm/addon-fit.js"
+printf '{"version":1,"files":{"index.html":{},"app.css":{},"app.js":{},"vendor/xterm/xterm.css":{},"vendor/xterm/xterm.js":{},"vendor/xterm/addon-fit.js":{}}}\n' >"${steamshine_root}/manifest.json"
 
 "${root_dir}/scripts/validate-web-assets.py" "${web_root}" --steamshine-root "${steamshine_root}" --report "${test_root}/web-static-report.json"
 grep -Fq '"unresolved_template_markers": false' "${test_root}/web-static-report.json"
@@ -32,6 +35,14 @@ if "${root_dir}/scripts/validate-web-assets.py" "${web_root}" >/dev/null 2>&1; t
   echo 'Expected unresolved EJS template marker to fail validation.' >&2
   exit 1
 fi
+
+# The dynamically loaded fit addon is required for usable terminal geometry.
+rm "${steamshine_root}/vendor/xterm/addon-fit.js"
+if "${root_dir}/scripts/validate-web-assets.py" "${web_root}" --steamshine-root "${steamshine_root}" >/dev/null 2>&1; then
+  echo 'Expected missing xterm fit addon to fail SteamShine validation.' >&2
+  exit 1
+fi
+printf 'console.log("xterm fit");\n' >"${steamshine_root}/vendor/xterm/addon-fit.js"
 
 # SteamShine's generated manifest is a separate package gate.
 rm "${steamshine_root}/manifest.json"

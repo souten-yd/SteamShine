@@ -8,6 +8,7 @@ let csrfToken = '';
 let pollTimer = null;
 let terminalSocket = null;
 let terminalInstance = null;
+let terminalCleanup = null;
 
 /** @brief Escape arbitrary strings before putting them into a rendered template. */
 function escapeHtml(value) {
@@ -32,6 +33,11 @@ async function json(response) {
 /** @brief Stop any page-scoped background timers before rendering a new page. */
 function stopPolling() {
   if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+  if (terminalCleanup) {
+    const cleanup = terminalCleanup;
+    terminalCleanup = null;
+    cleanup();
+  }
 }
 
 /** @brief Show a transient toast message. */
@@ -900,61 +906,306 @@ async function renderClients() {
   }));
 }
 
-/** @brief Render the full PTY web terminal (xterm.js over WebSocket). */
+const TERMINAL_ACTIVE_SESSION_KEY = 'steamshine:terminal:active-session';
+
+/** @brief Create a PTY session and make it the active browser tab. */
+async function createTerminalSession() {
+  const result = await json(await api('/terminal/start', { method: 'POST', body: '{}' }));
+  sessionStorage.setItem(TERMINAL_ACTIVE_SESSION_KEY, result.id);
+  return result.id;
+}
+
+/** @brief Stop one PTY session after confirming the destructive action. */
+async function stopTerminalSession(sessionId) {
+  if (!await confirmDialog({ title: 'End terminal session', message: 'This stops the shell and every process started from it.', confirmLabel: 'End session' })) return false;
+  await json(await api('/terminal/stop', { method: 'POST', body: JSON.stringify({ session_id: sessionId }) }));
+  if (sessionStorage.getItem(TERMINAL_ACTIVE_SESSION_KEY) === sessionId) sessionStorage.removeItem(TERMINAL_ACTIVE_SESSION_KEY);
+  return true;
+}
+
+/** @brief Format a retained terminal session for a compact tab label. */
+function terminalSessionLabel(session) {
+  return session.name || `Shell ${String(session.id).replace(/^terminal-/, '')}`;
+}
+
+/** @brief Render a ControlDeck-style multi-session PTY terminal. */
 async function renderTerminal() {
-  const status = await json(await api('/terminal/status'));
-  shell(`<div class="page-header"><div><h2>Terminal</h2></div>
-      <div class="btn-row"><button id="term-restart" class="btn-ghost btn-sm">Restart session</button></div></div>
-    <div class="terminal-wrap">
-      <div class="terminal-keybar">
-        <button data-key="Escape">Esc</button><button data-key="Tab">Tab</button><button data-key="ControlLeft">Ctrl</button>
-        <button data-key="ArrowUp">↑</button><button data-key="ArrowDown">↓</button><button data-key="ArrowLeft">←</button><button data-key="ArrowRight">→</button>
-        <button data-seq="">^C</button><button data-seq="">^D</button>
+  let status = await json(await api('/terminal/status'));
+  let sessions = Array.isArray(status.sessions) ? status.sessions : [];
+  if (sessions.length === 0) {
+    try {
+      await createTerminalSession();
+      status = await json(await api('/terminal/status'));
+      sessions = Array.isArray(status.sessions) ? status.sessions : [];
+    } catch (error) {
+      toast(error.message, 'error');
+    }
+  }
+
+  const rememberedId = sessionStorage.getItem(TERMINAL_ACTIVE_SESSION_KEY);
+  let active = sessions.find((session) => session.id === rememberedId && session.running);
+  if (!active) active = sessions.find((session) => session.running);
+  if (active) sessionStorage.setItem(TERMINAL_ACTIVE_SESSION_KEY, active.id);
+
+  const tabs = sessions.map((session) => `<div class="terminal-tab${active?.id === session.id ? ' active' : ''}${session.running ? '' : ' exited'}">
+      <button type="button" class="terminal-tab-main" data-terminal-session="${escapeHtml(session.id)}" ${session.running ? '' : 'disabled'}>
+        <span class="terminal-session-dot"></span><span>${escapeHtml(terminalSessionLabel(session))}</span>
+      </button>
+      <button type="button" class="terminal-tab-close" data-terminal-close="${escapeHtml(session.id)}" aria-label="End ${escapeHtml(terminalSessionLabel(session))}">×</button>
+    </div>`).join('');
+
+  shell(`<div class="terminal-root" id="terminal-root">
+      <div class="terminal-header">
+        <h2 class="terminal-title">Terminal</h2>
+        <div class="terminal-tabs" id="terminal-tabs">${tabs}</div>
+        <div class="terminal-actions">
+          <span class="terminal-connection" id="term-connection"><span></span>${active ? 'Connecting…' : 'No active session'}</span>
+          <button type="button" id="term-copy" class="btn-ghost btn-sm" ${active ? '' : 'disabled'}>Copy</button>
+          <button type="button" id="term-paste" class="btn-ghost btn-sm" ${active ? '' : 'disabled'}>Paste</button>
+          <button type="button" id="term-new" class="btn-primary btn-sm">+ New</button>
+          <button type="button" id="term-end" class="btn-danger btn-sm" ${active ? '' : 'disabled'}>End</button>
+        </div>
       </div>
-      <div id="term-host" class="terminal-host"></div>
-      <div class="notice" id="term-notice"></div>
+      ${active ? `<div class="terminal-stage">
+        <div id="term-host" class="terminal-host" data-terminal-host></div>
+        <div class="terminal-keybar" data-terminal-helper>
+          <button type="button" data-key="Escape">Esc</button><button type="button" data-key="Tab">Tab</button><button type="button" data-key="ControlLeft">Ctrl</button>
+          <button type="button" data-key="ArrowUp">↑</button><button type="button" data-key="ArrowDown">↓</button><button type="button" data-key="ArrowLeft">←</button><button type="button" data-key="ArrowRight">→</button>
+          <button type="button" data-seq="enter">Enter</button><button type="button" data-seq="interrupt">^C</button><button type="button" data-seq="eof">^D</button>
+          <button type="button" data-seq="suspend">^Z</button><button type="button" data-seq="clear">^L</button>
+        </div>
+      </div>` : '<div class="terminal-empty"><p>No running terminal session.</p><button type="button" class="btn-primary" data-terminal-create>Start a session</button></div>'}
     </div>
     <link rel="stylesheet" href="/steamshine/vendor/xterm/xterm.css">`, { authenticated: true, activeId: 'terminal' });
 
+  const rerender = () => render().catch(showError);
+  const startSession = async () => {
+    try { await createTerminalSession(); rerender(); } catch (error) { toast(error.message, 'error'); }
+  };
+  document.querySelector('#term-new').onclick = startSession;
+  document.querySelector('[data-terminal-create]')?.addEventListener('click', startSession);
+  document.querySelectorAll('[data-terminal-session]').forEach((button) => button.addEventListener('click', () => {
+    sessionStorage.setItem(TERMINAL_ACTIVE_SESSION_KEY, button.dataset.terminalSession);
+    rerender();
+  }));
+  document.querySelectorAll('[data-terminal-close]').forEach((button) => button.addEventListener('click', async () => {
+    try { if (await stopTerminalSession(button.dataset.terminalClose)) rerender(); } catch (error) { toast(error.message, 'error'); }
+  }));
+
+  if (!active) return;
+  document.querySelector('#term-end').onclick = async () => {
+    try { if (await stopTerminalSession(active.id)) rerender(); } catch (error) { toast(error.message, 'error'); }
+  };
+
   await loadScriptOnce('/steamshine/vendor/xterm/xterm.js');
+  await loadScriptOnce('/steamshine/vendor/xterm/addon-fit.js');
+  const root = document.querySelector('#terminal-root');
   const host = document.querySelector('#term-host');
-  const notice = document.querySelector('#term-notice');
-  terminalInstance = new window.Terminal({ convertEol: true, fontSize: 13, theme: { background: '#050506', foreground: '#f2f3f5' } });
+  const connection = document.querySelector('#term-connection');
+  const ctrlButton = document.querySelector('[data-key="ControlLeft"]');
+  const fitAddon = new window.FitAddon.FitAddon();
+  terminalInstance = new window.Terminal({
+    convertEol: true,
+    cursorBlink: true,
+    cursorStyle: 'bar',
+    fontFamily: '"Cascadia Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace',
+    fontSize: matchMedia('(max-width: 600px)').matches ? 12 : 13,
+    lineHeight: 1.15,
+    scrollback: 10000,
+    scrollOnUserInput: true,
+    theme: { background: '#050506', foreground: '#f2f3f5', cursor: '#f2f3f5', selectionBackground: '#64748b80' },
+  });
+  terminalInstance.loadAddon(fitAddon);
   terminalInstance.open(host);
 
+  let disposed = false;
+  let reconnectTimer = null;
+  let reconnectAttempt = 0;
+  let fitFrame = 0;
   let ctrlActive = false;
-  document.querySelectorAll('.terminal-keybar [data-key]').forEach((b) => b.onclick = () => {
-    if (b.dataset.key === 'ControlLeft') { ctrlActive = !ctrlActive; b.classList.toggle('active', ctrlActive); return; }
-    const map = { Escape: '', Tab: '\t', ArrowUp: '[A', ArrowDown: '[B', ArrowLeft: '[D', ArrowRight: '[C' };
-    sendTerminalInput(map[b.dataset.key] || '');
-  });
-  document.querySelectorAll('.terminal-keybar [data-seq]').forEach((b) => b.onclick = () => sendTerminalInput(b.dataset.seq));
+  let composing = false;
+  let sessionRunning = active.running;
+  let socketGeneration = 0;
 
+  /** @brief Update the compact connection badge without moving terminal geometry. */
+  const setConnectionState = (label, state) => {
+    connection.lastChild.textContent = label;
+    connection.dataset.state = state;
+  };
+
+  /** @brief Apply the visible viewport height and fit xterm on the next frame. */
+  const scheduleFit = () => {
+    if (disposed || composing || fitFrame) return;
+    fitFrame = requestAnimationFrame(() => {
+      fitFrame = 0;
+      if (disposed || composing || !host.isConnected) return;
+      const viewport = window.visualViewport;
+      const visibleBottom = (viewport?.offsetTop || 0) + (viewport?.height || innerHeight);
+      const bottomChrome = matchMedia('(max-width: 860px)').matches ? 68 : 16;
+      root.style.height = `${Math.max(260, visibleBottom - root.getBoundingClientRect().top - bottomChrome)}px`;
+      fitAddon.fit();
+    });
+  };
+
+  /** @brief Send input to the active shell, applying the one-shot Ctrl helper. */
+  const sendInput = (data) => {
+    if (!data) return;
+    if (ctrlActive && data.length === 1) {
+      const code = data.toUpperCase().charCodeAt(0);
+      if (code >= 64 && code <= 95) data = String.fromCharCode(code & 31);
+      ctrlActive = false;
+      ctrlButton.classList.remove('active');
+    }
+    if (terminalSocket?.readyState === WebSocket.OPEN) terminalSocket.send(JSON.stringify({ type: 'input', data }));
+  };
+
+  terminalInstance.onData(sendInput);
+  terminalInstance.onResize(({ cols, rows }) => {
+    if (terminalSocket?.readyState === WebSocket.OPEN) terminalSocket.send(JSON.stringify({ type: 'resize', cols, rows }));
+  });
+
+  document.querySelectorAll('.terminal-keybar button').forEach((button) => {
+    const keepFocus = (event) => event.preventDefault();
+    button.addEventListener('pointerdown', keepFocus);
+    button.addEventListener('mousedown', keepFocus);
+  });
+  document.querySelectorAll('.terminal-keybar [data-key]').forEach((button) => button.addEventListener('click', () => {
+    if (button.dataset.key === 'ControlLeft') {
+      ctrlActive = !ctrlActive;
+      button.classList.toggle('active', ctrlActive);
+      return;
+    }
+    const keyMap = { Escape: '\x1b', Tab: '\t', ArrowUp: '\x1b[A', ArrowDown: '\x1b[B', ArrowLeft: '\x1b[D', ArrowRight: '\x1b[C' };
+    sendInput(keyMap[button.dataset.key] || '');
+  }));
+  const helperSequences = { enter: '\r', interrupt: '\x03', eof: '\x04', suspend: '\x1a', clear: '\x0c' };
+  document.querySelectorAll('.terminal-keybar [data-seq]').forEach((button) => button.addEventListener('click', () => sendInput(helperSequences[button.dataset.seq] || '')));
+
+  document.querySelector('#term-copy').onclick = async () => {
+    const selected = terminalInstance.getSelection();
+    if (!selected) { toast('Select terminal text first.'); return; }
+    try { await navigator.clipboard.writeText(selected); terminalInstance.clearSelection(); toast('Copied.', 'ok'); }
+    catch { toast('Clipboard access is unavailable. Use the browser copy command.', 'error'); }
+  };
+  document.querySelector('#term-paste').onclick = async () => {
+    try {
+      let text = await navigator.clipboard.readText();
+      text = text.replace(/\r?\n/g, '\r');
+      if (text.includes('\r')) text = `\x1b[200~${text}\x1b[201~`;
+      sendInput(text);
+      terminalInstance.focus();
+    } catch {
+      terminalInstance.focus();
+      toast('Clipboard access is unavailable. Use the keyboard paste command.', 'error');
+    }
+  };
+
+  /** @brief Open a generation-guarded WebSocket and replay its session history. */
   const connect = () => {
+    if (disposed || !sessionRunning) return;
+    const previous = terminalSocket;
+    terminalSocket = null;
+    if (previous) previous.close();
+    const generation = ++socketGeneration;
     const socket = new WebSocket(`wss://${location.hostname}:${status.ws_port}/api/steamshine/v1/terminal/stream`);
     socket.binaryType = 'arraybuffer';
     terminalSocket = socket;
-    socket.onopen = () => { socket.send(JSON.stringify({ type: 'auth', csrf_token: csrfToken })); notice.textContent = ''; notice.className = 'notice'; };
+    host.classList.add('replaying');
+    terminalInstance.reset();
+    setConnectionState(reconnectAttempt ? 'Reconnecting…' : 'Connecting…', 'connecting');
+    socket.onopen = () => {
+      if (disposed || generation !== socketGeneration || socket !== terminalSocket) return;
+      reconnectAttempt = 0;
+      socket.send(JSON.stringify({ type: 'auth', csrf_token: csrfToken, session_id: active.id }));
+      scheduleFit();
+    };
     socket.onmessage = (event) => {
-      if (typeof event.data === 'string') return;
+      if (disposed || generation !== socketGeneration || socket !== terminalSocket) return;
+      if (typeof event.data === 'string') {
+        let control;
+        try { control = JSON.parse(event.data); } catch { return; }
+        if (control.type === 'ready') {
+          terminalInstance.write('', () => {
+            if (disposed || generation !== socketGeneration) return;
+            host.classList.remove('replaying');
+            setConnectionState('Connected', 'open');
+            scheduleFit();
+          });
+        }
+        return;
+      }
       terminalInstance.write(new Uint8Array(event.data));
     };
-    socket.onclose = () => { notice.textContent = 'Disconnected. Reconnecting…'; notice.className = 'notice'; setTimeout(connect, 1500); };
-    socket.onerror = () => { notice.textContent = 'Connection error.'; notice.className = 'notice error'; };
+    socket.onclose = () => {
+      if (disposed || generation !== socketGeneration || socket !== terminalSocket) return;
+      terminalSocket = null;
+      setConnectionState('Reconnecting…', 'connecting');
+      const delay = Math.min(5000, 250 * (2 ** Math.min(reconnectAttempt++, 5)));
+      reconnectTimer = setTimeout(connect, delay);
+    };
+    socket.onerror = () => {
+      if (generation === socketGeneration) setConnectionState('Connection error', 'error');
+    };
   };
+
+  const resizeObserver = new ResizeObserver(scheduleFit);
+  resizeObserver.observe(root);
+  resizeObserver.observe(host);
+  const onViewportChange = () => scheduleFit();
+  const onVisibilityChange = () => {
+    if (document.visibilityState !== 'visible' || disposed) return;
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+    connect();
+  };
+  window.addEventListener('resize', onViewportChange);
+  window.addEventListener('online', onVisibilityChange);
+  window.visualViewport?.addEventListener('resize', onViewportChange);
+  window.visualViewport?.addEventListener('scroll', onViewportChange);
+  document.addEventListener('visibilitychange', onVisibilityChange);
+  const textarea = host.querySelector('.xterm-helper-textarea');
+  const onCompositionStart = () => { composing = true; };
+  const onCompositionEnd = () => {
+    composing = false;
+    requestAnimationFrame(() => requestAnimationFrame(scheduleFit));
+  };
+  textarea?.addEventListener('compositionstart', onCompositionStart);
+  textarea?.addEventListener('compositionend', onCompositionEnd);
+
+  terminalCleanup = () => {
+    disposed = true;
+    socketGeneration += 1;
+    clearTimeout(reconnectTimer);
+    cancelAnimationFrame(fitFrame);
+    resizeObserver.disconnect();
+    window.removeEventListener('resize', onViewportChange);
+    window.removeEventListener('online', onVisibilityChange);
+    window.visualViewport?.removeEventListener('resize', onViewportChange);
+    window.visualViewport?.removeEventListener('scroll', onViewportChange);
+    document.removeEventListener('visibilitychange', onVisibilityChange);
+    textarea?.removeEventListener('compositionstart', onCompositionStart);
+    textarea?.removeEventListener('compositionend', onCompositionEnd);
+    if (terminalSocket) terminalSocket.close();
+    terminalSocket = null;
+    terminalInstance?.dispose();
+    terminalInstance = null;
+  };
+
+  scheduleFit();
   connect();
-
-  terminalInstance.onData((data) => sendTerminalInput(data));
-  terminalInstance.onResize(({ cols, rows }) => { if (terminalSocket?.readyState === WebSocket.OPEN) terminalSocket.send(JSON.stringify({ type: 'resize', cols, rows })); });
-
-  document.querySelector('#term-restart').onclick = async () => {
-    if (!await confirmDialog({ title: 'Restart terminal session', message: 'This ends the current shell session and starts a new one.' })) return;
-    try { await json(await api('/terminal/stop', { method: 'POST', body: '{}' })); terminalInstance.clear(); } catch (error) { toast(error.message, 'error'); }
-  };
-}
-
-function sendTerminalInput(data) {
-  if (terminalSocket?.readyState === WebSocket.OPEN) terminalSocket.send(JSON.stringify({ type: 'input', data }));
+  pollTimer = setInterval(async () => {
+    try {
+      const current = await json(await api('/terminal/status'));
+      const session = current.sessions?.find((candidate) => candidate.id === active.id);
+      if (!session?.running) {
+        sessionRunning = false;
+        setConnectionState('Session exited', 'error');
+        terminalSocket?.close();
+      }
+    } catch {
+      // WebSocket reconnect state already communicates temporary outages.
+    }
+  }, 4000);
 }
 
 const loadedScripts = new Set();

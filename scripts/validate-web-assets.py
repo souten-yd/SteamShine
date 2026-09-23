@@ -70,7 +70,15 @@ def is_server_route(value):
 def validate_steamshine_assets(asset_root):
     """Validate the generated SteamShine entry page, bundles, and manifest."""
     errors = 0
-    required = ("index.html", "app.css", "app.js", "manifest.json")
+    required = (
+        "index.html",
+        "app.css",
+        "app.js",
+        "vendor/xterm/xterm.css",
+        "vendor/xterm/xterm.js",
+        "vendor/xterm/addon-fit.js",
+        "manifest.json",
+    )
     for name in required:
         if not (asset_root / name).is_file():
             errors += fail(f"missing SteamShine asset: {name}")

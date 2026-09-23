@@ -27,6 +27,7 @@ const successScreenshotFile = join(reportDirectory, 'steamshine-monitor.png');
 const configFile = join(homeDirectory, 'sunshine.conf');
 const consoleErrors = [];
 const failedRequests = [];
+const websocketErrors = [];
 const securityResults = {};
 const responsiveViewports = [];
 let server;
@@ -169,6 +170,17 @@ try {
 
   const steamshineContext = await browser.newContext({ ignoreHTTPSErrors: true });
   const steamshinePage = await steamshineContext.newPage();
+  steamshinePage.on('console', (message) => {
+    if (message.type() === 'error' && !/status of (400|401|429)/.test(message.text())) consoleErrors.push(message.text());
+  });
+  steamshinePage.on('requestfailed', (request) => {
+    if (request.url().startsWith(baseUrl) && !request.url().includes('/api/steamshine/v1/session') && !request.url().includes('/api/steamshine/v1/pairing/pin') && !request.url().includes('/api/steamshine/v1/config/virtual-display') && !request.url().includes('/api/steamshine/v1/stream/profiles')) {
+      failedRequests.push(`${request.method()} ${request.url()}`);
+    }
+  });
+  steamshinePage.on('websocket', (socket) => {
+    socket.on('socketerror', (error) => websocketErrors.push(`${socket.url()}: ${error}`));
+  });
   const steamshineResponse = await steamshinePage.goto(`${baseUrl}/`, { waitUntil: 'domcontentloaded' });
   if (steamshineResponse?.status() !== 200) {
     throw new Error(`SteamShine root returned ${steamshineResponse?.status()}.`);
@@ -193,20 +205,71 @@ try {
     responsiveViewports.push({ ...viewport, status: response.status(), horizontal_overflow: horizontalOverflow });
   }
   await steamshinePage.screenshot({ path: successScreenshotFile, fullPage: true });
+
+  /** Exercise the real PTY transport, session tabs, replay, and mobile geometry. */
+  await steamshinePage.setViewportSize({ width: 1280, height: 800 });
+  const terminalResponse = await steamshinePage.goto(`${baseUrl}/steamshine/terminal`, { waitUntil: 'domcontentloaded' });
+  if (terminalResponse?.status() !== 200) throw new Error(`SteamShine Terminal returned ${terminalResponse?.status()}.`);
+  await steamshinePage.getByRole('heading', { name: 'Terminal', exact: true }).waitFor({ timeout: 5000 });
+  try {
+    await steamshinePage.waitForFunction(() => document.querySelector('#term-connection')?.dataset.state === 'open', undefined, { timeout: 10000 });
+  } catch (error) {
+    const diagnostics = await steamshinePage.evaluate(async () => ({
+      connectionState: document.querySelector('#term-connection')?.dataset.state,
+      connectionLabel: document.querySelector('#term-connection')?.textContent?.trim(),
+      terminalStatus: await fetch('/api/steamshine/v1/terminal/status').then((response) => response.json()),
+    }));
+    throw new Error(`Terminal WebSocket did not become ready: ${JSON.stringify({ diagnostics, websocketErrors })}`, { cause: error });
+  }
+  const firstTerminalId = await steamshinePage.locator('.terminal-tab.active [data-terminal-session]').getAttribute('data-terminal-session');
+  if (!firstTerminalId) throw new Error('Terminal did not create its initial session tab.');
+  const terminalInput = steamshinePage.locator('.xterm-helper-textarea');
+  await terminalInput.pressSequentially("printf 'STEAMSHINE_BROWSER_TERMINAL_OK\\n'", { delay: 1 });
+  await terminalInput.press('Enter');
+  await steamshinePage.waitForFunction(() => document.querySelector('.xterm-rows')?.textContent?.includes('STEAMSHINE_BROWSER_TERMINAL_OK'), undefined, { timeout: 5000 });
+
+  await steamshinePage.locator('#term-new').click();
+  await steamshinePage.waitForFunction(() => document.querySelectorAll('.terminal-tab').length === 2, undefined, { timeout: 5000 });
+  await steamshinePage.waitForFunction(() => document.querySelector('#term-connection')?.dataset.state === 'open', undefined, { timeout: 10000 });
+  await steamshinePage.locator(`[data-terminal-session="${firstTerminalId}"]`).click();
+  await steamshinePage.waitForFunction(() => document.querySelector('#term-connection')?.dataset.state === 'open', undefined, { timeout: 10000 });
+  await steamshinePage.waitForFunction(() => document.querySelector('.xterm-rows')?.textContent?.includes('STEAMSHINE_BROWSER_TERMINAL_OK'), undefined, { timeout: 5000 });
+
+  await steamshinePage.setViewportSize({ width: 320, height: 700 });
+  await steamshinePage.waitForFunction(() => {
+    const root = document.querySelector('#terminal-root');
+    const viewportBottom = (window.visualViewport?.offsetTop ?? 0) + (window.visualViewport?.height ?? window.innerHeight);
+    return root !== null && root.getBoundingClientRect().bottom <= viewportBottom + 1;
+  }, undefined, { timeout: 5000 });
+  const terminalMobileGeometry = await steamshinePage.evaluate(() => ({
+    horizontalOverflow: document.documentElement.scrollWidth > window.innerWidth,
+    helperTargets: [...document.querySelectorAll('.terminal-keybar button')].map((button) => {
+      const rect = button.getBoundingClientRect();
+      return { width: rect.width, height: rect.height };
+    }),
+    rootBottom: document.querySelector('#terminal-root')?.getBoundingClientRect().bottom ?? Number.POSITIVE_INFINITY,
+    viewportBottom: (window.visualViewport?.offsetTop ?? 0) + (window.visualViewport?.height ?? window.innerHeight),
+  }));
+  if (terminalMobileGeometry.horizontalOverflow
+    || terminalMobileGeometry.helperTargets.some(({ width, height }) => width < 44 || height < 44)
+    || terminalMobileGeometry.rootBottom > terminalMobileGeometry.viewportBottom + 1) {
+    throw new Error(`SteamShine Terminal mobile geometry failed: ${JSON.stringify(terminalMobileGeometry)}`);
+  }
+  securityResults.terminal_multiple_sessions = true;
+  securityResults.terminal_history_replay = true;
+  securityResults.terminal_mobile_geometry = terminalMobileGeometry;
+
+  await steamshinePage.locator('#term-end').click();
+  await steamshinePage.getByRole('alertdialog').getByRole('button', { name: 'End session' }).click();
+  await steamshinePage.waitForFunction(() => document.querySelectorAll('.terminal-tab').length === 1, undefined, { timeout: 5000 });
+  await steamshinePage.setViewportSize({ width: 800, height: 1280 });
+
   const concurrentUpstreamResponse = await authenticatedPage.reload({ waitUntil: 'networkidle' });
   if (concurrentUpstreamResponse?.status() !== 200) {
     throw new Error(`Upstream session did not remain valid with SteamShine open: ${concurrentUpstreamResponse?.status()}.`);
   }
   const concurrentSteamshineStatus = await steamshinePage.evaluate(async () => (await fetch('/api/steamshine/v1/session')).status);
   if (concurrentSteamshineStatus !== 200) throw new Error('SteamShine session did not remain valid with upstream open.');
-  steamshinePage.on('console', (message) => {
-    if (message.type() === 'error' && !/status of (400|401|429)/.test(message.text())) consoleErrors.push(message.text());
-  });
-  steamshinePage.on('requestfailed', (request) => {
-    if (request.url().startsWith(baseUrl) && !request.url().includes('/api/steamshine/v1/session') && !request.url().includes('/api/steamshine/v1/pairing/pin') && !request.url().includes('/api/steamshine/v1/config/virtual-display') && !request.url().includes('/api/steamshine/v1/stream/profiles')) {
-      failedRequests.push(`${request.method()} ${request.url()}`);
-    }
-  });
   const steamshineCookies = await steamshineContext.cookies(baseUrl);
   const sessionCookie = steamshineCookies.find((cookie) => cookie.name === 'steamshine_session');
   if (!sessionCookie?.secure || !sessionCookie.httpOnly || sessionCookie.sameSite !== 'Strict') {
@@ -330,10 +393,10 @@ try {
   if (!securityResults.csp_header.includes("default-src 'self'")) {
     throw new Error('SteamShine Monitor is missing its restrictive Content-Security-Policy header.');
   }
-  if (!securityResults.csp_header.includes("style-src 'self'") || !securityResults.csp_header.includes("style-src-attr 'unsafe-inline'")) {
-    throw new Error('SteamShine Monitor CSP does not narrowly permit required runtime style attributes.');
+  if (!securityResults.csp_header.includes("style-src 'self' 'unsafe-inline'") || !securityResults.csp_header.includes("style-src-attr 'unsafe-inline'")) {
+    throw new Error('SteamShine Monitor CSP does not permit the terminal renderer runtime styles.');
   }
-  if (!securityResults.csp_header.includes("connect-src 'self' wss://127.0.0.1:48991")) {
+  if (!securityResults.csp_header.includes(`connect-src 'self' wss://127.0.0.1:${basePort + 2}`)) {
     throw new Error('SteamShine Monitor CSP does not permit its same-host terminal WebSocket.');
   }
   const appAssetResponse = await steamshinePage.request.get(`${baseUrl}/steamshine/app.js`);
@@ -504,7 +567,7 @@ try {
 } catch (error) {
   if (browser) {
     const pages = browser.contexts().flatMap((context) => context.pages());
-    if (pages[0]) await pages[0].screenshot({ path: screenshotFile, fullPage: true }).catch(() => {});
+    if (pages.at(-1)) await pages.at(-1).screenshot({ path: screenshotFile, fullPage: true }).catch(() => {});
   }
   await writeFile(join(reportDirectory, 'web-browser-e2e-report.json'), JSON.stringify({
     browser: 'chromium',
@@ -512,6 +575,7 @@ try {
     error: String(error),
     console_errors: consoleErrors,
     failed_requests: failedRequests,
+    websocket_errors: websocketErrors,
     screenshot: screenshotFile,
   }, null, 2) + '\n');
   throw error;

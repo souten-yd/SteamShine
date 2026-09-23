@@ -21,7 +21,14 @@ def main() -> int:
     args = parser.parse_args()
     source = args.source.resolve()
     output = args.output.resolve()
-    required = ("index.html", "app.css", "app.js")
+    required = (
+        "index.html",
+        "app.css",
+        "app.js",
+        "vendor/xterm/xterm.css",
+        "vendor/xterm/xterm.js",
+        "vendor/xterm/addon-fit.js",
+    )
     for name in required:
         if not (source / name).is_file():
             raise SystemExit(f"missing SteamShine frontend source: {source / name}")
