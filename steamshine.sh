@@ -11,6 +11,7 @@ BUILD_DIR="${ROOT_DIR}/cmake-build-steamos"
 CONFIG_FILE="${HOME}/.config/steamshine/sunshine.conf"
 STATE_DIR="${HOME}/.local/state/steamshine"
 DRY_RUN=false NON_INTERACTIVE=false ASSUME_YES=false VERBOSE=false QUIET=false FORCE=false NO_START=false NO_BUILD=false NO_PACKAGES=false NO_SERVICE=false PURGE=false REMOVE_DEPENDENCIES=false CLEAN=false HARDWARE_INTERACTIVE=false AUTO_RELEASE=false BUILD_TYPE=Release
+RUNTIME_HELPER_CHANGED=false
 GAME_GPU="" CAPTURE_GPU="" ENCODER_GPU="" GAMESCOPE_PATH="gamescope" DEFAULT_WIDTH=1920 DEFAULT_HEIGHT=1080 DEFAULT_FPS=60
 CHANNEL="stable" PR_NUMBER="" RELEASE_TAG="" ARTIFACT_PATH=""
 
@@ -168,6 +169,54 @@ gamescope_guard_executable() { printf '%s\n' "${PREFIX}/libexec/steamshine/steam
 decky_helper_source() { printf '%s\n' "${PREFIX}/share/steamshine/current/scripts/steamshine-decky-helper.sh"; }
 decky_helper_executable() { printf '%s\n' '/var/lib/steamshine/helpers/steamshine-decky-helper'; }
 decky_sudoers_file() { printf '%s\n' '/etc/sudoers.d/steamshine-decky'; }
+runtime_helper_source() { printf '%s\n' "${PREFIX}/share/steamshine/current/scripts/steamshine-runtime-helper.sh"; }
+runtime_helper_executable() { printf '%s\n' '/var/lib/steamshine/helpers/steamshine-runtime-helper'; }
+runtime_sudoers_file() { printf '%s\n' '/etc/sudoers.d/steamshine-runtime'; }
+
+# Install a root-owned, fixed-operation helper that validates and writes the
+# selected hardware profile without granting privileges to SteamShine itself.
+install_runtime_helper() {
+  is_steamos_or_arch || return 0
+  local source helper sudoers temporary username
+  source="$(runtime_helper_source)"
+  helper="$(runtime_helper_executable)"
+  sudoers="$(runtime_sudoers_file)"
+  username="$(id -un)"
+  [[ -x "${source}" ]] || return 0
+  [[ "${username}" =~ ^[A-Za-z0-9_-]+$ ]] || { say 'Runtime capability helper skipped: unsupported local user name.'; return 0; }
+  if [[ -x "${helper}" ]] && [[ "$(stat -c %u:%a -- "${helper}" 2>/dev/null)" == 0:755 ]] && sudo -n "${helper}" authorize 2>/dev/null; then
+    if cmp -s -- "${source}" "${helper}"; then
+      return 0
+    elif "${NON_INTERACTIVE}"; then
+      say 'The root-owned runtime helper is older than this release; run repair interactively to refresh it.'
+      return 0
+    fi
+    sudo -v || { say 'Runtime helper update authorization was not granted; the older helper remains installed.'; return 0; }
+  elif sudo -n true 2>/dev/null; then
+    :
+  else
+    if "${NON_INTERACTIVE}"; then
+      say 'GPU profile writes remain unavailable; run SteamShine repair interactively once to authorize its fixed runtime helper.'
+      return 0
+    fi
+    sudo -v || { say 'Runtime capability helper authorization was not granted; GPU profile writes remain unavailable.'; return 0; }
+  fi
+  temporary="$(mktemp)"
+  cat >"${temporary}" <<EOF
+Cmnd_Alias STEAMSHINE_RUNTIME = ${helper} authorize, ${helper} apply-profile *, ${helper} remove-helper
+${username} ALL=(root) NOPASSWD: STEAMSHINE_RUNTIME
+EOF
+  if ! visudo -cf "${temporary}" >/dev/null; then
+    rm -f -- "${temporary}"
+    die 'Generated runtime helper sudoers policy is invalid.' "${EXIT_SERVICE}"
+  fi
+  run sudo /usr/bin/install -d -m 0755 -o root -g root "$(dirname -- "${helper}")"
+  run sudo /usr/bin/install -m 0755 -o root -g root "${source}" "${helper}"
+  run sudo /usr/bin/install -m 0440 -o root -g root "${temporary}" "${sudoers}"
+  rm -f -- "${temporary}"
+  run sudo -n "${helper}" authorize
+  RUNTIME_HELPER_CHANGED=true
+}
 
 # Install a root-owned, fixed-argument privilege boundary for the Addon tab.
 # Failure to authorize does not break streaming; the UI remains read-only and
@@ -500,6 +549,7 @@ install() {
     say 'SteamShine is installed; the systemd user service was not changed'
     return
   fi
+  install_runtime_helper
   install_decky_helper
   install_gamescope_session_guard
   install_service
@@ -688,6 +738,7 @@ update() {
     say 'SteamShine was updated; the systemd user service was not changed'
     return
   fi
+  install_runtime_helper
   install_decky_helper
   install_service
   install_gamescope_session_guard
@@ -711,7 +762,9 @@ repair() {
   configure_recommended
   migrate_existing_apps
   "${NO_SERVICE}" && { say 'SteamShine files were repaired; the systemd user service was not changed'; return; }
+  install_runtime_helper
   install_decky_helper
+  "${RUNTIME_HELPER_CHANGED}" && restart_required=true
   service_active && active_before=true || true
   if "${active_before}"; then
     main_pid="$(service_main_pid)"
@@ -746,6 +799,11 @@ uninstall() {
   if [[ -x "$(decky_helper_executable)" ]]; then
     if ! run sudo -n "$(decky_helper_executable)" remove-helper; then
       say 'Privileged helper cleanup needs authorization; run SteamShine repair interactively before uninstalling to refresh its policy.'
+    fi
+  fi
+  if [[ -x "$(runtime_helper_executable)" ]]; then
+    if ! run sudo -n "$(runtime_helper_executable)" remove-helper; then
+      say 'Runtime helper cleanup needs authorization; run SteamShine repair interactively before uninstalling to refresh its policy.'
     fi
   fi
   run rm -f "${PREFIX}/bin/steamshine" "${PREFIX}/bin/steamshine-input-visualizer"

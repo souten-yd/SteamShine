@@ -421,7 +421,7 @@ namespace config {
     // Comma-separated list of additional origins. Default includes localhost variants and web UI port.
     std::vector<std::string> csrf_allowed_origins;  ///< Additional origins allowed by CSRF validation.
 
-    std::string steamshine_gpu_active_profile;  ///< Name of the GPU/CPU performance profile applied at last activation.
+    std::string steamshine_gpu_active_profile;  ///< Name of the GPU/CPU performance profile selected for verified activation and startup reapplication.
     std::string steamshine_gpu_profiles;  ///< JSON-encoded array of custom GPU/CPU performance profiles.
   };
 

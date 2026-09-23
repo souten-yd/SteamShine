@@ -319,11 +319,15 @@ namespace steamshine_hwmonitor {
     return snapshot;
   }
 
-  void apply_selected_profile_power_cap(metrics_snapshot_t &snapshot, const std::optional<double> selected_power_cap_watts) {
+  void annotate_selected_profile_power_cap(metrics_snapshot_t &snapshot, const std::optional<double> selected_power_cap_watts) {
     if (!snapshot.gpu || !selected_power_cap_watts || !std::isfinite(*selected_power_cap_watts) || *selected_power_cap_watts <= 0.0) {
       return;
     }
-    snapshot.gpu->power_cap_watts = *selected_power_cap_watts;
+    snapshot.gpu->selected_power_cap_watts = *selected_power_cap_watts;
+    if (snapshot.gpu->power_cap_watts) {
+      const double tolerance {std::max(1.0, *selected_power_cap_watts * 0.005)};
+      snapshot.gpu->selected_power_cap_applied = std::abs(*snapshot.gpu->power_cap_watts - *selected_power_cap_watts) <= tolerance;
+    }
   }
 
   void to_json(nlohmann::json &json, const gpu_snapshot_t &value) {
@@ -337,6 +341,8 @@ namespace steamshine_hwmonitor {
       {"fan_rpm", value.fan_rpm},
       {"power_watts", value.power_watts},
       {"power_cap_watts", value.power_cap_watts},
+      {"selected_power_cap_watts", value.selected_power_cap_watts},
+      {"selected_power_cap_applied", value.selected_power_cap_applied},
     };
   }
 

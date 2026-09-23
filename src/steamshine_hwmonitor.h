@@ -45,6 +45,8 @@ namespace steamshine_hwmonitor {
     std::optional<int> fan_rpm;  ///< hwmon `fan1_input`, when present.
     std::optional<double> power_watts;  ///< hwmon `power1_average`, when present.
     std::optional<double> power_cap_watts;  ///< hwmon `power1_cap`, when present.
+    std::optional<double> selected_power_cap_watts;  ///< Power limit requested by the selected GPU profile.
+    std::optional<bool> selected_power_cap_applied;  ///< Whether the live hwmon cap matches the selected limit.
   };
 
   /**
@@ -93,15 +95,15 @@ namespace steamshine_hwmonitor {
   metrics_snapshot_t sample();
 
   /**
-   * @brief Use the GPU tab's selected preset limit for Monitor's power cap.
+   * @brief Annotate live Monitor telemetry with the GPU tab's selected limit.
    *
-   * A missing, zero, or negative preset value preserves the live hwmon cap so
-   * unsupported or stale profile selections do not erase valid telemetry.
+   * The live hwmon cap is never overwritten. When both values are present,
+   * this also records whether the driver-confirmed cap matches the selection.
    *
    * @param snapshot Monitor snapshot to update.
    * @param selected_power_cap_watts Selected preset limit, when resolvable.
    */
-  void apply_selected_profile_power_cap(metrics_snapshot_t &snapshot, std::optional<double> selected_power_cap_watts);
+  void annotate_selected_profile_power_cap(metrics_snapshot_t &snapshot, std::optional<double> selected_power_cap_watts);
 
   /**
    * @brief Serialize a metrics snapshot to JSON (found via ADL from `nlohmann::json`).

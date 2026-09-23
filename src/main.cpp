@@ -39,6 +39,7 @@
 #endif
 #include "process.h"
 #include "steamos_virtual_session.h"
+#include "steamshine_gpuctl.h"
 #include "system_tray.h"
 #include "upnp.h"
 #include "video.h"
@@ -318,6 +319,12 @@ int main(int argc, char *argv[]) {
 
     return fn->second(argv[0], config::sunshine.cmd.argc, config::sunshine.cmd.argv);
   }
+
+#if defined(__linux__)
+  if (!steamshine_gpuctl::active_profile_name().empty()) {
+    steamshine_gpuctl::reapply_active_profile();
+  }
+#endif
 
   // Adding guard here first as it also performs recovery after crash,
   // otherwise people could theoretically end up without display output.

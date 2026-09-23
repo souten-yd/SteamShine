@@ -178,24 +178,26 @@ TEST(WebServicesTest, StructuresDiagnosticLogsForAutomatedAnalysis) {
            << "[2026-09-23 10:00:03.000]: Info: SteamShine Web action: POST /api/steamshine/v1/terminal/start\n"
            << "[2026-09-23 10:00:04.000]: Error: [wayland] desktop socket unavailable\n"
            << "[2026-09-23 10:00:05.000]: Info: SteamShine Web action: POST /api/steamshine/v1/lifecycle/restart\n"
-           << "[2026-09-23 10:00:06.000]: Fatal: terminal websocket failed\n";
+           << "[2026-09-23 10:00:06.000]: Error: GPU_PROFILE_APPLY_FAILED profile=Silent failed_fields=[power_cap_watts]\n"
+           << "[2026-09-23 10:00:07.000]: Fatal: terminal websocket failed\n";
   }
   config::sunshine.log_file = temporary_log.string();
 
   const web::DiagnosticService diagnostics;
-  const auto snapshot = diagnostics.snapshot(65536U, 6U, 0U);
+  const auto snapshot = diagnostics.snapshot(65536U, 7U, 0U);
   ASSERT_TRUE(snapshot.is_object()) << snapshot.dump();
   ASSERT_EQ(snapshot.at("schema_version"), 1);
   ASSERT_TRUE(snapshot.at("log").is_object()) << snapshot.dump();
   ASSERT_TRUE(snapshot.at("log").at("entries").is_array()) << snapshot.dump();
-  ASSERT_EQ(snapshot.at("log").at("entries").size(), 6U);
+  ASSERT_EQ(snapshot.at("log").at("entries").size(), 7U);
   ASSERT_TRUE(snapshot.at("log").at("entries").at(0).is_object()) << snapshot.dump();
   EXPECT_EQ(snapshot.at("log").at("entries").at(0).at("component"), "gamescope");
   EXPECT_EQ(snapshot.at("log").at("entries").at(3).at("component"), "desktop");
   EXPECT_EQ(snapshot.at("log").at("entries").at(2).at("component"), "terminal");
+  EXPECT_EQ(snapshot.at("log").at("entries").at(5).at("component"), "gpu");
   EXPECT_EQ(snapshot.at("log").at("counts").at("info"), 4U);
   EXPECT_EQ(snapshot.at("log").at("counts").at("warning"), 1U);
-  EXPECT_EQ(snapshot.at("log").at("counts").at("error"), 1U);
+  EXPECT_EQ(snapshot.at("log").at("counts").at("error"), 2U);
   EXPECT_EQ(snapshot.at("log").at("counts").at("fatal"), 1U);
   ASSERT_EQ(snapshot.at("actions").size(), 3U);
   EXPECT_EQ(snapshot.at("actions").at(0).at("method"), "POST");
@@ -203,10 +205,11 @@ TEST(WebServicesTest, StructuresDiagnosticLogsForAutomatedAnalysis) {
   EXPECT_EQ(snapshot.at("actions").at(1).at("path"), "/api/steamshine/v1/terminal/start");
   EXPECT_EQ(snapshot.at("actions").at(2).at("path"), "/api/steamshine/v1/lifecycle/restart");
   EXPECT_LT(snapshot.at("actions").at(0).at("timestamp").get<std::string>(), snapshot.at("actions").at(2).at("timestamp").get<std::string>());
-  ASSERT_EQ(snapshot.at("operation_timeline").size(), 3U);
+  ASSERT_EQ(snapshot.at("operation_timeline").size(), 4U);
   EXPECT_EQ(snapshot.at("operation_timeline").at(0).at("component"), "gamescope");
   EXPECT_EQ(snapshot.at("operation_timeline").at(1).at("severity"), "error");
-  EXPECT_EQ(snapshot.at("operation_timeline").at(2).at("event"), "terminal");
+  EXPECT_EQ(snapshot.at("operation_timeline").at(2).at("component"), "gpu");
+  EXPECT_EQ(snapshot.at("operation_timeline").at(3).at("event"), "terminal");
   EXPECT_TRUE(snapshot.at("recent_sessions").empty());
 
   config::sunshine.log_file = original_log_file;

@@ -2065,7 +2065,7 @@ namespace confighttp {
     }
     auto snapshot {steamshine_hwmonitor::sample()};
     const auto profile {steamshine_gpuctl::active_profile()};
-    steamshine_hwmonitor::apply_selected_profile_power_cap(
+    steamshine_hwmonitor::annotate_selected_profile_power_cap(
       snapshot,
       profile ? std::optional<double> {profile->power_cap_watts} : std::nullopt
     );
@@ -2324,7 +2324,7 @@ namespace confighttp {
     }
     const auto result {steamshine_gpuctl::activate_profile(request->path_match[1])};
     if (!result.success) {
-      bad_request(response, request, "Profile not found");
+      bad_request(response, request, result.error.empty() ? "GPU profile could not be applied" : result.error);
       return;
     }
     send_steamshine_response(response, result);

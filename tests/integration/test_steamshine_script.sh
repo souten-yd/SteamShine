@@ -168,6 +168,11 @@ vaapi_output="$(STEAMSHINE_DRI_ROOTS="${fake_dri}" "${root_dir}/steamshine.sh" v
 grep -Fq 'VAAPI_AMD_DRIVER_AVAILABLE' <<<"${vaapi_output}"
 
 "${root_dir}/steamshine.sh" --help >/dev/null
+if "${root_dir}/scripts/steamshine-runtime-helper.sh" authorize >/dev/null 2>&1; then
+  echo 'The runtime helper must reject an unprivileged invocation.' >&2
+  exit 1
+fi
+grep -Fq 'steamshine-runtime-helper.sh' "${root_dir}/scripts/package-steamos-artifact.sh"
 grep -Fq 'Environment=XDG_RUNTIME_DIR=%t' "${root_dir}/packaging/linux/steamshine.service.in"
 grep -Fq 'ExecStart=%h/.local/bin/steamshine %h/.config/steamshine/sunshine.conf' "${root_dir}/packaging/linux/steamshine.service.in"
 grep -Fq 'WantedBy=default.target' "${root_dir}/packaging/linux/steamshine.service.in"
@@ -208,6 +213,7 @@ release_archive="steamshine-steamos-x86_64-${release_commit}.tar.zst"
 mkdir -p "${test_root}/release-assets" "${test_root}/release-bin" "${test_root}/release-home/run" "${test_root}/release-stage"
 cp -a "${test_root}/stage/." "${test_root}/release-stage/"
 install -m 755 "${root_dir}/scripts/steamshine-decky-helper.sh" "${test_root}/release-stage/scripts/steamshine-decky-helper.sh"
+install -m 755 "${root_dir}/scripts/steamshine-runtime-helper.sh" "${test_root}/release-stage/scripts/steamshine-runtime-helper.sh"
 tar --zstd -C "${test_root}/release-stage" -cf "${test_root}/release-assets/${release_archive}" .
 (cd "${test_root}/release-assets" && sha256sum "${release_archive}" >"${release_archive}.sha256")
 cat >"${test_root}/release-assets/latest.json" <<EOF

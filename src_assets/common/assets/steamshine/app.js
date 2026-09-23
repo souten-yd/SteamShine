@@ -288,9 +288,13 @@ async function renderMonitor() {
 
     const coreBars = (m.cpu.per_cpu || []).map((p) => `<div class="core-bar${p >= 90 ? ' hot' : ''}" title="${p.toFixed(0)}%"><span style="height:${p}%"></span></div>`).join('');
 
+    const selectedCapStatus = m.gpu?.selected_power_cap_watts != null
+      ? `<div class="row"><span class="k">Selected profile limit</span><span class="v num">${m.gpu.selected_power_cap_watts.toFixed(0)} W <span class="badge ${m.gpu.selected_power_cap_applied ? 'badge-ok' : 'badge-warn'}">${m.gpu.selected_power_cap_applied ? 'applied' : 'NOT APPLIED'}</span></span></div>`
+      : '';
     const gpuSection = m.gpu ? `<div class="section"><h3>GPU — ${escapeHtml(m.gpu.name)}</h3><div class="rows">
         <div class="row"><span class="k">Hotspot</span><span class="v num">${m.gpu.hotspot_c != null ? `${m.gpu.hotspot_c.toFixed(0)}°C` : 'N/A'}</span></div>
         <div class="row"><span class="k">Power draw / cap</span><span class="v num">${m.gpu.power_watts != null ? `${m.gpu.power_watts.toFixed(0)} W${m.gpu.power_cap_watts ? ` / ${m.gpu.power_cap_watts.toFixed(0)} W` : ''}` : 'N/A'}</span></div>
+        ${selectedCapStatus}
         <div class="row"><span class="k">Fan</span><span class="v num">${m.gpu.fan_rpm != null ? `${m.gpu.fan_rpm} RPM` : 'N/A'}</span></div>
       </div></div>` : '<div class="empty">No AMD GPU detected on this host.</div>';
 
@@ -842,14 +846,15 @@ async function renderApplications() {
 
 /** @brief AMD GPU performance profile page: presets + custom profile management. */
 async function renderGpu() {
-  const [caps, profiles] = await Promise.all([
+  const [caps, profiles, metrics] = await Promise.all([
     json(await api('/gpu/capabilities')),
     json(await api('/gpu/profiles')),
+    json(await api('/system/metrics')),
   ]);
   const root = document.createElement('div');
   shell(`<div class="page-header"><div><h2>GPU performance</h2><p>${caps.gpu_name ? `Detected: ${escapeHtml(caps.gpu_name)}` : 'No AMD GPU detected — profile controls are disabled.'}</p></div><button id="add-profile" class="btn-primary" ${caps.gpu_name ? '' : 'disabled'}>New profile</button></div>
     <div id="gpu-root"></div>`, { authenticated: true, activeId: 'gpu' });
-  document.querySelector('#gpu-root').replaceWith(renderGpuBody(caps, profiles.profiles || [], profiles.active || ''));
+  document.querySelector('#gpu-root').replaceWith(renderGpuBody(caps, profiles.profiles || [], profiles.active || '', metrics.gpu));
   wireGpuHandlers(caps, profiles.profiles || []);
   document.querySelector('#add-profile')?.addEventListener('click', () => openProfileForm(caps, null));
 }
@@ -900,21 +905,25 @@ async function renderAddons() {
   }));
 }
 
-function renderGpuBody(caps, profiles, active) {
+function renderGpuBody(caps, profiles, active, gpuMetrics) {
   const wrap = document.createElement('div');
   wrap.id = 'gpu-root';
   wrap.className = 'stack';
-  const cards = profiles.map((p) => `<div class="profile-card${p.name === active ? ' active' : ''}" data-activate="${escapeHtml(p.name)}">
-      ${p.name === active ? '<span class="active-tag">ACTIVE</span>' : ''}
+  const cards = profiles.map((p) => {
+    const selected = p.name === active;
+    const applied = selected && gpuMetrics?.selected_power_cap_applied === true;
+    return `<div class="profile-card${applied ? ' active' : ''}" data-activate="${escapeHtml(p.name)}">
+      ${selected ? `<span class="active-tag">${applied ? 'POWER APPLIED' : 'SELECTED — NOT APPLIED'}</span>` : ''}
       <h4>${escapeHtml(p.name)}</h4>
       <p class="profile-desc">${escapeHtml(p.description || '')}</p>
       <div class="profile-meta"><span>${p.power_cap_watts}W</span><span>${escapeHtml(p.cpu_governor)}</span>${p.gpu_clock_offset_mhz ? `<span>+${p.gpu_clock_offset_mhz}MHz</span>` : ''}</div>
       ${!p.builtin ? `<div class="btn-row"><button class="btn-sm" data-edit="${escapeHtml(p.name)}">Edit</button><button class="btn-sm btn-danger" data-delete="${escapeHtml(p.name)}">Delete</button></div>` : ''}
-    </div>`).join('');
+    </div>`;
+  }).join('');
   const capRow = (label, ok, detail) => `<div class="row"><span class="k">${escapeHtml(label)}</span><span class="v">${ok ? `<span class="badge badge-ok">supported</span>` : `<span class="badge badge-warn">unsupported</span>`}${detail ? ` <span class="field-hint">${escapeHtml(detail)}</span>` : ''}</span></div>`;
   wrap.innerHTML = `
     <div class="section"><h3>Profiles</h3><div class="profile-grid">${cards || '<div class="empty">No profiles.</div>'}</div></div>
-    <div class="callout info">Write operations use a briefly-elevated capability to reach root-owned sysfs files, then drop it immediately. Unsupported fields are skipped rather than failing the whole profile.</div>
+    <div class="callout ${caps.runtime_write_authorized ? 'info' : 'warn'}">${caps.runtime_write_authorized ? 'Runtime writes are authorized through SteamShine’s root-owned, fixed-operation helper. Values are validated and the live power cap is verified after every apply.' : 'Runtime writes are not authorized. The selected profile cannot be applied; run SteamShine repair interactively once. Repair restarts an active service when it provisions the helper.'}</div>
     <div class="section"><h3>Detected capabilities</h3><div class="rows">
       ${capRow('GPU power limit', caps.power_cap_supported, caps.power_cap_supported ? `${caps.power_cap_min_watts}–${caps.power_cap_max_watts} W` : undefined)}
       ${capRow('GPU performance level', caps.perf_level_supported)}
@@ -929,7 +938,7 @@ function wireGpuHandlers(caps, profiles) {
   root.querySelectorAll('[data-activate]').forEach((el) => el.addEventListener('click', async (e) => {
     if (e.target.closest('[data-edit],[data-delete]')) return;
     try { const r = await json(await api(`/gpu/profiles/${encodeURIComponent(el.dataset.activate)}/activate`, { method: 'POST', body: '{}' })); toast(`Applied (${(r.applied || []).length} fields, ${(r.skipped || []).length} skipped)`, 'ok'); renderGpu(); }
-    catch (error) { toast(error.message, 'error'); }
+    catch (error) { toast(error.message, 'error'); await renderGpu(); }
   }));
   root.querySelectorAll('[data-edit]').forEach((b) => b.addEventListener('click', (e) => { e.stopPropagation(); openProfileForm(caps, profiles.find((p) => p.name === b.dataset.edit)); }));
   root.querySelectorAll('[data-delete]').forEach((b) => b.addEventListener('click', async (e) => {

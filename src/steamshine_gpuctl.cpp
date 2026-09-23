@@ -11,18 +11,23 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cerrno>
+#include <cmath>
 #include <cstdint>
 #include <filesystem>
-#include <format>
 #include <fstream>
-#include <functional>
 #include <mutex>
 #include <optional>
 #include <sstream>
 #include <string_view>
 
 #if defined(__linux__)
-  #include <sys/capability.h>
+  #include <fcntl.h>
+  #include <spawn.h>
+  #include <sys/wait.h>
+  #include <unistd.h>
+
+extern char **environ;
 #endif
 
 using namespace std::literals;
@@ -34,6 +39,8 @@ namespace steamshine_gpuctl {
   namespace {
 
     constexpr std::array<const char *, 4> BUILTIN_NAMES {"Silent", "Balanced", "Performance", "OC"};
+    constexpr std::string_view RUNTIME_HELPER {"/var/lib/steamshine/helpers/steamshine-runtime-helper"};
+    constexpr std::size_t MAX_HELPER_OUTPUT {8 * 1024};
 
     /**
      * @brief Read one trimmed sysfs attribute without invoking external tools.
@@ -106,6 +113,84 @@ namespace steamshine_gpuctl {
     hardware_paths_t g_paths;
 
     /**
+     * @brief Execute the fixed runtime helper without involving a shell.
+     *
+     * @param helper_arguments Arguments following the helper executable.
+     * @return Normalized exit code and bounded combined standard output/error.
+     */
+    std::pair<int, std::string> run_runtime_helper(const std::vector<std::string> &helper_arguments) {
+#if defined(__linux__)
+      std::vector<std::string> arguments {"/usr/bin/sudo", "-n", std::string {RUNTIME_HELPER}};
+      arguments.insert(arguments.end(), helper_arguments.begin(), helper_arguments.end());
+      int output_pipe[2] {-1, -1};
+      if (::pipe2(output_pipe, O_CLOEXEC) != 0) {
+        return {-1, "could not create helper output pipe"};
+      }
+      std::vector<char *> argv;
+      argv.reserve(arguments.size() + 1);
+      for (const auto &argument : arguments) {
+        argv.push_back(const_cast<char *>(argument.c_str()));
+      }
+      argv.push_back(nullptr);
+      posix_spawn_file_actions_t file_actions;
+      if (::posix_spawn_file_actions_init(&file_actions) != 0) {
+        ::close(output_pipe[0]);
+        ::close(output_pipe[1]);
+        return {-1, "could not initialize runtime helper file actions"};
+      }
+      ::posix_spawn_file_actions_addclose(&file_actions, output_pipe[0]);
+      ::posix_spawn_file_actions_adddup2(&file_actions, output_pipe[1], STDOUT_FILENO);
+      ::posix_spawn_file_actions_adddup2(&file_actions, output_pipe[1], STDERR_FILENO);
+      ::posix_spawn_file_actions_addclose(&file_actions, output_pipe[1]);
+      pid_t child {};
+      const int spawn_error {::posix_spawn(&child, arguments.front().c_str(), &file_actions, nullptr, argv.data(), environ)};
+      ::posix_spawn_file_actions_destroy(&file_actions);
+      if (spawn_error != 0) {
+        ::close(output_pipe[0]);
+        ::close(output_pipe[1]);
+        return {-1, "could not spawn runtime helper"};
+      }
+      ::close(output_pipe[1]);
+      std::string output;
+      std::array<char, 1024> buffer {};
+      while (true) {
+        const auto count {::read(output_pipe[0], buffer.data(), buffer.size())};
+        if (count > 0) {
+          if (output.size() < MAX_HELPER_OUTPUT) {
+            output.append(buffer.data(), std::min<std::size_t>(static_cast<std::size_t>(count), MAX_HELPER_OUTPUT - output.size()));
+          }
+        } else if (count < 0 && errno == EINTR) {
+          continue;
+        } else {
+          break;
+        }
+      }
+      ::close(output_pipe[0]);
+      int status {};
+      pid_t waited {};
+      do {
+        waited = ::waitpid(child, &status, 0);
+      } while (waited < 0 && errno == EINTR);
+      while (!output.empty() && std::isspace(static_cast<unsigned char>(output.back()))) {
+        output.pop_back();
+      }
+      return {waited == child && WIFEXITED(status) ? WEXITSTATUS(status) : -1, std::move(output)};
+#else
+      (void) helper_arguments;
+      return {-1, "runtime helper is only available on Linux"};
+#endif
+    }
+
+    /**
+     * @brief Check whether the helper accepts non-interactive authorization.
+     *
+     * @return True when the exact helper command is authorized by sudoers.
+     */
+    bool runtime_write_authorized() {
+      return run_runtime_helper({"authorize"}).first == 0;
+    }
+
+    /**
      * @brief Enumerate present CPU cores' cpufreq directories.
      */
     std::vector<fs::path> locate_cpu_cpufreq_dirs() {
@@ -126,6 +211,7 @@ namespace steamshine_gpuctl {
      */
     void detect() {
       std::call_once(g_detect_once, [] {
+        g_capabilities.runtime_write_authorized = runtime_write_authorized();
         const auto device_dir {locate_amd_gpu_device_dir()};
         if (device_dir) {
           g_paths.gpu_device_dir = *device_dir;
@@ -183,58 +269,23 @@ namespace steamshine_gpuctl {
       });
     }
 
-#if defined(__linux__)
     /**
-     * @brief Run `fn` with `cap` briefly raised in the effective capability set, then drop it again.
+     * @brief Read back a microwatt power cap after the helper has applied it.
      *
-     * `cap` must already be present in the process's permitted set (granted via
-     * `setcap ... +p` on the Sunshine binary at install time); this only toggles
-     * the effective flag for the duration of `fn`, mirroring the existing
-     * `has_elevated_privileges`/`drop_elevated_privileges` pattern used for capture.
+     * Drivers may quantize limits slightly, so the verification accepts the
+     * larger of one watt or 0.5 percent of the requested value.
      *
-     * @return True when the capability could be raised (regardless of what `fn` did internally).
+     * @param path Resolved `power1_cap` sysfs attribute.
+     * @param microwatts Requested cap in microwatts.
+     * @return True when the live value matches.
      */
-    bool with_capability(cap_value_t cap, const std::function<void()> &fn) {
-      cap_t caps {cap_get_proc()};
-      if (!caps) {
+    bool verify_power_cap(const fs::path &path, const std::uint64_t microwatts) {
+      const auto observed {read_double(path)};
+      if (!observed) {
         return false;
       }
-      bool raised {false};
-      if (cap_set_flag(caps, CAP_EFFECTIVE, 1, &cap, CAP_SET) == 0 && cap_set_proc(caps) == 0) {
-        raised = true;
-        fn();
-      }
-      cap_set_flag(caps, CAP_EFFECTIVE, 1, &cap, CAP_CLEAR);
-      cap_set_proc(caps);
-      cap_free(caps);
-      return raised;
-    }
-#else
-    bool with_capability(int /*cap*/, const std::function<void()> & /*fn*/) {
-      return false;
-    }
-#endif
-
-    /**
-     * @brief Write one value to an allow-listed absolute path under a briefly-elevated capability.
-     *
-     * @return True when the capability could be raised and the write completed without an exception.
-     */
-    bool privileged_write(const fs::path &path, const std::string &content) {
-      if (path.empty() || !fs::exists(path)) {
-        return false;
-      }
-      bool wrote {false};
-#if defined(__linux__)
-      with_capability(CAP_DAC_OVERRIDE, [&] {
-        std::ofstream out {path};
-        if (out) {
-          out << content;
-          wrote = static_cast<bool>(out);
-        }
-      });
-#endif
-      return wrote;
+      const double tolerance {std::max(1'000'000.0, static_cast<double>(microwatts) * 0.005)};
+      return std::abs(*observed - static_cast<double>(microwatts)) <= tolerance;
     }
 
     double clamp(double value, double lo, double hi) {
@@ -395,8 +446,137 @@ namespace steamshine_gpuctl {
     return find_named(custom_profiles());
   }
 
+  namespace {
+    /**
+     * @brief Apply a resolved profile and optionally persist it as selected.
+     *
+     * @param target Resolved profile.
+     * @param persist_selection Whether to write the selected name to config.
+     * @return Verified application result.
+     */
+    apply_result_t apply_profile(const profile_t &target, const bool persist_selection) {
+      detect();
+      apply_result_t result;
+      const auto &caps {capabilities()};
+      const bool wants_overdrive {target.gpu_clock_offset_mhz != 0 || target.gpu_voltage_offset_mv != 0};
+      std::string power_microwatts {"-"};
+      std::string performance_level {"-"};
+      std::string cpu_governor {"-"};
+      std::string cpu_max_khz {"-"};
+      std::string clock_offset_mhz {"-"};
+      std::string voltage_offset_mv {"-"};
+      std::uint64_t requested_power_microwatts {};
+
+      if (caps.power_cap_supported) {
+        const double watts {clamp(target.power_cap_watts, caps.power_cap_min_watts, caps.power_cap_max_watts)};
+        requested_power_microwatts = static_cast<std::uint64_t>(watts * 1'000'000.0);
+        power_microwatts = std::to_string(requested_power_microwatts);
+      } else {
+        result.skipped.push_back("power_cap_watts");
+      }
+
+      if (caps.perf_level_supported) {
+        performance_level = wants_overdrive ? "manual" : "auto";
+      } else {
+        result.skipped.push_back("gpu_perf_level");
+      }
+
+      if (caps.cpu_freq_supported) {
+        const auto khz {static_cast<std::uint64_t>(clamp(target.cpu_max_freq_mhz, caps.cpu_min_freq_mhz, caps.cpu_max_freq_mhz) * 1000.0)};
+        cpu_governor = target.cpu_governor;
+        cpu_max_khz = std::to_string(khz);
+      } else {
+        result.skipped.push_back("cpu_governor");
+        result.skipped.push_back("cpu_max_freq_mhz");
+      }
+
+      if (caps.od_clk_voltage_supported && wants_overdrive) {
+        clock_offset_mhz = target.gpu_clock_offset_mhz == 0 ? "-" : std::to_string(target.gpu_clock_offset_mhz);
+        voltage_offset_mv = target.gpu_voltage_offset_mv == 0 ? "-" : std::to_string(target.gpu_voltage_offset_mv);
+      } else if (target.gpu_clock_offset_mhz != 0 || target.gpu_voltage_offset_mv != 0) {
+        result.skipped.push_back("gpu_clock_offset_mhz");
+        result.skipped.push_back("gpu_voltage_offset_mv");
+      }
+
+      const auto [helper_exit_code, helper_output] {run_runtime_helper({
+        "apply-profile",
+        power_microwatts,
+        performance_level,
+        cpu_governor,
+        cpu_max_khz,
+        clock_offset_mhz,
+        voltage_offset_mv,
+      })};
+      const bool helper_ok {helper_exit_code == 0};
+      if (caps.power_cap_supported) {
+        (helper_ok && verify_power_cap(g_paths.power_cap_path, requested_power_microwatts) ? result.applied : result.skipped).push_back("power_cap_watts");
+      }
+      if (caps.perf_level_supported) {
+        (helper_ok ? result.applied : result.skipped).push_back("gpu_perf_level");
+      }
+      if (caps.cpu_freq_supported) {
+        (helper_ok ? result.applied : result.skipped).push_back("cpu_governor");
+        (helper_ok ? result.applied : result.skipped).push_back("cpu_max_freq_mhz");
+      }
+      if (caps.od_clk_voltage_supported && wants_overdrive) {
+        if (target.gpu_clock_offset_mhz != 0) {
+          (helper_ok ? result.applied : result.skipped).push_back("gpu_clock_offset_mhz");
+        }
+        if (target.gpu_voltage_offset_mv != 0) {
+          (helper_ok ? result.applied : result.skipped).push_back("gpu_voltage_offset_mv");
+        }
+        if (!helper_ok) {
+          result.skipped.push_back("gpu_overdrive_commit");
+        }
+      }
+
+      const auto applied = [&](const std::string_view field) {
+        return std::ranges::find(result.applied, field) != result.applied.end();
+      };
+      std::vector<std::string> failed_required;
+      if (caps.power_cap_supported && !applied("power_cap_watts")) {
+        failed_required.push_back("power_cap_watts");
+      }
+      if (caps.perf_level_supported && !applied("gpu_perf_level")) {
+        failed_required.push_back("gpu_perf_level");
+      }
+      if (caps.cpu_freq_supported && (!applied("cpu_governor") || !applied("cpu_max_freq_mhz"))) {
+        failed_required.push_back("cpu_policy");
+      }
+      if (caps.od_clk_voltage_supported && wants_overdrive &&
+          ((target.gpu_clock_offset_mhz != 0 && !applied("gpu_clock_offset_mhz")) ||
+           (target.gpu_voltage_offset_mv != 0 && !applied("gpu_voltage_offset_mv")) ||
+           std::ranges::find(result.skipped, "gpu_overdrive_commit") != result.skipped.end())) {
+        failed_required.push_back("gpu_overdrive");
+      }
+      if (!failed_required.empty()) {
+        result.success = false;
+        result.error = caps.runtime_write_authorized ? "GPU profile write or verification failed" : "GPU profile writes are not authorized; run SteamShine repair interactively";
+        BOOST_LOG(error) << "GPU_PROFILE_APPLY_FAILED profile=" << target.name
+                         << " error=" << result.error
+                         << " failed_fields=" << nlohmann::json(failed_required).dump()
+                         << " helper_exit_code=" << helper_exit_code
+                         << " helper_output=" << nlohmann::json(helper_output).dump();
+      } else {
+        BOOST_LOG(info) << "GPU_PROFILE_APPLIED profile=" << target.name
+                        << " applied_fields=" << nlohmann::json(result.applied).dump();
+      }
+
+      if (persist_selection) {
+        config::sunshine.steamshine_gpu_active_profile = target.name;
+        auto vars = config::parse_config(file_handler::read_file(config::sunshine.config_file.c_str()));
+        vars["steamshine_gpu_active_profile"] = target.name;
+        std::stringstream config_stream;
+        for (const auto &[key, value] : vars) {
+          config_stream << key << " = " << value << std::endl;
+        }
+        file_handler::write_file(config::sunshine.config_file.c_str(), config_stream.str());
+      }
+      return result;
+    }
+  }  // namespace
+
   apply_result_t activate_profile(const std::string &name) {
-    detect();
     apply_result_t result;
     std::optional<profile_t> target;
     for (const auto &profile : builtin_profiles()) {
@@ -413,81 +593,22 @@ namespace steamshine_gpuctl {
     }
     if (!target) {
       result.success = false;
+      result.error = "Profile not found";
       return result;
     }
+    return apply_profile(*target, true);
+  }
 
-    const auto &caps {capabilities()};
-    const bool wants_overdrive {target->gpu_clock_offset_mhz != 0 || target->gpu_voltage_offset_mv != 0};
-
-    if (caps.power_cap_supported) {
-      const double watts {clamp(target->power_cap_watts, caps.power_cap_min_watts, caps.power_cap_max_watts)};
-      const auto microwatts {static_cast<std::uint64_t>(watts * 1'000'000.0)};
-      (privileged_write(g_paths.power_cap_path, std::to_string(microwatts)) ? result.applied : result.skipped).push_back("power_cap_watts");
-    } else {
-      result.skipped.push_back("power_cap_watts");
-    }
-
-    if (caps.perf_level_supported) {
-      (privileged_write(g_paths.perf_level_path, wants_overdrive ? "manual" : "auto") ? result.applied : result.skipped).push_back("gpu_perf_level");
-    } else {
-      result.skipped.push_back("gpu_perf_level");
-    }
-
-    if (caps.cpu_freq_supported) {
-      bool governor_ok {!target->cpu_governor.empty()};
-      bool freq_ok {true};
-      const auto khz {static_cast<std::uint64_t>(clamp(target->cpu_max_freq_mhz, caps.cpu_min_freq_mhz, caps.cpu_max_freq_mhz) * 1000.0)};
-      for (const auto &path : g_paths.cpu_governor_paths) {
-        governor_ok = governor_ok && privileged_write(path, target->cpu_governor);
-      }
-      for (const auto &path : g_paths.cpu_max_freq_paths) {
-        freq_ok = freq_ok && privileged_write(path, std::to_string(khz));
-      }
-      (governor_ok ? result.applied : result.skipped).push_back("cpu_governor");
-      (freq_ok ? result.applied : result.skipped).push_back("cpu_max_freq_mhz");
-    } else {
-      result.skipped.push_back("cpu_governor");
-      result.skipped.push_back("cpu_max_freq_mhz");
-    }
-
-    if (caps.od_clk_voltage_supported && wants_overdrive) {
-      // Best-effort: the exact `pp_od_clk_voltage` command grammar (state index,
-      // absolute vs. offset semantics, whether a separate voltage-offset command
-      // is supported at all) varies by GPU generation and amdgpu driver version,
-      // and could not be verified against real hardware in development (this
-      // build environment's GPU does not expose this file). Each line is written
-      // independently and a failure only skips that one field.
-      const bool clock_ok {target->gpu_clock_offset_mhz == 0 || privileged_write(g_paths.od_clk_voltage_path, std::format("s 1 {}\n", target->gpu_clock_offset_mhz))};
-      const bool voltage_ok {target->gpu_voltage_offset_mv == 0 || privileged_write(g_paths.od_clk_voltage_path, std::format("vo {}\n", target->gpu_voltage_offset_mv))};
-      const bool commit_ok {privileged_write(g_paths.od_clk_voltage_path, "c\n")};
-      (clock_ok ? result.applied : result.skipped).push_back("gpu_clock_offset_mhz");
-      (voltage_ok ? result.applied : result.skipped).push_back("gpu_voltage_offset_mv");
-      if (!commit_ok) {
-        result.skipped.push_back("gpu_overdrive_commit");
-      }
-    } else if (target->gpu_clock_offset_mhz != 0 || target->gpu_voltage_offset_mv != 0) {
-      result.skipped.push_back("gpu_clock_offset_mhz");
-      result.skipped.push_back("gpu_voltage_offset_mv");
-    }
-
-    config::sunshine.steamshine_gpu_active_profile = target->name;
-    {
-      auto vars = config::parse_config(file_handler::read_file(config::sunshine.config_file.c_str()));
-      vars["steamshine_gpu_active_profile"] = target->name;
-      std::stringstream config_stream;
-      for (const auto &[key, value] : vars) {
-        config_stream << key << " = " << value << std::endl;
-      }
-      file_handler::write_file(config::sunshine.config_file.c_str(), config_stream.str());
-    }
-
-    return result;
+  apply_result_t reapply_active_profile() {
+    const auto target {active_profile()};
+    return target ? apply_profile(*target, false) : apply_result_t {};
   }
 
   void to_json(nlohmann::json &json, const capabilities_t &value) {
     json = nlohmann::json {
       {"gpu_present", value.gpu_present},
       {"gpu_name", value.gpu_name},
+      {"runtime_write_authorized", value.runtime_write_authorized},
       {"power_cap_supported", value.power_cap_supported},
       {"power_cap_min_watts", value.power_cap_min_watts},
       {"power_cap_max_watts", value.power_cap_max_watts},
@@ -528,6 +649,7 @@ namespace steamshine_gpuctl {
   void to_json(nlohmann::json &json, const apply_result_t &value) {
     json = nlohmann::json {
       {"success", value.success},
+      {"error", value.error},
       {"applied", value.applied},
       {"skipped", value.skipped},
     };

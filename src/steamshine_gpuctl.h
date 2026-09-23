@@ -5,11 +5,10 @@
  * Sunshine runs as an unprivileged systemd user service, but the sysfs
  * attributes that expose GPU power limits, performance levels, overdrive
  * clock/voltage offsets, and CPU frequency scaling are root-owned (0644).
- * Writes here briefly raise `CAP_DAC_OVERRIDE` (granted to the Sunshine
- * binary at install time via `setcap`, alongside the existing
- * `CAP_SYS_ADMIN`/`CAP_SYS_NICE` grant used for capture) immediately before
- * each write and drop it again immediately after, so the process only ever
- * bypasses file permission checks for the exact instant it needs to.
+ * Writes are delegated to a root-owned helper through a narrowly-scoped
+ * sudoers rule. The long-running Sunshine process remains unprivileged, and
+ * the helper independently discovers the hardware, validates every value,
+ * writes only fixed sysfs attributes, and reads critical values back.
  *
  * All writes target an allow-list of absolute paths resolved once at
  * detection time from real sysfs enumeration -- no path is ever built from
@@ -33,6 +32,7 @@ namespace steamshine_gpuctl {
   struct capabilities_t {
     bool gpu_present {false};  ///< Whether an AMD (`amdgpu`-driven) GPU was found.
     std::string gpu_name;  ///< Human-readable identifier for the detected GPU.
+    bool runtime_write_authorized {false};  ///< Whether the fixed root-owned runtime helper is authorized.
     bool power_cap_supported {false};  ///< Whether hwmon `power1_cap` (+ `_min`/`_max`/`_default`) is exposed.
     double power_cap_min_watts {0.0};  ///< Lowest power limit the hardware will accept.
     double power_cap_max_watts {0.0};  ///< Highest power limit the hardware will accept.
@@ -63,7 +63,8 @@ namespace steamshine_gpuctl {
    * @brief Outcome of applying one profile.
    */
   struct apply_result_t {
-    bool success {true};  ///< False only when the profile itself could not be found/read.
+    bool success {true};  ///< Whether every supported field required by the profile was applied.
+    std::string error;  ///< Stable human-readable failure reason, empty on success.
     std::vector<std::string> applied;  ///< Field names that were written successfully.
     std::vector<std::string> skipped;  ///< Field names skipped because the hardware does not support them, or that failed to write.
   };
@@ -121,14 +122,22 @@ namespace steamshine_gpuctl {
    * @brief Apply a profile (built-in or custom) by name.
    *
    * Every field is clamped to the bounds reported by capabilities() and
-   * written independently via a briefly-elevated capability; a field the
-   * hardware does not support, or that fails to write, is recorded in
+   * passed to the fixed root-owned helper; a field the hardware does not
+   * support, or that fails to write, is recorded in
    * `apply_result_t::skipped` rather than aborting the remaining fields.
    *
    * @param name Profile name to look up and apply.
    * @return The outcome of the attempt.
    */
   apply_result_t activate_profile(const std::string &name);
+
+  /**
+   * @brief Reapply the stored profile after service startup without changing the selection.
+   *
+   * @return The application outcome, or an empty successful result when no
+   * profile has been selected.
+   */
+  apply_result_t reapply_active_profile();
 
   void to_json(nlohmann::json &json, const capabilities_t &value);
   void to_json(nlohmann::json &json, const profile_t &value);

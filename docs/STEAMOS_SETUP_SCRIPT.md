@@ -24,7 +24,13 @@ Supported commands are `menu`, `check`, `compatibility-check`, `install`, `build
 are preserved, the pre-change file is backed up once under the configuration `backups` directory,
 and repeated runs are idempotent. `--no-start` installs, creates the unit, and enables it for the next
 login without starting it in the current session. `--no-service` omits unit creation, enablement, and
-startup entirely, and it does not provision the privileged Decky helper.
+startup entirely, and it does not provision the privileged runtime or Decky helpers.
+
+Normal installation and repair provision a separate root-owned runtime helper. It validates bounded
+profile values against driver-reported limits and writes only fixed AMD GPU/CPU sysfs attributes,
+allowing GPU power profiles to survive artifact updates without making the service privileged. The
+selected GPU profile is verified against live sysfs on activation and is reapplied after every service
+start.
 
 `install` downloads the newest published SteamShine GitHub Release when no artifact-selection option
 is supplied. It requires exactly one `steamshine-steamos-x86_64-<commit>.tar.zst` asset and its

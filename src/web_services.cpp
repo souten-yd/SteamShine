@@ -278,6 +278,9 @@ namespace web {
       if (lower.find("rtsp") != std::string::npos || lower.find("moonlight") != std::string::npos || lower.find("client") != std::string::npos || lower.find("stream") != std::string::npos) {
         return "moonlight";
       }
+      if (lower.find("gpu_profile") != std::string::npos || lower.find("gpu profile") != std::string::npos || lower.find("power cap") != std::string::npos) {
+        return "gpu";
+      }
       if (lower.find("wayland") != std::string::npos || lower.find("kwin") != std::string::npos || lower.find("portal") != std::string::npos || lower.find("desktop") != std::string::npos || lower.find("display") != std::string::npos) {
         return "desktop";
       }
