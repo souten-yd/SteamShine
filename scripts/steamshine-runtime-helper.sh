@@ -10,6 +10,18 @@ fail() { printf 'steamshine-runtime-helper: %s\n' "$1" >&2; exit "${2:-65}"; }
 integer() { [[ "$1" =~ ^-?[0-9]+$ ]]; }
 read_integer() { local value; value="$(<"$1")"; integer "${value}" || return 1; printf '%s\n' "${value}"; }
 
+# AMD P-State can acknowledge a policy write before its sysfs read-back value
+# changes. Poll briefly so asynchronous convergence is not reported as failure.
+wait_integer_equals() {
+  local path="$1" expected="$2" attempt observed
+  for ((attempt = 0; attempt < 25; ++attempt)); do
+    observed="$(read_integer "${path}")" || return 1
+    [[ "${observed}" == "${expected}" ]] && return 0
+    sleep 0.02
+  done
+  return 1
+}
+
 [[ "${EUID}" -eq 0 ]] || fail 'must run as root' 77
 [[ -n "${caller}" && "${caller}" != root ]] || fail 'requires an authenticated non-root caller' 77
 
@@ -72,10 +84,6 @@ fi
 if [[ "${cpu_governor}" != - || "${cpu_max_khz}" != - ]]; then
   mapfile -t cpu_dirs < <(printf '%s\n' /sys/devices/system/cpu/cpu[0-9]*/cpufreq | sort -V)
   [[ ${#cpu_dirs[@]} -gt 0 && -d "${cpu_dirs[0]}" ]] || fail 'CPU frequency controls are unavailable' 69
-  if [[ "${cpu_governor}" != - ]]; then
-    available_governors="$(<"${cpu_dirs[0]}/scaling_available_governors")"
-    [[ " ${available_governors} " == *" ${cpu_governor} "* ]] || fail 'CPU governor is not offered by the driver'
-  fi
   if [[ "${cpu_max_khz}" != - ]]; then
     integer "${cpu_max_khz}" || fail 'invalid CPU maximum frequency'
     cpu_minimum="$(read_integer "${cpu_dirs[0]}/cpuinfo_min_freq")" || fail 'CPU minimum frequency is invalid' 69
@@ -84,10 +92,31 @@ if [[ "${cpu_governor}" != - || "${cpu_max_khz}" != - ]]; then
   fi
   for cpu_dir in "${cpu_dirs[@]}"; do
     [[ -d "${cpu_dir}" ]] || continue
-    [[ "${cpu_governor}" == - ]] || printf '%s\n' "${cpu_governor}" >"${cpu_dir}/scaling_governor"
-    [[ "${cpu_max_khz}" == - ]] || printf '%s\n' "${cpu_max_khz}" >"${cpu_dir}/scaling_max_freq"
+    if [[ "${cpu_governor}" != - ]]; then
+      available_governors="$(<"${cpu_dir}/scaling_available_governors")"
+      [[ " ${available_governors} " == *" ${cpu_governor} "* ]] || fail 'CPU governor is not offered by every policy'
+      printf '%s\n' "${cpu_governor}" >"${cpu_dir}/scaling_governor"
+    fi
+    if [[ "${cpu_max_khz}" != - ]]; then
+      policy_minimum="$(read_integer "${cpu_dir}/cpuinfo_min_freq")" || fail 'CPU policy minimum frequency is invalid' 69
+      policy_maximum="$(read_integer "${cpu_dir}/cpuinfo_max_freq")" || fail 'CPU policy maximum frequency is invalid' 69
+      policy_target="${cpu_max_khz}"
+      ((policy_target >= policy_minimum)) || policy_target="${policy_minimum}"
+      ((policy_target <= policy_maximum)) || policy_target="${policy_maximum}"
+      printf '%s\n' "${policy_target}" >"${cpu_dir}/scaling_max_freq"
+    fi
+  done
+  for cpu_dir in "${cpu_dirs[@]}"; do
+    [[ -d "${cpu_dir}" ]] || continue
     [[ "${cpu_governor}" == - || "$(<"${cpu_dir}/scaling_governor")" == "${cpu_governor}" ]] || fail 'applied CPU governor did not match the request' 74
-    [[ "${cpu_max_khz}" == - || "$(<"${cpu_dir}/scaling_max_freq")" == "${cpu_max_khz}" ]] || fail 'applied CPU maximum frequency did not match the request' 74
+    if [[ "${cpu_max_khz}" != - ]]; then
+      policy_minimum="$(read_integer "${cpu_dir}/cpuinfo_min_freq")" || fail 'CPU policy minimum frequency is invalid' 69
+      policy_maximum="$(read_integer "${cpu_dir}/cpuinfo_max_freq")" || fail 'CPU policy maximum frequency is invalid' 69
+      policy_target="${cpu_max_khz}"
+      ((policy_target >= policy_minimum)) || policy_target="${policy_minimum}"
+      ((policy_target <= policy_maximum)) || policy_target="${policy_maximum}"
+      wait_integer_equals "${cpu_dir}/scaling_max_freq" "${policy_target}" || fail 'applied CPU maximum frequency did not converge to the request' 74
+    fi
   done
 fi
 
