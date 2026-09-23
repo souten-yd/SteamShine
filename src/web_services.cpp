@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <format>
 #include <fstream>
+#include <sstream>
 #include <vector>
 
 // lib includes
@@ -151,6 +152,42 @@ namespace web {
         }
       }
       return {};
+    }
+
+    /**
+     * @brief Resolve the owner-private completed-session diagnostic directory.
+     *
+     * @return Absolute directory path, or an empty path when unavailable.
+     */
+    std::filesystem::path session_diagnostic_path() {
+      const auto profile_path {default_stream_profile_path()};
+      return profile_path.empty() ? std::filesystem::path {} : profile_path.parent_path() / "session-diagnostics";
+    }
+
+    /**
+     * @brief Classify a log message into a stable troubleshooting area.
+     *
+     * @param message Human-readable log message.
+     * @return Stable component name for filters and automated diagnosis.
+     */
+    std::string_view diagnostic_component(const std::string &message) {
+      std::string lower {message};
+      std::ranges::transform(lower, lower.begin(), [](const unsigned char character) {
+        return static_cast<char>(std::tolower(character));
+      });
+      if (lower.find("terminal") != std::string::npos || lower.find("websocket") != std::string::npos || lower.find("pty") != std::string::npos) {
+        return "terminal";
+      }
+      if (lower.find("gamescope") != std::string::npos || lower.find("pipewire") != std::string::npos || lower.find(" eis") != std::string::npos) {
+        return "gamescope";
+      }
+      if (lower.find("rtsp") != std::string::npos || lower.find("moonlight") != std::string::npos || lower.find("client") != std::string::npos || lower.find("stream") != std::string::npos) {
+        return "moonlight";
+      }
+      if (lower.find("wayland") != std::string::npos || lower.find("kwin") != std::string::npos || lower.find("portal") != std::string::npos || lower.find("desktop") != std::string::npos || lower.find("display") != std::string::npos) {
+        return "desktop";
+      }
+      return "steamshine";
     }
 
     /**
@@ -960,5 +997,80 @@ namespace web {
   std::string DiagnosticService::recent_logs(const std::size_t maximum_bytes) const {
     const auto content = file_handler::read_file(config::sunshine.log_file.c_str());
     return content.size() <= maximum_bytes ? content : content.substr(content.size() - maximum_bytes);
+  }
+
+  nlohmann::json DiagnosticService::snapshot(
+    const std::size_t maximum_bytes,
+    const std::size_t maximum_entries,
+    const std::size_t maximum_sessions
+  ) const {
+    const auto content {recent_logs(maximum_bytes)};
+    nlohmann::json entries = nlohmann::json::array();
+    nlohmann::json counts = nlohmann::json::object({{"info", 0}, {"warning", 0}, {"error", 0}, {"fatal", 0}});
+    std::istringstream lines {content};
+    std::string line;
+    while (std::getline(lines, line)) {
+      const auto timestamp_end {line.find("]: ")};
+      if (!line.starts_with('[') || timestamp_end == std::string::npos) {
+        continue;
+      }
+      const auto severity_end {line.find(": ", timestamp_end + 3)};
+      if (severity_end == std::string::npos) {
+        continue;
+      }
+      std::string severity {line.substr(timestamp_end + 3, severity_end - (timestamp_end + 3))};
+      std::ranges::transform(severity, severity.begin(), [](const unsigned char character) {
+        return static_cast<char>(std::tolower(character));
+      });
+      if (!counts.contains(severity)) {
+        severity = "info";
+      }
+      const auto message {line.substr(severity_end + 2)};
+      counts[severity] = counts[severity].get<std::size_t>() + 1U;
+      entries.push_back(nlohmann::json::object({
+        {"timestamp", line.substr(1, timestamp_end - 1)},
+        {"severity", severity},
+        {"component", diagnostic_component(message)},
+        {"message", message},
+      }));
+      if (entries.size() > maximum_entries) {
+        entries.erase(entries.begin());
+      }
+    }
+
+    nlohmann::json sessions = nlohmann::json::array();
+    const auto directory {session_diagnostic_path()};
+    std::vector<std::filesystem::directory_entry> files;
+    std::error_code error;
+    if (maximum_sessions > 0 && !directory.empty()) {
+      for (std::filesystem::directory_iterator iterator {directory, error}, end; !error && iterator != end; iterator.increment(error)) {
+        if (iterator->is_regular_file(error) && iterator->path().extension() == ".json") {
+          files.push_back(*iterator);
+        }
+      }
+      std::ranges::sort(files, [](const auto &left, const auto &right) {
+        std::error_code left_error;
+        std::error_code right_error;
+        return left.last_write_time(left_error) > right.last_write_time(right_error);
+      });
+      for (std::size_t index {}; index < std::min(maximum_sessions, files.size()); ++index) {
+        try {
+          const auto report_path {files[index].path().string()};
+          const auto report_text {file_handler::read_file(report_path.c_str())};
+          if (report_text.size() <= 256U * 1024U) {
+            sessions.push_back(nlohmann::json::parse(report_text));
+          }
+        } catch (const std::exception &) {
+          // A partial or externally modified report is skipped independently.
+        }
+      }
+    }
+
+    return nlohmann::json::object({
+      {"schema_version", 1},
+      {"service_binary_commit", build_info::commit()},
+      {"log", nlohmann::json::object({{"content", content}, {"entries", std::move(entries)}, {"counts", std::move(counts)}})},
+      {"recent_sessions", std::move(sessions)},
+    });
   }
 }  // namespace web

@@ -23,6 +23,7 @@
   #include <cerrno>
   #include <csignal>
   #include <pty.h>
+  #include <pwd.h>
   #include <sys/ioctl.h>
   #include <sys/wait.h>
   #include <termios.h>
@@ -46,6 +47,7 @@ namespace steamshine_terminal {
       std::uint64_t created_at;  ///< Unix creation time in seconds.
       std::mutex pty_mutex;  ///< Protects PTY descriptors and child state.
       int master_fd {-1};  ///< Master side of the pseudo terminal.
+      bool stopping {false};  ///< Whether explicit deletion or service shutdown has begun.
 #if defined(__linux__)
       pid_t pid {-1};  ///< Login-shell process identifier.
 #endif
@@ -59,6 +61,24 @@ namespace steamshine_terminal {
     std::mutex sessions_mutex;
     std::unordered_map<std::string, std::shared_ptr<session_t>> sessions;
     std::atomic_uint64_t next_session_id {1};
+
+#if defined(__linux__)
+    /**
+     * @brief Resolve the service user's home directory for a new shell.
+     *
+     * @return HOME when set, otherwise the current user's passwd home, or an
+     * empty string when neither source provides a usable directory.
+     */
+    std::string home_directory() {
+      if (const char *home {std::getenv("HOME")}; home && *home) {
+        return home;
+      }
+      if (const auto *entry {::getpwuid(::getuid())}; entry && entry->pw_dir && *entry->pw_dir) {
+        return entry->pw_dir;
+      }
+      return {};
+    }
+#endif
 
     /**
      * @brief Find a retained session by identifier.
@@ -134,6 +154,7 @@ namespace steamshine_terminal {
       std::jthread reader_to_join;
       {
         std::lock_guard lock {session->pty_mutex};
+        session->stopping = true;
         pid_to_kill = session->pid;
         reader_to_join = std::move(session->reader);
       }
@@ -155,6 +176,11 @@ namespace steamshine_terminal {
 
   std::string create() {
 #if defined(__linux__)
+    const auto shell_home {home_directory()};
+    if (shell_home.empty()) {
+      BOOST_LOG(warning) << "steamshine_terminal: could not resolve the service user's home directory"sv;
+      return {};
+    }
     const auto numeric_id {next_session_id.fetch_add(1)};
     auto session {std::make_shared<session_t>()};
     session->id = std::format("terminal-{}", numeric_id);
@@ -174,6 +200,9 @@ namespace steamshine_terminal {
       return {};
     }
     if (pid == 0) {
+      if (::chdir(shell_home.c_str()) != 0) {
+        _exit(126);
+      }
       ::setenv("TERM", "xterm-256color", 1);
       ::setenv("COLORTERM", "truecolor", 1);
       const char *shell {std::getenv("SHELL")};
@@ -232,12 +261,18 @@ namespace steamshine_terminal {
       if (found == sessions.end()) {
         return false;
       }
-      session = std::move(found->second);
-      sessions.erase(found);
+      session = found->second;
     }
 #if defined(__linux__)
     stop_session(session);
 #endif
+    {
+      std::lock_guard lock {sessions_mutex};
+      const auto found {sessions.find(std::string {session_id})};
+      if (found != sessions.end() && found->second == session) {
+        sessions.erase(found);
+      }
+    }
     return true;
   }
 
@@ -246,17 +281,18 @@ namespace steamshine_terminal {
     {
       std::lock_guard lock {sessions_mutex};
       retained.reserve(sessions.size());
-      for (auto &[id, session] : sessions) {
+      for (const auto &[id, session] : sessions) {
         (void) id;
-        retained.push_back(std::move(session));
+        retained.push_back(session);
       }
-      sessions.clear();
     }
 #if defined(__linux__)
     for (const auto &session : retained) {
       stop_session(session);
     }
 #endif
+    std::lock_guard lock {sessions_mutex};
+    sessions.clear();
   }
 
   bool running(const std::string_view session_id) {
@@ -266,7 +302,7 @@ namespace steamshine_terminal {
     }
     std::lock_guard lock {session->pty_mutex};
 #if defined(__linux__)
-    return session->pid > 0;
+    return session->pid > 0 && !session->stopping;
 #else
     return false;
 #endif
@@ -279,7 +315,7 @@ namespace steamshine_terminal {
       return false;
     }
     std::lock_guard lock {session->pty_mutex};
-    if (session->master_fd < 0) {
+    if (session->master_fd < 0 || session->stopping) {
       return false;
     }
     std::size_t offset {};
@@ -308,7 +344,7 @@ namespace steamshine_terminal {
       return false;
     }
     std::lock_guard lock {session->pty_mutex};
-    if (session->master_fd < 0) {
+    if (session->master_fd < 0 || session->stopping) {
       return false;
     }
     struct winsize window_size {};

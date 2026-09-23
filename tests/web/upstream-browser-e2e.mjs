@@ -70,7 +70,7 @@ async function cleanup() {
   if (browser) {
     await browser.close();
   }
-  if (server && !server.killed) {
+  if (server && server.exitCode === null && !server.killed) {
     server.kill('SIGTERM');
     await new Promise((resolve) => server.once('exit', resolve));
   }
@@ -224,16 +224,16 @@ try {
   const firstTerminalId = await steamshinePage.locator('.terminal-tab.active [data-terminal-session]').getAttribute('data-terminal-session');
   if (!firstTerminalId) throw new Error('Terminal did not create its initial session tab.');
   const terminalInput = steamshinePage.locator('.xterm-helper-textarea');
-  await terminalInput.pressSequentially("printf 'STEAMSHINE_BROWSER_TERMINAL_OK\\n'", { delay: 1 });
+  await terminalInput.pressSequentially("printf 'STEAMSHINE_BROWSER_TERMINAL_OK:%s\\n' \"$PWD\"", { delay: 1 });
   await terminalInput.press('Enter');
-  await steamshinePage.waitForFunction(() => document.querySelector('.xterm-rows')?.textContent?.includes('STEAMSHINE_BROWSER_TERMINAL_OK'), undefined, { timeout: 5000 });
+  await steamshinePage.waitForFunction((expectedHome) => document.querySelector('.xterm-rows')?.textContent?.includes(`STEAMSHINE_BROWSER_TERMINAL_OK:${expectedHome}`), homeDirectory, { timeout: 5000 });
 
   await steamshinePage.locator('#term-new').click();
   await steamshinePage.waitForFunction(() => document.querySelectorAll('.terminal-tab').length === 2, undefined, { timeout: 5000 });
   await steamshinePage.waitForFunction(() => document.querySelector('#term-connection')?.dataset.state === 'open', undefined, { timeout: 10000 });
   await steamshinePage.locator(`[data-terminal-session="${firstTerminalId}"]`).click();
   await steamshinePage.waitForFunction(() => document.querySelector('#term-connection')?.dataset.state === 'open', undefined, { timeout: 10000 });
-  await steamshinePage.waitForFunction(() => document.querySelector('.xterm-rows')?.textContent?.includes('STEAMSHINE_BROWSER_TERMINAL_OK'), undefined, { timeout: 5000 });
+  await steamshinePage.waitForFunction((expectedHome) => document.querySelector('.xterm-rows')?.textContent?.includes(`STEAMSHINE_BROWSER_TERMINAL_OK:${expectedHome}`), homeDirectory, { timeout: 5000 });
 
   await steamshinePage.setViewportSize({ width: 320, height: 700 });
   await steamshinePage.waitForFunction(() => {
@@ -407,6 +407,15 @@ try {
   const appAsset = await appAssetResponse.text();
   securityResults.terminal_explanation_removed = !appAsset.includes('A real shell on the SteamShine host') && !appAsset.includes('The terminal connects over a separate port');
   if (!securityResults.terminal_explanation_removed) throw new Error('The Terminal page still contains the removed subtitle or framed explanation.');
+  securityResults.diagnostics_status = await steamshinePage.evaluate(async () => {
+    const response = await fetch('/api/steamshine/v1/diagnostics');
+    await response.text();
+    return response.status;
+  });
+  if (securityResults.diagnostics_status !== 200) throw new Error('SteamShine structured diagnostics endpoint is unavailable.');
+  await steamshinePage.goto(`${baseUrl}/steamshine/diagnostics`, { waitUntil: 'networkidle' });
+  await steamshinePage.getByRole('heading', { name: 'Diagnostics' }).waitFor({ timeout: 5000 });
+  await steamshinePage.getByRole('heading', { name: 'Service log' }).waitFor({ timeout: 5000 });
   const appCssResponse = await steamshinePage.request.get(`${baseUrl}/steamshine/app.css`);
   const appCss = await appCssResponse.text();
   securityResults.monitor_fan_icon_sized = /\.metric-sub \.fan svg\s*\{[^}]*width:\s*0\.85rem;[^}]*height:\s*0\.85rem;[^}]*flex:\s*0 0 0\.85rem;/s.test(appCss);
@@ -482,16 +491,28 @@ try {
   await steamshinePage.locator('#login input[name="password"]').fill('web-e2e-password-2');
   await steamshinePage.locator('#login button').click();
   await waitForMonitor(steamshinePage);
+  await steamshinePage.locator('#mobile-restart').click();
+  await steamshinePage.getByRole('alertdialog').getByRole('button', { name: 'Cancel' }).click();
+  await steamshinePage.locator('#mobile-quit').click();
+  await steamshinePage.getByRole('alertdialog').getByRole('button', { name: 'Cancel' }).click();
   await steamshinePage.locator('#mobile-logout').click();
   await steamshinePage.getByRole('heading', { name: 'Sign in' }).waitFor({ timeout: 5000 });
   securityResults.logout_session_status = await steamshinePage.evaluate(async () => (await fetch('/api/steamshine/v1/session')).status);
   if (securityResults.logout_session_status !== 401) throw new Error('Logout did not invalidate the SteamShine session.');
   const loginRateContext = await request.newContext({ ignoreHTTPSErrors: true, extraHTTPHeaders: { Origin: baseUrl } });
   const successfulLoginStatuses = [];
+  let lifecycleCookie = '';
+  let lifecycleCsrf = '';
   for (let attempt = 0; attempt < 6; ++attempt) {
-    successfulLoginStatuses.push((await loginRateContext.post(`${baseUrl}/api/steamshine/v1/auth/login`, {
+    const response = await loginRateContext.post(`${baseUrl}/api/steamshine/v1/auth/login`, {
       data: { username: 'web-e2e', password: 'web-e2e-password-2' },
-    })).status());
+    });
+    successfulLoginStatuses.push(response.status());
+    const payload = await response.json();
+    if (!lifecycleCookie) {
+      lifecycleCookie = (response.headers()['set-cookie'] || '').match(/steamshine_session=([^;]+)/)?.[1] || '';
+      lifecycleCsrf = payload.csrf_token || '';
+    }
   }
   securityResults.successful_logins_not_rate_limited = successfulLoginStatuses.every((status) => status === 200);
   if (!securityResults.successful_logins_not_rate_limited) {
@@ -508,17 +529,37 @@ try {
   if (!loginRateStatuses.slice(0, -1).every((status) => status === 401) || securityResults.login_rate_limit_status !== 429) {
     throw new Error(`SteamShine login rate limit failed: ${loginRateStatuses.join(',')}`);
   }
-  await new Promise((resolve) => setTimeout(resolve, 100));
-  const serviceLog = await readFile(logFile, 'utf8').catch(() => '');
-  securityResults.secrets_absent_from_service_log = !['web-e2e-password', 'web-e2e-password-2', '1234', 'bad'].some((secret) => serviceLog.includes(secret));
-  if (!securityResults.secrets_absent_from_service_log) {
-    throw new Error('SteamShine service log exposed a browser credential or pairing PIN.');
-  }
   await steamshineContext.close();
   if (consoleErrors.length || failedRequests.length) {
     throw new Error(`Browser errors: ${consoleErrors.join('; ')}; failed requests: ${failedRequests.join('; ')}`);
   }
   await authenticatedContext.close();
+  if (!lifecycleCookie || !lifecycleCsrf) throw new Error('Could not retain an authenticated session for the quit lifecycle test.');
+  const serverExit = new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error('SteamShine did not exit after the authenticated quit request.')), 10000);
+    server.once('exit', (code, signal) => {
+      clearTimeout(timeout);
+      resolve({ code, signal });
+    });
+  });
+  const lifecycleContext = await request.newContext({
+    ignoreHTTPSErrors: true,
+    extraHTTPHeaders: { Cookie: `steamshine_session=${lifecycleCookie}`, Origin: baseUrl, 'X-SteamShine-CSRF-Token': lifecycleCsrf },
+  });
+  const quitResponse = await lifecycleContext.post(`${baseUrl}/api/steamshine/v1/system/quit`, { data: {} });
+  securityResults.quit_status = quitResponse.status();
+  await quitResponse.text();
+  await lifecycleContext.dispose();
+  const quitResult = await serverExit;
+  securityResults.quit_exit_code = quitResult.code;
+  if (securityResults.quit_status !== 200 || quitResult.code !== 0) {
+    throw new Error(`Authenticated quit failed: HTTP ${securityResults.quit_status}, exit ${quitResult.code}, signal ${quitResult.signal}`);
+  }
+  const serviceLog = await readFile(logFile, 'utf8').catch(() => '');
+  securityResults.secrets_absent_from_service_log = !['web-e2e-password', 'web-e2e-password-2', '1234', 'bad'].some((secret) => serviceLog.includes(secret));
+  if (!securityResults.secrets_absent_from_service_log) {
+    throw new Error('SteamShine service log exposed a browser credential or pairing PIN.');
+  }
   await writeFile(join(reportDirectory, 'web-browser-e2e-report.json'), JSON.stringify({
     browser: 'chromium',
     browser_version: browserVersion,

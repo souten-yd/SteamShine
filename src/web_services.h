@@ -504,5 +504,24 @@ namespace web {
      * @return Recent configured Sunshine log content.
      */
     std::string recent_logs(std::size_t maximum_bytes = 65536U) const;
+
+    /**
+     * @brief Build a bounded machine-readable diagnostic snapshot.
+     *
+     * The snapshot contains parsed log entries, severity counts, and the most
+     * recent completed Moonlight session reports. It is suitable for copying
+     * into an automated diagnostic assistant without granting arbitrary file
+     * access.
+     *
+     * @param maximum_bytes Maximum number of trailing log bytes to inspect.
+     * @param maximum_entries Maximum parsed log entries to return.
+     * @param maximum_sessions Maximum completed session reports to return.
+     * @return Structured diagnostic snapshot with the original bounded log.
+     */
+    nlohmann::json snapshot(
+      std::size_t maximum_bytes = 131072U,
+      std::size_t maximum_entries = 256U,
+      std::size_t maximum_sessions = 5U
+    ) const;
   };
 }  // namespace web

@@ -487,11 +487,9 @@ int main(int argc, char *argv[]) {
     BOOST_LOG(warning) << "No gamepad input is available"sv;
   }
 
-  bool encoder_probe_failed {video::probe_encoders() != 0};
+  bool encoder_probe_failed {false};
 #if defined(__linux__)
-  if (encoder_probe_failed &&
-      steamos_virtual_session::capture_backend_required() &&
-      !steamos_virtual_session::physical_output_connected()) {
+  if (steamos_virtual_session::capture_backend_required()) {
     std::string preflight_error;
     const bool probe_hdr {config::video.steamshine_hdr_policy != hdr_policy::policy_e::off};
     BOOST_LOG(info) << "Headless encoder probe requires a prepared virtual display; starting preflight"
@@ -505,9 +503,14 @@ int main(int argc, char *argv[]) {
         BOOST_LOG(info) << "Headless virtual-display encoder preflight completed";
       }
     } else {
+      encoder_probe_failed = true;
       BOOST_LOG(error) << "Headless virtual-display encoder preflight failed: " << preflight_error;
     }
+  } else {
+    encoder_probe_failed = video::probe_encoders() != 0;
   }
+#else
+  encoder_probe_failed = video::probe_encoders() != 0;
 #endif
   if (encoder_probe_failed) {
     BOOST_LOG(error) << "Video failed to find working encoder"sv;

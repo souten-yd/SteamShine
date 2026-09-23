@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <chrono>
 #include <filesystem>
+#include <fstream>
 #include <map>
 #include <memory>
 
@@ -103,6 +104,43 @@ TEST(WebServicesTest, InvalidatesSessions) {
   config::sunshine.username = original_username;
   config::sunshine.password = original_password;
   config::sunshine.salt = original_salt;
+}
+
+/**
+ * @brief Verify diagnostic logs become bounded, categorized machine-readable entries.
+ */
+TEST(WebServicesTest, StructuresDiagnosticLogsForAutomatedAnalysis) {
+  namespace fs = std::filesystem;
+  const auto original_log_file = config::sunshine.log_file;
+  const auto temporary_log = fs::temp_directory_path() / "steamshine-web-diagnostics.log";
+  {
+    std::ofstream output {temporary_log};
+    output << "[2026-09-23 10:00:00.000]: Info: RTSP client connected from private LAN\n"
+           << "[2026-09-23 10:00:01.000]: Warning: Gamescope PipeWire source paused\n"
+           << "[2026-09-23 10:00:02.000]: Error: [wayland] desktop socket unavailable\n"
+           << "[2026-09-23 10:00:03.000]: Fatal: terminal websocket failed\n";
+  }
+  config::sunshine.log_file = temporary_log.string();
+
+  const web::DiagnosticService diagnostics;
+  const auto snapshot = diagnostics.snapshot(65536U, 3U, 0U);
+  ASSERT_TRUE(snapshot.is_object()) << snapshot.dump();
+  ASSERT_EQ(snapshot.at("schema_version"), 1);
+  ASSERT_TRUE(snapshot.at("log").is_object()) << snapshot.dump();
+  ASSERT_TRUE(snapshot.at("log").at("entries").is_array()) << snapshot.dump();
+  ASSERT_EQ(snapshot.at("log").at("entries").size(), 3U);
+  ASSERT_TRUE(snapshot.at("log").at("entries").at(0).is_object()) << snapshot.dump();
+  EXPECT_EQ(snapshot.at("log").at("entries").at(0).at("component"), "gamescope");
+  EXPECT_EQ(snapshot.at("log").at("entries").at(1).at("component"), "desktop");
+  EXPECT_EQ(snapshot.at("log").at("entries").at(2).at("component"), "terminal");
+  EXPECT_EQ(snapshot.at("log").at("counts").at("info"), 1U);
+  EXPECT_EQ(snapshot.at("log").at("counts").at("warning"), 1U);
+  EXPECT_EQ(snapshot.at("log").at("counts").at("error"), 1U);
+  EXPECT_EQ(snapshot.at("log").at("counts").at("fatal"), 1U);
+  EXPECT_TRUE(snapshot.at("recent_sessions").empty());
+
+  config::sunshine.log_file = original_log_file;
+  fs::remove(temporary_log);
 }
 
 /**

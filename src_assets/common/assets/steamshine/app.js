@@ -81,6 +81,8 @@ const ICONS = {
   file: '<path d="M7 3h7l4 4v14H7z"/><path d="M14 3v4h4"/><path d="M9.5 12h6M9.5 15.5h6"/>',
   terminal: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M13 15h4"/>',
   logout: '<path d="M15 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h9"/><path d="M10 12h11M17 8l4 4-4 4"/>',
+  power: '<path d="M12 3v9"/><path d="M7.1 5.6a8 8 0 1 0 9.8 0"/>',
+  restart: '<path d="M20 7v5h-5"/><path d="M19 12a7 7 0 1 0-1.7 4.6"/>',
   play: '<path d="M8 5.5v13l11-6.5z"/>',
   display: '<rect x="3" y="4.5" width="18" height="12" rx="2"/><path d="M9 20h6M12 16.5V20"/>',
   gear: '<circle cx="12" cy="12" r="3.2"/><path d="M12 3v2.2M12 18.8V21M4.2 7.5l1.9 1.1M17.9 15.4l1.9 1.1M4.2 16.5l1.9-1.1M17.9 8.6l1.9-1.1"/>',
@@ -100,6 +102,7 @@ const NAV = [
   { id: 'config', label: 'Display', icon: 'display' },
   { id: 'pairing', label: 'Pin', icon: 'key' },
   { id: 'clients', label: 'Clients', icon: 'users' },
+  { id: 'diagnostics', label: 'Diagnostics', icon: 'file' },
   { id: 'terminal', label: 'Terminal', icon: 'terminal' },
 ];
 const DEFAULT_PAGE = 'monitor';
@@ -150,19 +153,31 @@ function shell(content, { authenticated = false, activeId = '' } = {}) {
     <header class="mobile-topbar">
       <img src="/steamshine/images/logo-mark-64.png" alt="SteamShine">
       <span>SteamShine</span>
-      <button id="mobile-logout" class="icon-btn" aria-label="Log out">${icon('logout')}</button>
+      <div class="mobile-actions">
+        <button id="mobile-quit" class="icon-btn" aria-label="Quit SteamShine" title="Quit SteamShine">${icon('power')}</button>
+        <button id="mobile-restart" class="icon-btn" aria-label="Restart SteamShine" title="Restart SteamShine">${icon('restart')}</button>
+        <button id="mobile-logout" class="icon-btn" aria-label="Log out" title="Log out">${icon('logout')}</button>
+      </div>
     </header>
     <nav class="sidenav">
       <div class="brand"><img src="/steamshine/images/logo-mark-64.png" alt="SteamShine"><div class="brand-text"><h1>SteamShine</h1><p>Sunshine for SteamOS</p></div></div>
       ${navLinks}
       <div class="nav-spacer"></div>
-      <div class="nav-foot"><button id="logout" class="nav-link" style="width:100%">${icon('logout')}<span>Log out</span></button></div>
+      <div class="nav-foot">
+        <button id="quit-steamshine" class="nav-link lifecycle-link">${icon('power')}<span>Quit SteamShine</span></button>
+        <button id="restart-steamshine" class="nav-link lifecycle-link">${icon('restart')}<span>Restart SteamShine</span></button>
+        <button id="logout" class="nav-link">${icon('logout')}<span>Log out</span></button>
+      </div>
     </nav>
     <main class="main">${content}</main>
   </div>`;
   document.querySelectorAll('[data-nav]').forEach((a) => a.addEventListener('click', (e) => { e.preventDefault(); navigate(a.getAttribute('href')); }));
   document.querySelector('#logout')?.addEventListener('click', logout);
   document.querySelector('#mobile-logout')?.addEventListener('click', logout);
+  document.querySelector('#quit-steamshine')?.addEventListener('click', () => lifecycleAction('quit'));
+  document.querySelector('#restart-steamshine')?.addEventListener('click', () => lifecycleAction('restart'));
+  document.querySelector('#mobile-quit')?.addEventListener('click', () => lifecycleAction('quit'));
+  document.querySelector('#mobile-restart')?.addEventListener('click', () => lifecycleAction('restart'));
 }
 
 /** @brief Redirect to a SteamShine route. */
@@ -237,6 +252,7 @@ async function renderAuthenticated(session) {
     stream: renderStream,
     applications: renderApplications,
     gpu: renderGpu,
+    diagnostics: renderDiagnostics,
     terminal: renderTerminal,
   };
   return (renderers[page] || renderMonitor)(session);
@@ -291,6 +307,53 @@ function formatUptime(seconds) {
   const h = Math.floor((seconds % 86400) / 3600);
   const m = Math.floor((seconds % 3600) / 60);
   return d > 0 ? `${d}d ${h}h` : h > 0 ? `${h}h ${m}m` : `${m}m`;
+}
+
+/** @brief Render structured startup, desktop, Gamescope, Moonlight, and Terminal diagnostics. */
+async function renderDiagnostics() {
+  let snapshot = null;
+  let selectedSeverity = 'all';
+  shell(`<div class="page-header"><div><h2>Diagnostics</h2><p>Bounded service and connection evidence for troubleshooting or sharing with Codex.</p></div><div class="btn-row"><button id="copy-diagnostics" class="btn-ghost">Copy JSON</button><button id="refresh-diagnostics" class="btn-primary">Refresh</button></div></div>
+    <div id="diagnostics-root" class="stack"><div class="empty">Loading…</div></div>`, { authenticated: true, activeId: 'diagnostics' });
+
+  const draw = () => {
+    const root = document.querySelector('#diagnostics-root');
+    if (!root || !snapshot) return;
+    const counts = snapshot.log?.counts || {};
+    const entries = (snapshot.log?.entries || []).filter((entry) => selectedSeverity === 'all' || entry.severity === selectedSeverity);
+    const virtual = snapshot.status?.virtual_display || snapshot.status || {};
+    const filters = ['all', 'fatal', 'error', 'warning', 'info'].map((severity) => `<button class="diagnostic-filter${severity === selectedSeverity ? ' active' : ''}" data-severity="${severity}">${severity === 'all' ? 'All' : `${severity} (${counts[severity] || 0})`}</button>`).join('');
+    const rows = entries.slice().reverse().map((entry) => `<div class="diagnostic-entry severity-${escapeHtml(entry.severity)}">
+      <div class="diagnostic-meta"><span class="badge">${escapeHtml(entry.severity)}</span><span>${escapeHtml(entry.component)}</span><time>${escapeHtml(entry.timestamp)}</time></div>
+      <pre>${escapeHtml(entry.message)}</pre>
+    </div>`).join('');
+    root.innerHTML = `<div class="grid diagnostics-summary">
+        <div class="metric-tile tone-danger"><div class="metric-label">Errors</div><div class="metric-value num">${(counts.error || 0) + (counts.fatal || 0)}</div></div>
+        <div class="metric-tile tone-warn"><div class="metric-label">Warnings</div><div class="metric-value num">${counts.warning || 0}</div></div>
+        <div class="metric-tile"><div class="metric-label">Sessions retained</div><div class="metric-value num">${snapshot.recent_sessions?.length || 0}</div></div>
+        <div class="metric-tile"><div class="metric-label">Virtual session</div><div class="metric-value diagnostic-state">${escapeHtml(virtual.state || virtual.virtual_display_state || snapshot.status?.virtual_display_state || 'Idle')}</div></div>
+      </div>
+      <div class="section"><div class="diagnostic-toolbar"><h3>Service log</h3><div class="diagnostic-filters">${filters}</div></div>
+        <div class="diagnostic-list">${rows || '<div class="empty">No matching log entries.</div>'}</div>
+      </div>
+      <details class="section"><summary>Raw bounded log</summary><pre class="diagnostic-raw">${escapeHtml(snapshot.log?.content || '')}</pre></details>`;
+    root.querySelectorAll('[data-severity]').forEach((button) => button.addEventListener('click', () => {
+      selectedSeverity = button.dataset.severity;
+      draw();
+    }));
+  };
+
+  const load = async () => {
+    snapshot = await json(await api('/diagnostics'));
+    draw();
+  };
+  document.querySelector('#refresh-diagnostics').onclick = () => load().catch((error) => toast(error.message, 'error'));
+  document.querySelector('#copy-diagnostics').onclick = async () => {
+    if (!snapshot) return;
+    try { await navigator.clipboard.writeText(JSON.stringify(snapshot, null, 2)); toast('Diagnostic JSON copied.', 'ok'); }
+    catch { toast('Clipboard access is unavailable.', 'error'); }
+  };
+  await load();
 }
 
 /** @brief Format a rational frame rate as a short decimal without trailing zeros. */
@@ -1225,6 +1288,28 @@ async function logout() {
   stopPolling();
   if (terminalSocket) { terminalSocket.close(); terminalSocket = null; }
   try { await json(await api('/auth/logout', { method: 'POST', body: '{}' })); } finally { csrfToken = ''; navigate('/steamshine/login'); }
+}
+
+/** @brief Confirm and request a graceful SteamShine process lifecycle action. */
+async function lifecycleAction(action) {
+  const restarting = action === 'restart';
+  const label = restarting ? 'Restart SteamShine' : 'Quit SteamShine';
+  const confirmed = await confirmDialog({
+    title: label,
+    message: restarting
+      ? 'Restart SteamShine now? Active streams and terminal sessions will disconnect briefly.'
+      : 'Quit SteamShine now? Active streams and terminal sessions will disconnect.',
+    confirmLabel: restarting ? 'Restart' : 'Quit',
+  });
+  if (!confirmed) return;
+  try {
+    await json(await api(`/system/${action}`, { method: 'POST', body: '{}' }));
+    stopPolling();
+    shell(`<div class="auth-card"><div class="brand"><img src="/steamshine/images/logo-mark-64.png" alt="SteamShine"><div class="brand-text"><h1>${escapeHtml(restarting ? 'SteamShine is restarting' : 'SteamShine has been asked to quit')}</h1></div></div><p>${escapeHtml(restarting ? 'Reconnect in a few seconds.' : 'Start the service again to reconnect.')}</p></div>`);
+    if (restarting) setTimeout(() => window.location.reload(), 3000);
+  } catch (error) {
+    toast(error.message, 'error');
+  }
 }
 
 /** @brief Choose a setup, login, or authenticated view from the shared facade state. */

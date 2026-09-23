@@ -1485,6 +1485,20 @@ namespace platf {
     }
 #endif
 
+    // A resident SteamOS user service can outlive the physical Desktop and
+    // retain no compositor environment. Refresh a verified live endpoint
+    // before probing KWin or Portal; when none exists, automatic Desktop
+    // probes are skipped so a healthy headless boot is not reported as a
+    // sequence of capture failures.
+    const bool live_desktop_endpoint {
+      !config::steamos_virtual_display.enabled || host_desktop_endpoint::capture_live()
+    };
+    if (config::steamos_virtual_display.enabled && live_desktop_endpoint && host_desktop_endpoint::activate()) {
+#ifdef SUNSHINE_BUILD_WAYLAND
+      window_system = window_system_e::WAYLAND;
+#endif
+    }
+
 #ifdef SUNSHINE_BUILD_CUDA
     if (((config::video.capture.empty() && sources.none()) || config::video.capture == "nvfbc") && verify_nvfbc()) {
       sources[source::NVFBC] = true;
@@ -1513,12 +1527,12 @@ namespace platf {
     }
 #endif
 #ifdef SUNSHINE_BUILD_KWIN
-    if (((config::video.capture.empty() && steamos_virtual_session::physical_output_connected()) || config::video.capture == "kwin") && verify_kwin()) {
+    if (((config::video.capture.empty() && steamos_virtual_session::physical_output_connected() && live_desktop_endpoint) || config::video.capture == "kwin") && verify_kwin()) {
       sources[source::KWIN] = true;
     }
 #endif
 #ifdef SUNSHINE_BUILD_PORTAL
-    if (steamos_virtual_session::should_probe_physical_portal(config::video.capture.empty(), config::video.capture == "portal", steamos_virtual_session::physical_output_connected(),
+    if (steamos_virtual_session::should_probe_physical_portal(config::video.capture.empty(), config::video.capture == "portal", steamos_virtual_session::physical_output_connected() && live_desktop_endpoint,
   #ifdef SUNSHINE_BUILD_KWIN
                                                               sources[source::KWIN]
   #else

@@ -8,6 +8,7 @@
 
 // standard includes
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <chrono>
 #include <cstdint>
@@ -56,6 +57,7 @@
 #include "confighttp.h"
 #include "crypto.h"
 #include "display_device.h"
+#include "entry_handler.h"
 #include "file_handler.h"
 #include "globals.h"
 #include "httpcommon.h"
@@ -82,6 +84,7 @@ namespace confighttp {
   web::SessionService session_service {};  ///< Server-side SteamShine Web session operations.
   const web::PairingService pairing_service {};  ///< Shared Web pairing operations.
   const web::ClientService client_service {};  ///< Shared Web paired-client operations.
+  std::atomic_bool steamshine_lifecycle_pending {false};  ///< Prevent duplicate Web lifecycle requests while shutdown begins.
 
   std::string steamshine_page_content_security_policy(const std::string_view host_header, const std::uint16_t terminal_ws_port) {
     constexpr std::string_view prefix {"default-src 'self'; connect-src 'self'"};
@@ -182,6 +185,58 @@ namespace confighttp {
   std::map<std::string, rate_limit_t, std::less<>> steamshine_login_attempts;  ///< Login attempts by remote address.
   std::map<std::string, rate_limit_t, std::less<>> steamshine_pin_attempts;  ///< PIN attempts by remote address.
   std::mutex steamshine_rate_limit_mutex;  ///< Mutex protecting SteamShine rate-limit state.
+
+  /**
+   * @brief Track live Terminal transports so service shutdown can unblock and join them.
+   */
+  class terminal_connection_registry_t {
+  public:
+    /**
+     * @brief Register a connection-specific close callback.
+     *
+     * @param close Callback that cancels and closes the transport.
+     * @return Stable non-zero registration identifier.
+     */
+    std::uint64_t add(std::function<void()> close) {
+      std::scoped_lock lock {mutex_};
+      const auto id {next_id_++};
+      connections_.emplace(id, std::move(close));
+      return id;
+    }
+
+    /**
+     * @brief Remove a connection after its worker exits.
+     *
+     * @param id Registration identifier returned by add().
+     */
+    void remove(const std::uint64_t id) {
+      std::scoped_lock lock {mutex_};
+      connections_.erase(id);
+    }
+
+    /**
+     * @brief Cancel and close every currently registered transport.
+     */
+    void close_all() {
+      std::vector<std::function<void()>> callbacks;
+      {
+        std::scoped_lock lock {mutex_};
+        callbacks.reserve(connections_.size());
+        for (const auto &[id, close] : connections_) {
+          (void) id;
+          callbacks.push_back(close);
+        }
+      }
+      for (const auto &close : callbacks) {
+        close();
+      }
+    }
+
+  private:
+    std::mutex mutex_;  ///< Protects registrations during worker cleanup.
+    std::uint64_t next_id_ {1};  ///< Next non-zero registration identifier.
+    std::unordered_map<std::uint64_t, std::function<void()>> connections_;  ///< Close callbacks by registration identifier.
+  };
 
   // CSRF token configuration
   /**
@@ -300,13 +355,19 @@ namespace confighttp {
    * @param response The HTTP response object.
    * @param output_tree The JSON tree to send.
    * @param headers Additional response headers, such as session cookies.
+   * @param status HTTP response status.
    */
-  void send_steamshine_response(const resp_https_t &response, const nlohmann::json &output_tree, SimpleWeb::CaseInsensitiveMultimap headers = {}) {
+  void send_steamshine_response(
+    const resp_https_t &response,
+    const nlohmann::json &output_tree,
+    SimpleWeb::CaseInsensitiveMultimap headers = {},
+    const SimpleWeb::StatusCode status = SimpleWeb::StatusCode::success_ok
+  ) {
     headers.emplace("Content-Type", "application/json");
     headers.emplace("X-Frame-Options", "DENY");
     headers.emplace("Content-Security-Policy", "default-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self';");
     headers.emplace("Cache-Control", "no-store");
-    response->write(output_tree.dump(), headers);
+    response->write(status, output_tree.dump(), headers);
   }
 
   /**
@@ -1831,6 +1892,61 @@ namespace confighttp {
   }
 
   /**
+   * @brief Authenticate and schedule a graceful SteamShine exit or restart.
+   *
+   * The response is queued before lifecycle cleanup begins so a LAN browser
+   * receives confirmation instead of an ambiguous connection reset.
+   *
+   * @param response The HTTP response object.
+   * @param request The authenticated request carrying the CSRF token.
+   * @param restart_process True to restart SteamShine; false to exit it.
+   */
+  void steamshine_lifecycle(const resp_https_t &response, const req_https_t &request, const bool restart_process) {
+    if (require_steamshine_mutation(response, request).empty()) {
+      return;
+    }
+    bool expected {false};
+    if (!steamshine_lifecycle_pending.compare_exchange_strong(expected, true)) {
+      send_steamshine_response(
+        response,
+        {{"status", false}, {"message", "A SteamShine lifecycle action is already in progress."}},
+        {},
+        SimpleWeb::StatusCode::client_error_conflict
+      );
+      return;
+    }
+    send_steamshine_response(response, {{"status", true}, {"action", restart_process ? "restart" : "quit"}});
+    std::thread {[restart_process] {
+      std::this_thread::sleep_for(200ms);
+      if (restart_process) {
+        platf::restart();
+      } else {
+        lifetime::exit_sunshine(0, true);
+      }
+    }}.detach();
+  }
+
+  /**
+   * @brief Gracefully stop SteamShine from its authenticated management UI.
+   *
+   * @param response The HTTP response object.
+   * @param request The authenticated request carrying the CSRF token.
+   */
+  void steamshine_quit(const resp_https_t &response, const req_https_t &request) {
+    steamshine_lifecycle(response, request, false);
+  }
+
+  /**
+   * @brief Gracefully restart SteamShine from its authenticated management UI.
+   *
+   * @param response The HTTP response object.
+   * @param request The authenticated request carrying the CSRF token.
+   */
+  void steamshine_restart(const resp_https_t &response, const req_https_t &request) {
+    steamshine_lifecycle(response, request, true);
+  }
+
+  /**
    * @brief Return the current SteamShine browser session state.
    *
    * @param response The HTTP response object.
@@ -2559,6 +2675,21 @@ namespace confighttp {
   }
 
   /**
+   * @brief Return bounded structured diagnostics for people and automated assistants.
+   *
+   * @param response The HTTP response object.
+   * @param request The authenticated request.
+   */
+  void steamshine_diagnostics(const resp_https_t &response, const req_https_t &request) {
+    if (require_steamshine_session(response, request).empty()) {
+      return;
+    }
+    auto diagnostics = diagnostic_service.snapshot();
+    diagnostics["status"] = status_snapshot_service.snapshot();
+    send_steamshine_response(response, diagnostics);
+  }
+
+  /**
    * @brief Reset the display device persistence.
    * @param response The HTTP response object.
    * @param request The HTTP request object.
@@ -2934,17 +3065,42 @@ namespace confighttp {
    *
    * @param socket Freshly accepted TCP socket.
    * @param ssl_ctx Shared TLS context (certificate already loaded).
+   * @param connections Registry used to close this transport during shutdown.
    */
-  void handle_terminal_ws_connection(boost::asio::ip::tcp::socket socket, boost::asio::ssl::context &ssl_ctx) {
+  void handle_terminal_ws_connection(
+    boost::asio::ip::tcp::socket socket,
+    boost::asio::ssl::context &ssl_ctx,
+    terminal_connection_registry_t &connections
+  ) {
     namespace websocket = boost::beast::websocket;
     namespace http = boost::beast::http;
+    using terminal_stream_t = websocket::stream<boost::asio::ssl::stream<boost::asio::ip::tcp::socket>>;
     try {
-      boost::asio::ssl::stream<boost::asio::ip::tcp::socket> stream {std::move(socket), ssl_ctx};
-      stream.handshake(boost::asio::ssl::stream_base::server);
+      auto ws {std::make_shared<terminal_stream_t>(std::move(socket), ssl_ctx)};
+      const auto connection_id {connections.add([weak_ws = std::weak_ptr<terminal_stream_t> {ws}] {
+        if (const auto active_ws {weak_ws.lock()}) {
+          boost::system::error_code error;
+          auto &transport {boost::beast::get_lowest_layer(*active_ws)};
+          transport.cancel(error);
+          transport.close(error);
+        }
+      })};
+
+      struct connection_guard_t {
+        terminal_connection_registry_t &connections;  ///< Registry holding the live transport.
+        std::uint64_t id;  ///< Registration to remove.
+
+        /** @brief Remove the transport from the shutdown registry. */
+        ~connection_guard_t() {
+          connections.remove(id);
+        }
+      } connection_guard {connections, connection_id};
+
+      ws->next_layer().handshake(boost::asio::ssl::stream_base::server);
 
       boost::beast::flat_buffer handshake_buffer;
       http::request<http::string_body> request;
-      http::read(stream, handshake_buffer, request);
+      http::read(ws->next_layer(), handshake_buffer, request);
 
       const std::string cookie_header {request.count(http::field::cookie) ? std::string {request[http::field::cookie]} : std::string {}};
       const auto session_id {get_ws_cookie_value(cookie_header, "steamshine_session")};
@@ -2952,19 +3108,18 @@ namespace confighttp {
       if (!config::sunshine.steamshine_web_ui_enabled || !handshake_session.has_value() || !websocket::is_upgrade(request)) {
         http::response<http::string_body> response {http::status::unauthorized, request.version()};
         response.prepare_payload();
-        http::write(stream, response);
+        http::write(ws->next_layer(), response);
         return;
       }
 
-      websocket::stream<boost::asio::ssl::stream<boost::asio::ip::tcp::socket>> ws {std::move(stream)};
-      ws.binary(true);
-      ws.accept(request);
+      ws->binary(true);
+      ws->accept(request);
 
       // Declaration order matters: locals are destroyed in reverse order, so
       // `unsubscribe_guard` (declared last) runs its destructor *first* --
       // before `write_mutex`/`ws` are torn down -- guaranteeing no output
       // callback can still be executing (or start) once they go away.
-      std::mutex write_mutex;
+      auto write_mutex {std::make_shared<std::mutex>()};
       bool authenticated {false};
       std::string terminal_session_id;
       std::uint64_t subscription_id {0};
@@ -2984,7 +3139,7 @@ namespace confighttp {
       boost::beast::flat_buffer read_buffer;
       while (true) {
         read_buffer.clear();
-        ws.read(read_buffer);  // Throws on peer close/error, breaking the loop below via the outer catch.
+        ws->read(read_buffer);  // Throws on peer close/error, breaking the loop below via the outer catch.
         nlohmann::json payload;
         try {
           payload = nlohmann::json::parse(boost::beast::buffers_to_string(read_buffer.data()));
@@ -3001,10 +3156,10 @@ namespace confighttp {
           if (!steamshine_terminal::running(terminal_session_id)) {
             break;
           }
-          subscription_id = steamshine_terminal::subscribe(terminal_session_id, [&ws, &write_mutex](std::string_view chunk) {
-            std::lock_guard lock {write_mutex};
+          subscription_id = steamshine_terminal::subscribe(terminal_session_id, [ws, write_mutex](std::string_view chunk) {
+            std::lock_guard lock {*write_mutex};
             try {
-              ws.write(boost::asio::buffer(chunk.data(), chunk.size()));
+              ws->write(boost::asio::buffer(chunk.data(), chunk.size()));
             } catch (...) {
               // The read loop will observe the same failure and clean up.
             }
@@ -3013,11 +3168,11 @@ namespace confighttp {
             break;
           }
           {
-            std::lock_guard lock {write_mutex};
-            ws.text(true);
+            std::lock_guard lock {*write_mutex};
+            ws->text(true);
             constexpr std::string_view ready_message {R"({"type":"ready"})"};
-            ws.write(boost::asio::buffer(ready_message));
-            ws.binary(true);
+            ws->write(boost::asio::buffer(ready_message));
+            ws->binary(true);
           }
           authenticated = true;
           continue;
@@ -3113,7 +3268,7 @@ namespace confighttp {
     server.resource["^/pin/?$"]["GET"] = page_handler("pin.html");
     server.resource["^/troubleshooting/?$"]["GET"] = page_handler("troubleshooting.html");
     server.resource["^/welcome/?$"]["GET"] = page_handler("welcome.html", false, true);
-    server.resource["^/steamshine/?(?:setup|login|monitor|stream|applications|gpu|settings|config|pairing|clients|terminal)?/?$"]["GET"] = getSteamshinePage;
+    server.resource["^/steamshine/?(?:setup|login|monitor|stream|applications|gpu|settings|config|pairing|clients|diagnostics|terminal)?/?$"]["GET"] = getSteamshinePage;
 
     // rest api
     server.resource["^/api/browse$"]["GET"] = browseDirectory;
@@ -3144,6 +3299,8 @@ namespace confighttp {
     server.resource["^/api/steamshine/v1/setup/credentials$"]["POST"] = steamshine_handler(steamshine_setup_credentials);
     server.resource["^/api/steamshine/v1/auth/login$"]["POST"] = steamshine_handler(steamshine_login);
     server.resource["^/api/steamshine/v1/auth/logout$"]["POST"] = steamshine_handler(steamshine_logout);
+    server.resource["^/api/steamshine/v1/system/quit$"]["POST"] = steamshine_handler(steamshine_quit);
+    server.resource["^/api/steamshine/v1/system/restart$"]["POST"] = steamshine_handler(steamshine_restart);
     server.resource["^/api/steamshine/v1/status$"]["GET"] = steamshine_handler(steamshine_status);
     server.resource["^/api/steamshine/v1/stream/profiles$"]["GET"] = steamshine_handler(steamshine_stream_profiles);
     server.resource["^/api/steamshine/v1/stream/profiles$"]["POST"] = steamshine_handler(steamshine_save_stream_profile);
@@ -3176,6 +3333,7 @@ namespace confighttp {
     server.resource["^/api/steamshine/v1/clients$"]["GET"] = steamshine_handler(steamshine_clients);
     server.resource["^/api/steamshine/v1/clients/.+$"]["DELETE"] = steamshine_handler(steamshine_revoke_client);
     server.resource["^/api/steamshine/v1/logs/recent$"]["GET"] = steamshine_handler(steamshine_recent_logs);
+    server.resource["^/api/steamshine/v1/diagnostics$"]["GET"] = steamshine_handler(steamshine_diagnostics);
 
     // static/dynamic resources
     server.resource["^/images/sunshine.ico$"]["GET"] = getFaviconImage;
@@ -3223,9 +3381,11 @@ namespace confighttp {
     boost::asio::io_context terminal_ioc {1};
     boost::asio::ssl::context terminal_ssl_ctx {boost::asio::ssl::context::tlsv12};
     boost::asio::ip::tcp::acceptor terminal_acceptor {terminal_ioc};
+    terminal_connection_registry_t terminal_connections;
 
     auto accept_and_run_ws = [&] {
       platf::set_thread_name("confighttp::terminal_ws");
+      std::vector<std::jthread> connection_threads;
       try {
         terminal_ssl_ctx.use_certificate_chain_file(config::nvhttp.cert);
         terminal_ssl_ctx.use_private_key_file(config::nvhttp.pkey, boost::asio::ssl::context::pem);
@@ -3236,6 +3396,7 @@ namespace confighttp {
         terminal_acceptor.bind(endpoint);
         terminal_acceptor.listen();
         terminal_acceptor.non_blocking(true);
+        BOOST_LOG(info) << "SteamShine Terminal WebSocket available on [" << endpoint.address().to_string() << ':' << endpoint.port() << "]";
 
         while (!shutdown_event->peek()) {
           boost::asio::ip::tcp::socket socket {terminal_ioc};
@@ -3248,13 +3409,16 @@ namespace confighttp {
             }
             break;
           }
-          std::thread {handle_terminal_ws_connection, std::move(socket), std::ref(terminal_ssl_ctx)}.detach();
+          connection_threads.emplace_back(handle_terminal_ws_connection, std::move(socket), std::ref(terminal_ssl_ctx), std::ref(terminal_connections));
         }
       } catch (const std::exception &err) {
-        if (shutdown_event->peek()) {
-          return;
+        if (!shutdown_event->peek()) {
+          BOOST_LOG(warning) << "Couldn't start SteamShine Terminal WebSocket server on port ["sv << port_terminal_ws << "]: "sv << err.what();
         }
-        BOOST_LOG(warning) << "Couldn't start SteamShine Terminal WebSocket server on port ["sv << port_terminal_ws << "]: "sv << err.what();
+      }
+      terminal_connections.close_all();
+      for (auto &thread : connection_threads) {
+        thread.join();
       }
     };
     std::jthread terminal_ws_thread {accept_and_run_ws};

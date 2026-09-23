@@ -213,6 +213,108 @@ a {
   margin-top: 0.4rem;
 }
 
+.nav-foot .nav-link {
+  width: 100%;
+}
+
+.nav-foot .lifecycle-link:hover {
+  color: var(--danger);
+}
+
+.mobile-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  margin-left: auto;
+}
+
+.diagnostics-summary .metric-tile {
+  min-height: 7rem;
+}
+
+.diagnostic-state {
+  font-size: 1rem;
+  overflow-wrap: anywhere;
+}
+
+.diagnostic-toolbar,
+.diagnostic-filters,
+.diagnostic-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.diagnostic-toolbar {
+  justify-content: space-between;
+  margin-bottom: 0.75rem;
+}
+
+.diagnostic-toolbar h3 {
+  margin: 0;
+}
+
+.diagnostic-filter {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-muted);
+  padding: 0.35rem 0.65rem;
+  cursor: pointer;
+}
+
+.diagnostic-filter.active {
+  border-color: var(--accent);
+  color: var(--accent-strong);
+  background: rgb(255 255 255 / 5%);
+}
+
+.diagnostic-list {
+  display: grid;
+  gap: 0.5rem;
+  max-height: 36rem;
+  overflow: auto;
+}
+
+.diagnostic-entry {
+  border-left: 3px solid var(--border-strong);
+  border-radius: 0.3rem;
+  background: rgb(255 255 255 / 2%);
+  padding: 0.65rem 0.75rem;
+}
+
+.diagnostic-entry.severity-warning {
+  border-left-color: var(--warn);
+}
+
+.diagnostic-entry.severity-error,
+.diagnostic-entry.severity-fatal {
+  border-left-color: var(--danger);
+}
+
+.diagnostic-meta {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+}
+
+.diagnostic-meta time {
+  margin-left: auto;
+}
+
+.diagnostic-entry pre,
+.diagnostic-raw {
+  margin: 0.5rem 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: 0.78rem/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.diagnostic-raw {
+  max-height: 36rem;
+  overflow: auto;
+}
+
 /* ---- Main column ---- */
 .main {
   flex: 1;

@@ -98,7 +98,7 @@ upstream_after_steamshine_failure="$(curl --insecure --silent --show-error --out
 steamshine_page_file="${work_dir}/steamshine.html"
 steamshine_status="$(curl --insecure --silent --show-error --output "${steamshine_page_file}" --write-out '%{http_code}' "${base_url}/steamshine/monitor")"
 [[ "${steamshine_status}" == 200 ]] || { echo "Expected /steamshine/monitor to return HTTP 200, got ${steamshine_status}." >&2; exit 1; }
-for steamshine_route in /steamshine/setup /steamshine/login /steamshine/monitor /steamshine/stream /steamshine/applications /steamshine/gpu /steamshine/config /steamshine/pairing /steamshine/clients /steamshine/terminal; do
+for steamshine_route in /steamshine/setup /steamshine/login /steamshine/monitor /steamshine/stream /steamshine/applications /steamshine/gpu /steamshine/config /steamshine/pairing /steamshine/clients /steamshine/diagnostics /steamshine/terminal; do
   steamshine_route_status="$(curl --insecure --silent --show-error --output /dev/null --write-out '%{http_code}' "${base_url}${steamshine_route}")"
   [[ "${steamshine_route_status}" == 200 ]] || { echo "Expected SteamShine route ${steamshine_route} to return HTTP 200, got ${steamshine_route_status}." >&2; exit 1; }
 done
@@ -117,6 +117,12 @@ steamshine_after_upstream_failure="$(curl --insecure --silent --show-error --out
 [[ "${steamshine_after_upstream_failure}" == 200 ]] || { echo 'A missing SteamShine asset prevented the SteamShine route from loading.' >&2; exit 1; }
 unauthorized_api_status="$(curl --insecure --silent --show-error --output /dev/null --write-out '%{http_code}' "${base_url}/api/steamshine/v1/status")"
 [[ "${unauthorized_api_status}" == 401 || "${unauthorized_api_status}" == 403 ]] || { echo "Expected unauthenticated SteamShine status API to return 401 or 403, got ${unauthorized_api_status}." >&2; exit 1; }
+unauthorized_diagnostics_status="$(curl --insecure --silent --show-error --output /dev/null --write-out '%{http_code}' "${base_url}/api/steamshine/v1/diagnostics")"
+[[ "${unauthorized_diagnostics_status}" == 401 || "${unauthorized_diagnostics_status}" == 403 ]] || { echo "Expected unauthenticated diagnostics API to return 401 or 403, got ${unauthorized_diagnostics_status}." >&2; exit 1; }
+for lifecycle_action in quit restart; do
+  lifecycle_status="$(curl --insecure --silent --show-error --output /dev/null --write-out '%{http_code}' -X POST -H "Origin: ${base_url}" -H 'Content-Type: application/json' --data '{}' "${base_url}/api/steamshine/v1/system/${lifecycle_action}")"
+  [[ "${lifecycle_status}" == 401 || "${lifecycle_status}" == 403 ]] || { echo "Expected unauthenticated ${lifecycle_action} API to return 401 or 403, got ${lifecycle_status}." >&2; exit 1; }
+done
 if grep -Eqi 'asset not found|template error' "${log_file}"; then
   echo 'SteamShine logged an asset or template error during Web HTTP smoke testing.' >&2
   exit 1
@@ -165,7 +171,7 @@ both_disabled_steamshine_status="$(curl --insecure --silent --show-error --outpu
 [[ "${both_disabled_root_status}" == 200 ]] || { echo "Both-disabled guard did not restore upstream root, got ${both_disabled_root_status}." >&2; exit 1; }
 [[ "${both_disabled_steamshine_status}" == 404 ]] || { echo "Disabled SteamShine route returned ${both_disabled_steamshine_status}, expected 404." >&2; exit 1; }
 
-python3 - "${report_file}" "${base_url}" "${asset_count}" "${unauthorized_api_status}" "${upstream_root_status}" "${both_disabled_root_status}" "${both_disabled_steamshine_status}" <<'PY'
+python3 - "${report_file}" "${base_url}" "${asset_count}" "${unauthorized_api_status}" "${upstream_root_status}" "${both_disabled_root_status}" "${both_disabled_steamshine_status}" "${unauthorized_diagnostics_status}" <<'PY'
 """Write the non-secret upstream Web HTTP smoke test report."""
 import json
 import os
@@ -188,6 +194,7 @@ Path(sys.argv[1]).write_text(json.dumps({
     "steamshine_assets": ["/steamshine/app.css", "/steamshine/app.js"],
     "steamshine_missing_asset_status": 404,
     "steamshine_unauthenticated_status_api": int(sys.argv[4]),
+    "steamshine_unauthenticated_diagnostics_api": int(sys.argv[8]),
 }, indent=2) + "\n", encoding="utf-8")
 PY
 printf 'Upstream Web HTTP smoke test passed: %s\n' "${report_file}"

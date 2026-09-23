@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <chrono>
 #include <condition_variable>
+#include <cstdlib>
 #include <mutex>
 #include <src/steamshine_terminal.h>
 #include <string>
@@ -82,11 +83,13 @@ TEST_F(SteamshineTerminalTest, ManagesIndependentSessionsAndReplaysOutput) {
     output_ready.notify_all();
   })};
   ASSERT_NE(subscription, 0U);
-  ASSERT_TRUE(steamshine_terminal::write_input(first, "printf 'STEAMSHINE_TERMINAL_TEST\\n'\n"));
+  ASSERT_TRUE(steamshine_terminal::write_input(first, "printf 'STEAMSHINE_TERMINAL_TEST:%s\\n' \"$PWD\"\n"));
   {
     std::unique_lock lock {output_mutex};
+    const char *home {std::getenv("HOME")};
+    ASSERT_NE(home, nullptr);
     ASSERT_TRUE(output_ready.wait_for(lock, 5s, [&] {
-      return output.find("STEAMSHINE_TERMINAL_TEST") != std::string::npos;
+      return output.find(std::string {"STEAMSHINE_TERMINAL_TEST:"} + home) != std::string::npos;
     }));
   }
   steamshine_terminal::unsubscribe(first, subscription);
