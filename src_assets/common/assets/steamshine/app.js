@@ -1304,13 +1304,26 @@ async function renderTerminal() {
   let sessionRunning = active.running;
   let socketGeneration = 0;
   let terminalInputReady = false;
-  let staleReportSuppressionUntil = 0;
 
-  /** @brief Update the compact connection badge without moving terminal geometry. */
-  const setConnectionState = (label, state) => {
+  const terminalStreamPath = '/api/steamshine/v1/terminal/stream';
+  const directTerminalUrl = `wss://${location.hostname}:${status.ws_port}${terminalStreamPath}`;
+  const standardHttpsOrigin = location.protocol === 'https:' && (!location.port || location.port === '443');
+  const terminalSocketUrls = standardHttpsOrigin
+    ? [`wss://${location.host}${terminalStreamPath}`, directTerminalUrl]
+    : [directTerminalUrl];
+  let terminalSocketUrlIndex = 0;
+
+  /**
+   * @brief Update the compact connection badge without moving terminal geometry.
+   *
+   * @param label User-facing connection state.
+   * @param state Machine-readable badge state.
+   * @param offerTrust Whether to show the legacy direct-port certificate link.
+   */
+  const setConnectionState = (label, state, offerTrust = false) => {
     connection.lastChild.textContent = label;
     connection.dataset.state = state;
-    trustConnection.hidden = state !== 'error';
+    trustConnection.hidden = !offerTrust;
   };
 
   /** @brief Apply the visible viewport height and fit xterm on the next frame. */
@@ -1332,15 +1345,14 @@ async function renderTerminal() {
    *
    * xterm.js answers terminal capability queries while parsing output. Retained
    * tmux history can contain queries that are no longer current, so forwarding
-   * replies during replay would inject strings such as `0;276;0c` at the shell
-   * prompt. Live replies remain enabled once the ordered ready marker drains.
+   * xterm's primary or secondary Device Attributes replies would inject strings
+   * such as `0;276;0c` at the shell prompt. These protocol replies are never
+   * interactive user input and are removed regardless of callback timing.
    */
   const sendInput = (data) => {
     if (!data || !terminalInputReady) return;
-    if (performance.now() < staleReportSuppressionUntil) {
-      data = data.replace(/\x1b\[(?:\?|>)[0-9;]*c/g, '');
-      if (!data) return;
-    }
+    data = data.replace(/\x1b\[(?:\?|>)[0-9;]*c/g, '');
+    if (!data) return;
     if (ctrlActive && data.length === 1) {
       const code = data.toUpperCase().charCodeAt(0);
       if (code >= 64 && code <= 95) data = String.fromCharCode(code & 31);
@@ -1398,7 +1410,10 @@ async function renderTerminal() {
     terminalSocket = null;
     if (previous) previous.close();
     const generation = ++socketGeneration;
-    const socket = new WebSocket(`wss://${location.hostname}:${status.ws_port}/api/steamshine/v1/terminal/stream`);
+    const socketUrlIndex = terminalSocketUrlIndex;
+    const socketUrl = terminalSocketUrls[socketUrlIndex];
+    const directSocket = socketUrl === directTerminalUrl;
+    const socket = new WebSocket(socketUrl);
     let connectionErrored = false;
     socket.binaryType = 'arraybuffer';
     terminalSocket = socket;
@@ -1421,10 +1436,6 @@ async function renderTerminal() {
           terminalInstance.write('', () => {
             if (disposed || generation !== socketGeneration) return;
             host.classList.remove('replaying');
-            // xterm can dispatch capability replies one task after its write
-            // callback. Discard only those reports during this brief grace
-            // period while allowing ordinary keyboard input immediately.
-            staleReportSuppressionUntil = performance.now() + 1000;
             terminalInputReady = true;
             setConnectionState('Connected', 'open');
             scheduleFit();
@@ -1439,13 +1450,27 @@ async function renderTerminal() {
       terminalSocket = null;
       terminalInputReady = false;
       reconnectAttempt += 1;
-      setConnectionState(connectionErrored ? 'Connection error; trust the terminal certificate, then retrying…' : 'Reconnecting…', connectionErrored ? 'error' : 'connecting');
+      if (connectionErrored && terminalSocketUrls.length > 1) {
+        terminalSocketUrlIndex = (socketUrlIndex + 1) % terminalSocketUrls.length;
+      }
+      const trustRequired = connectionErrored && directSocket;
+      setConnectionState(
+        trustRequired ? 'Direct terminal connection was rejected; retrying the secure route…' : 'Reconnecting through secure Web access…',
+        connectionErrored ? 'error' : 'connecting',
+        trustRequired,
+      );
       const delay = Math.min(5000, 250 * (2 ** Math.min(reconnectAttempt - 1, 5)));
       reconnectTimer = setTimeout(connect, delay);
     };
     socket.onerror = () => {
       connectionErrored = true;
-      if (generation === socketGeneration) setConnectionState('Connection error; trust the terminal certificate, then retrying…', 'error');
+      if (generation === socketGeneration) {
+        setConnectionState(
+          directSocket ? 'Direct terminal connection was rejected; retrying the secure route…' : 'Secure terminal route unavailable; trying the direct fallback…',
+          'error',
+          directSocket,
+        );
+      }
     };
   };
 

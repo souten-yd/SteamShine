@@ -283,6 +283,7 @@ try {
   await steamshinePage.locator(`[data-terminal-session="${firstTerminalId}"]`).click();
   await steamshinePage.waitForFunction(() => document.querySelector('#term-connection')?.dataset.state === 'open', undefined, { timeout: 10000 });
   await steamshinePage.waitForFunction((expectedHome) => document.querySelector('.xterm-rows')?.textContent?.includes(`STEAMSHINE_BROWSER_TERMINAL_OK:${expectedHome}`), homeDirectory, { timeout: 5000 });
+  await steamshinePage.waitForTimeout(250);
   const replayProofFile = join(homeDirectory, 'terminal-replay-input-ok');
   await terminalInput.pressSequentially("printf 'STEAMSHINE_TERMINAL_REPLAY_INPUT_OK\\n' > \"$HOME/terminal-replay-input-ok\"", { delay: 1 });
   await terminalInput.press('Enter');
@@ -508,6 +509,9 @@ try {
   const appAsset = await appAssetResponse.text();
   securityResults.terminal_explanation_removed = !appAsset.includes('A real shell on the SteamShine host') && !appAsset.includes('The terminal connects over a separate port');
   if (!securityResults.terminal_explanation_removed) throw new Error('The Terminal page still contains the removed subtitle or framed explanation.');
+  securityResults.terminal_same_origin_websocket = appAsset.includes('`wss://${location.host}${terminalStreamPath}`')
+    && appAsset.includes('standardHttpsOrigin');
+  if (!securityResults.terminal_same_origin_websocket) throw new Error('The Terminal does not prefer the same-origin secure WebSocket route for HTTPS proxies.');
   securityResults.diagnostics_status = await steamshinePage.evaluate(async () => {
     const response = await fetch('/api/steamshine/v1/diagnostics');
     await response.text();
