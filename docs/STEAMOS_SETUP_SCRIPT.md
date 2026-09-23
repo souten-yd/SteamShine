@@ -24,7 +24,7 @@ Supported commands are `menu`, `check`, `compatibility-check`, `install`, `build
 are preserved, the pre-change file is backed up once under the configuration `backups` directory,
 and repeated runs are idempotent. `--no-start` installs, creates the unit, and enables it for the next
 login without starting it in the current session. `--no-service` omits unit creation, enablement, and
-startup entirely.
+startup entirely, and it does not provision the privileged Decky helper.
 
 `install` downloads the newest published SteamShine GitHub Release when no artifact-selection option
 is supplied. It requires exactly one `steamshine-steamos-x86_64-<commit>.tar.zst` asset and its

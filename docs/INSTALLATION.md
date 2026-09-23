@@ -24,8 +24,9 @@ Normal installation atomically creates the systemd user unit below
 `default.target`, starts it, and verifies the loaded unit, enablement link, active state, `MainPID`,
 `ExecStart`, and live executable identity before reporting success. `install --no-start` performs the
 same installation and enablement but leaves an inactive service inactive; `install --no-service`
-does not create, enable, or start the unit. No system service, Desktop Autostart entry, Steam shortcut,
-linger setting, `sudo`, or read-only filesystem change is used.
+does not create, enable, or start the unit, and skips Decky's privileged helper provisioning. No
+system service, Desktop Autostart entry, Steam shortcut, linger setting, `sudo`, or read-only
+filesystem change is used.
 
 The user unit sets `XDG_RUNTIME_DIR=%t`, `PIPEWIRE_RUNTIME_DIR=%t`, and
 `DBUS_SESSION_BUS_ADDRESS=unix:path=%t/bus`. `WAYLAND_DISPLAY`, `DISPLAY`, and

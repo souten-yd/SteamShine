@@ -496,11 +496,11 @@ install() {
   configure
   configure_recommended
   migrate_existing_apps
-  install_decky_helper
   if "${NO_SERVICE}"; then
     say 'SteamShine is installed; the systemd user service was not changed'
     return
   fi
+  install_decky_helper
   install_gamescope_session_guard
   install_service
   enable_service
@@ -684,11 +684,11 @@ update() {
   configure
   configure_recommended
   migrate_existing_apps
-  install_decky_helper
   if "${NO_SERVICE}"; then
     say 'SteamShine was updated; the systemd user service was not changed'
     return
   fi
+  install_decky_helper
   install_service
   install_gamescope_session_guard
   enable_service
@@ -710,8 +710,8 @@ repair() {
   configure
   configure_recommended
   migrate_existing_apps
-  install_decky_helper
   "${NO_SERVICE}" && { say 'SteamShine files were repaired; the systemd user service was not changed'; return; }
+  install_decky_helper
   service_active && active_before=true || true
   if "${active_before}"; then
     main_pid="$(service_main_pid)"

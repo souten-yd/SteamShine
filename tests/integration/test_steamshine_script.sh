@@ -205,8 +205,10 @@ tar --zstd -C "${test_root}/stage" -cf "${test_root}/steamshine-steamos-x86_64-t
 # archive and detached checksum, and then enters the normal validated install.
 release_commit='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
 release_archive="steamshine-steamos-x86_64-${release_commit}.tar.zst"
-mkdir -p "${test_root}/release-assets" "${test_root}/release-bin" "${test_root}/release-home/run"
-cp "${test_root}/steamshine-steamos-x86_64-test.tar.zst" "${test_root}/release-assets/${release_archive}"
+mkdir -p "${test_root}/release-assets" "${test_root}/release-bin" "${test_root}/release-home/run" "${test_root}/release-stage"
+cp -a "${test_root}/stage/." "${test_root}/release-stage/"
+install -m 755 "${root_dir}/scripts/steamshine-decky-helper.sh" "${test_root}/release-stage/scripts/steamshine-decky-helper.sh"
+tar --zstd -C "${test_root}/release-stage" -cf "${test_root}/release-assets/${release_archive}" .
 (cd "${test_root}/release-assets" && sha256sum "${release_archive}" >"${release_archive}.sha256")
 cat >"${test_root}/release-assets/latest.json" <<EOF
 {"tag_name":"steamos-test","assets":[{"name":"${release_archive}","browser_download_url":"https://github.com/souten-yd/SteamShine/releases/download/steamos-test/${release_archive}"},{"name":"${release_archive}.sha256","browser_download_url":"https://github.com/souten-yd/SteamShine/releases/download/steamos-test/${release_archive}.sha256"}]}
@@ -230,16 +232,35 @@ case "${url}" in
   *) exit 22;;
 esac
 EOF
-chmod 755 "${test_root}/release-bin/curl"
+cat >"${test_root}/release-bin/sudo" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+: >"${PRIVILEGE_PROBE:?}"
+exit 97
+EOF
+cat >"${test_root}/release-bin/git" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+chmod 755 "${test_root}/release-bin/curl" "${test_root}/release-bin/git" "${test_root}/release-bin/sudo"
 RELEASE_METADATA="${test_root}/release-assets/latest.json" \
   RELEASE_ARTIFACT="${test_root}/release-assets/${release_archive}" \
   RELEASE_CHECKSUM="${test_root}/release-assets/${release_archive}.sha256" \
+  PRIVILEGE_PROBE="${test_root}/no-service-privilege-probe" \
   STEAMSHINE_RELEASE_API_URL='https://api.github.test/repos/souten-yd/SteamShine/releases/latest' \
   HOME="${test_root}/release-home" XDG_RUNTIME_DIR="${test_root}/release-home/run" PATH="${test_root}/release-bin:${PATH}" \
   "${root_dir}/steamshine.sh" install --no-service --non-interactive --yes
 test -x "${test_root}/release-home/.local/bin/steamshine"
 test -f "${test_root}/release-home/.cache/steamshine/releases/${release_archive}"
 grep -Fxq 'steamos_virtual_display_enabled = true' "${test_root}/release-home/.config/steamshine/sunshine.conf"
+test ! -e "${test_root}/no-service-privilege-probe"
+PRIVILEGE_PROBE="${test_root}/no-service-privilege-probe" \
+  HOME="${test_root}/release-home" XDG_RUNTIME_DIR="${test_root}/release-home/run" PATH="${test_root}/release-bin:${PATH}" \
+  "${root_dir}/steamshine.sh" repair --no-service --non-interactive --yes
+PRIVILEGE_PROBE="${test_root}/no-service-privilege-probe" \
+  HOME="${test_root}/release-home" XDG_RUNTIME_DIR="${test_root}/release-home/run" PATH="${test_root}/release-bin:${PATH}" \
+  "${root_dir}/steamshine.sh" update --artifact "${test_root}/release-assets/${release_archive}" --no-service --non-interactive --yes
+test ! -e "${test_root}/no-service-privilege-probe"
 
 HOME="${test_root}/home" XDG_RUNTIME_DIR="${test_root}/home/run" \
   "${root_dir}/steamshine.sh" install --artifact "${test_root}/steamshine-steamos-x86_64-test.tar.zst" --no-service --non-interactive --yes
