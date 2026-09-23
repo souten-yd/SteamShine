@@ -41,6 +41,10 @@ using asio::ip::udp;
 using namespace std::literals;
 
 namespace rtsp_stream {
+  bool accept_error_is_shutdown(const boost::system::error_code &error) noexcept {
+    return error == boost::asio::error::operation_aborted;
+  }
+
   /**
    * @brief Release msg resources.
    *
@@ -544,7 +548,11 @@ namespace rtsp_stream {
      */
     void handle_accept(const boost::system::error_code &ec) {
       if (ec) {
-        BOOST_LOG(error) << "Couldn't accept incoming connections: "sv << ec.message();
+        if (accept_error_is_shutdown(ec)) {
+          BOOST_LOG(debug) << "RTSP accept canceled during shutdown"sv;
+        } else {
+          BOOST_LOG(error) << "Couldn't accept incoming connections: "sv << ec.message();
+        }
 
         // Stop server
         clear();

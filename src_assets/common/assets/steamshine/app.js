@@ -76,6 +76,7 @@ const ICONS = {
   grid: '<rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/>',
   sliders: '<path d="M5 5v6M5 15v4M12 5v3M12 12v7M19 5v10M19 19v0"/><circle cx="5" cy="12.5" r="1.7"/><circle cx="12" cy="9.5" r="1.7"/><circle cx="19" cy="16" r="1.7"/>',
   cpu: '<rect x="7" y="7" width="10" height="10" rx="1.5"/><rect x="10" y="10" width="4" height="4"/><path d="M9 3v3M15 3v3M9 18v3M15 18v3M3 9h3M3 15h3M18 9h3M18 15h3"/>',
+  addon: '<path d="M8 3h8v5h5v8h-5v5H8v-5H3V8h5z"/><path d="M10 8h4v8h-4z"/>',
   key: '<circle cx="8" cy="14.5" r="3.5"/><path d="M10.8 12 19 3.8M16 7l2.3 2.3M13.3 9.7 15.5 12"/>',
   users: '<circle cx="9" cy="8" r="3"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6"/><circle cx="17.5" cy="9.5" r="2.3"/><path d="M15 20c0-2.4 1.3-4.5 3.2-5.4"/>',
   file: '<path d="M7 3h7l4 4v14H7z"/><path d="M14 3v4h4"/><path d="M9.5 12h6M9.5 15.5h6"/>',
@@ -99,6 +100,7 @@ const NAV = [
   { id: 'stream', label: 'Stream', icon: 'play' },
   { id: 'applications', label: 'Apps', icon: 'grid' },
   { id: 'gpu', label: 'GPU', icon: 'cpu' },
+  { id: 'addons', label: 'Addon', icon: 'addon' },
   { id: 'config', label: 'Display', icon: 'display' },
   { id: 'pairing', label: 'Pin', icon: 'key' },
   { id: 'clients', label: 'Clients', icon: 'users' },
@@ -152,10 +154,10 @@ function shell(content, { authenticated = false, activeId = '' } = {}) {
   app.innerHTML = `<div class="shell">
     <header class="mobile-topbar">
       <img src="/steamshine/images/logo-mark-64.png" alt="SteamShine">
-      <span>SteamShine</span>
+      <span class="mobile-brand-label">SteamShine</span>
       <div class="mobile-actions">
         <button id="mobile-quit" class="icon-btn" aria-label="Quit SteamShine" title="Quit SteamShine">${icon('power')}</button>
-        <button id="mobile-restart" class="icon-btn" aria-label="Restart SteamShine" title="Restart SteamShine">${icon('restart')}</button>
+        <button id="mobile-restart" class="mobile-restart-btn" aria-label="Restart SteamShine" title="Restart SteamShine">${icon('restart')}<span>Restart</span></button>
         <button id="mobile-logout" class="icon-btn" aria-label="Log out" title="Log out">${icon('logout')}</button>
       </div>
     </header>
@@ -252,6 +254,7 @@ async function renderAuthenticated(session) {
     stream: renderStream,
     applications: renderApplications,
     gpu: renderGpu,
+    addons: renderAddons,
     diagnostics: renderDiagnostics,
     terminal: renderTerminal,
   };
@@ -313,7 +316,7 @@ function formatUptime(seconds) {
 async function renderDiagnostics() {
   let snapshot = null;
   let selectedSeverity = 'all';
-  shell(`<div class="page-header"><div><h2>Diagnostics</h2><p>Bounded service and connection evidence for troubleshooting or sharing with Codex.</p></div><div class="btn-row"><button id="copy-diagnostics" class="btn-ghost">Copy JSON</button><button id="refresh-diagnostics" class="btn-primary">Refresh</button></div></div>
+  shell(`<div class="page-header"><div><h2>Diagnostics</h2><p>Bounded service, action, and connection evidence for troubleshooting or sharing with Codex.</p></div><div class="btn-row"><button id="reset-diagnostics" class="btn-danger">Reset history</button><button id="copy-diagnostics" class="btn-ghost">Copy JSON</button><button id="refresh-diagnostics" class="btn-primary">Refresh</button></div></div>
     <div id="diagnostics-root" class="stack"><div class="empty">Loading…</div></div>`, { authenticated: true, activeId: 'diagnostics' });
 
   const draw = () => {
@@ -327,6 +330,13 @@ async function renderDiagnostics() {
       <div class="diagnostic-meta"><span class="badge">${escapeHtml(entry.severity)}</span><span>${escapeHtml(entry.component)}</span><time>${escapeHtml(entry.timestamp)}</time></div>
       <pre>${escapeHtml(entry.message)}</pre>
     </div>`).join('');
+    const actionRows = (snapshot.actions || []).slice().reverse().map((action) => `<div class="diagnostic-action">
+      <time>${escapeHtml(action.timestamp)}</time><span class="badge">${escapeHtml(action.method)}</span><code>${escapeHtml(action.path)}</code>
+    </div>`).join('');
+    const operationRows = (snapshot.operation_timeline || []).slice().reverse().map((operation) => `<div class="diagnostic-entry severity-${escapeHtml(operation.severity)}">
+      <div class="diagnostic-meta"><span class="badge">${escapeHtml(operation.severity)}</span><span>${escapeHtml(operation.component)}</span><time>${escapeHtml(operation.timestamp)}</time></div>
+      <pre>${escapeHtml(operation.message)}</pre>
+    </div>`).join('');
     root.innerHTML = `<div class="grid diagnostics-summary">
         <div class="metric-tile tone-danger"><div class="metric-label">Errors</div><div class="metric-value num">${(counts.error || 0) + (counts.fatal || 0)}</div></div>
         <div class="metric-tile tone-warn"><div class="metric-label">Warnings</div><div class="metric-value num">${counts.warning || 0}</div></div>
@@ -336,6 +346,12 @@ async function renderDiagnostics() {
       <div class="section"><div class="diagnostic-toolbar"><h3>Service log</h3><div class="diagnostic-filters">${filters}</div></div>
         <div class="diagnostic-list">${rows || '<div class="empty">No matching log entries.</div>'}</div>
       </div>
+      <details class="section" ${actionRows ? 'open' : ''}><summary>Recent Web actions (${snapshot.actions?.length || 0})</summary>
+        <div class="diagnostic-actions">${actionRows || '<div class="empty">No actions since the last reset.</div>'}</div>
+      </details>
+      <details class="section" ${operationRows ? 'open' : ''}><summary>Startup and display operation timeline (${snapshot.operation_timeline?.length || 0})</summary>
+        <div class="diagnostic-list">${operationRows || '<div class="empty">No lifecycle operations recorded.</div>'}</div>
+      </details>
       <details class="section"><summary>Raw bounded log</summary><pre class="diagnostic-raw">${escapeHtml(snapshot.log?.content || '')}</pre></details>`;
     root.querySelectorAll('[data-severity]').forEach((button) => button.addEventListener('click', () => {
       selectedSeverity = button.dataset.severity;
@@ -348,6 +364,15 @@ async function renderDiagnostics() {
     draw();
   };
   document.querySelector('#refresh-diagnostics').onclick = () => load().catch((error) => toast(error.message, 'error'));
+  document.querySelector('#reset-diagnostics').onclick = async () => {
+    if (!await confirmDialog({ title: 'Reset diagnostic history', message: 'Hide prior service logs and permanently remove completed session reports?', confirmLabel: 'Reset history' })) return;
+    try {
+      await json(await api('/diagnostics/reset', { method: 'POST', body: '{}' }));
+      selectedSeverity = 'all';
+      await load();
+      toast('Diagnostic history reset.', 'ok');
+    } catch (error) { toast(error.message, 'error'); }
+  };
   document.querySelector('#copy-diagnostics').onclick = async () => {
     if (!snapshot) return;
     try { await navigator.clipboard.writeText(JSON.stringify(snapshot, null, 2)); toast('Diagnostic JSON copied.', 'ok'); }
@@ -829,6 +854,52 @@ async function renderGpu() {
   document.querySelector('#add-profile')?.addEventListener('click', () => openProfileForm(caps, null));
 }
 
+/** @brief Render fixed-scope Decky Loader installation and lifecycle controls. */
+async function renderAddons() {
+  const status = await json(await api('/addons/decky'));
+  const installedLabel = status.installed ? (status.version || 'Installed') : 'Not installed';
+  const serviceLabel = status.service_active ? 'Active' : (status.service_enabled ? 'Inactive (enabled)' : 'Inactive');
+  const managementNotice = status.management_available
+    ? '<div class="callout info">Operations use SteamShine’s root-owned helper, which permits only Decky stable install, update, uninstall, and owned-session start.</div>'
+    : '<div class="callout warn">Privileged Decky management is not provisioned. Run the SteamShine installer or repair once with sudo authorization; status detection remains read-only.</div>';
+  const managementDisabled = status.management_available ? '' : 'disabled';
+  const controls = status.installed
+    ? `<button type="button" class="btn-primary" data-decky-action="update" ${managementDisabled}>Update / repair stable</button><button type="button" class="btn-danger" data-decky-action="uninstall" ${managementDisabled}>Uninstall loader</button>`
+    : `<button type="button" class="btn-primary" data-decky-action="install" ${managementDisabled}>Install stable</button>`;
+  shell(`<div class="page-header"><div><h2>Addons</h2><p>Install and maintain host integrations used with Steam Game Mode.</p></div></div>
+    <div class="stack">
+      <div class="section"><h3>Decky Loader</h3><div class="rows">
+        <div class="row"><span class="k">Installation</span><span class="v">${escapeHtml(installedLabel)}</span></div>
+        <div class="row"><span class="k">System service</span><span class="v"><span class="badge ${status.service_active ? 'badge-ok' : 'badge-warn'}">${escapeHtml(serviceLabel)}</span></span></div>
+        <div class="row"><span class="k">Channel</span><span class="v">Latest stable release</span></div>
+      </div><div class="btn-row">${controls}</div></div>
+      ${managementNotice}
+      <div class="field-hint">Install and update follow the official <a href="https://github.com/SteamDeckHomebrew/decky-installer" target="_blank" rel="noopener">SteamDeckHomebrew/decky-installer</a> stable-release scripts. Uninstall preserves plugin data, matching the official normal uninstall.</div>
+    </div>`, { authenticated: true, activeId: 'addons' });
+
+  document.querySelectorAll('[data-decky-action]').forEach((button) => button.addEventListener('click', async () => {
+    const action = button.dataset.deckyAction;
+    const destructive = action === 'uninstall';
+    if (!await confirmDialog({
+      title: `${action[0].toUpperCase()}${action.slice(1)} Decky Loader`,
+      message: destructive
+        ? 'Uninstall Decky Loader? Installed plugins and their data are preserved, but the loader service and Steam CEF debugging marker are removed.'
+        : `${action === 'install' ? 'Install' : 'Update or repair'} the latest stable Decky Loader release?`,
+      confirmLabel: destructive ? 'Uninstall' : 'Continue',
+      danger: destructive,
+    })) return;
+    document.querySelectorAll('[data-decky-action]').forEach((control) => { control.disabled = true; });
+    try {
+      const result = await json(await api('/addons/decky/action', { method: 'POST', body: JSON.stringify({ action }) }));
+      toast(result.message || 'Decky Loader operation completed.', 'ok');
+      await renderAddons();
+    } catch (error) {
+      toast(error.message, 'error');
+      await renderAddons();
+    }
+  }));
+}
+
 function renderGpuBody(caps, profiles, active) {
   const wrap = document.createElement('div');
   wrap.id = 'gpu-root';
@@ -917,16 +988,21 @@ async function renderVirtualDisplayConfig() {
   const candidates = await json(await api('/config/virtual-display/sources')).catch(() => ({ sources: [] }));
   const enabled = config.steamos_virtual_display_enabled === 'enabled';
   const sourceOptions = (candidates.sources || []).map((source) => `<option value="${escapeHtml(source.pid)}">PID ${escapeHtml(source.pid)} — ${escapeHtml(source.description || 'Gamescope')} (${escapeHtml(source.render_node || 'unknown GPU')})</option>`).join('');
-  shell(`<div class="page-header"><div><h2>Virtual display</h2><p>Choose how SteamShine obtains the display it streams. Saving requires a restart.</p></div><a class="btn-ghost btn-sm" href="/sunshine/config">Sunshine settings</a></div>
+  shell(`<div class="page-header"><div><h2>Virtual display</h2><p>Every Moonlight app launch stops stock Game Mode if present and starts a client-sized SteamShine-owned Gamescope. These settings control startup probing and how that owned display is presented. Saving requires a restart.</p></div><a class="btn-ghost btn-sm" href="/sunshine/config">Sunshine settings</a></div>
     <form id="virtual-display-config" class="section stack">
-      <div class="checkbox-row"><label style="flex-direction:row-reverse;justify-content:flex-end">Enable SteamOS virtual display<input name="enabled" type="checkbox" ${enabled ? 'checked' : ''}></label></div>
-      <label>Virtual display mode<select name="mode"><option value="off" ${config.steamos_virtual_display_mode === 'off' ? 'selected' : ''}>Off</option><option value="auto" ${config.steamos_virtual_display_mode === 'auto' ? 'selected' : ''}>Auto</option><option value="force" ${config.steamos_virtual_display_mode === 'force' ? 'selected' : ''}>Force</option></select></label>
-      <label>Gamescope session source<select name="session_source"><option value="auto" ${config.steamos_session_source === 'auto' ? 'selected' : ''}>Auto</option><option value="existing_gamescope" ${config.steamos_session_source === 'existing_gamescope' ? 'selected' : ''}>Existing Game Mode only</option><option value="owned_private" ${config.steamos_session_source === 'owned_private' ? 'selected' : ''}>SteamShine private session only</option></select></label>
-      <label>Local presentation<select name="local_presentation"><option value="auto" ${config.steamos_local_presentation === 'auto' ? 'selected' : ''}>Auto</option><option value="off" ${config.steamos_local_presentation === 'off' ? 'selected' : ''}>Off</option><option value="mirror" ${config.steamos_local_presentation === 'mirror' ? 'selected' : ''}>Mirror</option></select></label>
-      <label>Existing Gamescope PID (0 = automatic)<input name="existing_gamescope_pid" type="number" min="0" step="1" list="gamescope-source-pids" value="${escapeHtml(config.steamos_existing_gamescope_pid || '0')}"></label>
+      <div class="field-hint">Invariant: a real Moonlight launch never attaches to stock Gamescope. If stock Game Mode is not running, that absence is treated as normal and the owned session starts directly.</div>
+      <div class="checkbox-row"><label style="flex-direction:row-reverse;justify-content:flex-end">Enable custom startup display policy<input name="enabled" type="checkbox" ${enabled ? 'checked' : ''}></label></div>
+      <p class="field-hint">Unchecked: startup probing uses the safe automatic default. Moonlight launches still use the owned-session invariant above.</p>
+      <label>Startup probe mode<select name="mode"><option value="off" ${config.steamos_virtual_display_mode === 'off' ? 'selected' : ''}>Off — do not create a display during startup probing</option><option value="auto" ${config.steamos_virtual_display_mode === 'auto' ? 'selected' : ''}>Auto — use a verified available source for startup probing</option><option value="force" ${config.steamos_virtual_display_mode === 'force' ? 'selected' : ''}>Force — require an owned display for startup probing</option></select></label>
+      <label>Startup Gamescope source<select name="session_source"><option value="auto" ${config.steamos_session_source === 'auto' ? 'selected' : ''}>Auto — verified stock first, then owned</option><option value="existing_gamescope" ${config.steamos_session_source === 'existing_gamescope' ? 'selected' : ''}>Verified stock Game Mode only</option><option value="owned_private" ${config.steamos_session_source === 'owned_private' ? 'selected' : ''}>SteamShine-owned only</option></select></label>
+      <p class="field-hint">This source choice is used for startup encoder probing only. A Moonlight app always replaces stock with an owned Gamescope.</p>
+      <label>Owned-session local presentation<select name="local_presentation"><option value="auto" ${config.steamos_local_presentation === 'auto' ? 'selected' : ''}>Auto — mirror through KWin when a verified physical output exists; otherwise remote only</option><option value="off" ${config.steamos_local_presentation === 'off' ? 'selected' : ''}>Off — remote only</option><option value="mirror" ${config.steamos_local_presentation === 'mirror' ? 'selected' : ''}>Mirror — require verified KWin and a physical output</option></select></label>
+      <label>Startup stock Gamescope PID (0 = automatic)<input name="existing_gamescope_pid" type="number" min="0" step="1" list="gamescope-source-pids" value="${escapeHtml(config.steamos_existing_gamescope_pid || '0')}"></label>
       <datalist id="gamescope-source-pids">${sourceOptions}</datalist>
       <p class="field-hint">${sourceOptions ? 'Verified resident Game Mode candidates are listed above.' : 'No verified resident Game Mode candidate is currently available.'}</p>
-      <div class="checkbox-row"><label style="flex-direction:row-reverse;justify-content:flex-end">Keep a SteamShine-owned session after disconnect<input name="keep_session_alive" type="checkbox" ${config.steamos_keep_session_alive !== 'disabled' ? 'checked' : ''}></label></div>
+      <label>Desktop Steam migration<select name="steam_migration"><option value="auto_idle" ${config.steamos_steam_migration === 'auto_idle' ? 'selected' : ''}>Auto — migrate only a uniquely verified idle Desktop Steam</option><option value="reject" ${config.steamos_steam_migration === 'reject' ? 'selected' : ''}>Reject — do not stop Desktop Steam automatically</option></select></label>
+      <p class="field-hint">This applies only to a separate Desktop-mode Steam process. Stock Game Mode handoff is unconditional for a Moonlight launch.</p>
+      <div class="checkbox-row"><label style="flex-direction:row-reverse;justify-content:flex-end">Keep the owned Gamescope after Moonlight disconnect<input name="keep_session_alive" type="checkbox" ${config.steamos_keep_session_alive !== 'disabled' ? 'checked' : ''}></label></div>
       <div class="btn-row"><button class="btn-primary">Save policy</button></div>
       <div class="notice"></div>
     </form>`, { authenticated: true, activeId: 'config' });
@@ -934,7 +1010,7 @@ async function renderVirtualDisplayConfig() {
     event.preventDefault();
     const form = event.currentTarget;
     try {
-      const result = await json(await api('/config/virtual-display', { method: 'POST', body: JSON.stringify({ enabled: form.elements.enabled.checked, mode: form.elements.mode.value, session_source: form.elements.session_source.value, local_presentation: form.elements.local_presentation.value, keep_session_alive: form.elements.keep_session_alive.checked, existing_gamescope_pid: Number(form.elements.existing_gamescope_pid.value) }) }));
+      const result = await json(await api('/config/virtual-display', { method: 'POST', body: JSON.stringify({ enabled: form.elements.enabled.checked, mode: form.elements.mode.value, session_source: form.elements.session_source.value, local_presentation: form.elements.local_presentation.value, steam_migration: form.elements.steam_migration.value, stock_session_handoff: config.steamos_stock_session_handoff || 'attach', keep_session_alive: form.elements.keep_session_alive.checked, existing_gamescope_pid: Number(form.elements.existing_gamescope_pid.value) }) }));
       form.querySelector('.notice').textContent = result.message; form.querySelector('.notice').className = 'notice ok';
     } catch (error) { form.querySelector('.notice').textContent = error.message; form.querySelector('.notice').className = 'notice error'; }
   };
@@ -988,7 +1064,130 @@ async function stopTerminalSession(sessionId) {
 
 /** @brief Format a retained terminal session for a compact tab label. */
 function terminalSessionLabel(session) {
-  return session.name || `Shell ${String(session.id).replace(/^terminal-/, '')}`;
+  const suffix = String(session.id).replace(/^terminal-/, '');
+  return session.persistent ? `Shell ${suffix} · OS managed` : (session.name || `Shell ${suffix}`);
+}
+
+/**
+ * @brief Install a frame-coalesced touch scroller for an xterm viewport.
+ *
+ * xterm updates its viewport synchronously for every touchmove. Mobile browsers
+ * can deliver several moves per frame, so coalescing their pixel deltas keeps
+ * the terminal attached to the finger without repeatedly rendering stale
+ * intermediate positions. A short decaying glide preserves native-like
+ * momentum after the finger is released.
+ *
+ * @param host Element containing the opened xterm instance.
+ * @param terminal Open xterm terminal controlled by the viewport.
+ * @return Cleanup callback that removes listeners and pending animation frames.
+ */
+function installTerminalTouchScroller(host, terminal) {
+  const viewport = host.querySelector('.xterm-viewport');
+  if (!viewport) return () => {};
+
+  const dragGain = 1.55;
+  const maximumVelocity = 3;
+
+  let touchId = null;
+  let lastY = 0;
+  let lastTime = 0;
+  let pendingPixels = 0;
+  let velocity = 0;
+  let moved = false;
+  let scrollFrame = 0;
+  let momentumFrame = 0;
+  let momentumTime = 0;
+
+  /** @brief Find the tracked finger in one TouchList-compatible collection. */
+  const findTouch = (touches) => Array.from(touches || []).find((touch) => touch.identifier === touchId);
+
+  /** @brief Apply all input received during the current display frame at once. */
+  const flushScroll = () => {
+    scrollFrame = 0;
+    const pixels = pendingPixels;
+    pendingPixels = 0;
+    if (!pixels) return;
+    const before = viewport.scrollTop;
+    viewport.scrollTop += pixels;
+    if (viewport.scrollTop === before) velocity = 0;
+  };
+
+  /** @brief Queue one viewport update without forcing layout for every touchmove. */
+  const queueScroll = (pixels) => {
+    pendingPixels += pixels;
+    if (!scrollFrame) scrollFrame = requestAnimationFrame(flushScroll);
+  };
+
+  /** @brief Continue a released swipe with native-like mobile momentum. */
+  const glide = (time) => {
+    const elapsed = Math.min(32, time - momentumTime);
+    momentumTime = time;
+    queueScroll(velocity * elapsed);
+    velocity *= Math.pow(0.95, elapsed / (1000 / 60));
+    if (Math.abs(velocity) >= 0.02) momentumFrame = requestAnimationFrame(glide);
+    else momentumFrame = 0;
+  };
+
+  /** @brief Begin tracking a single-finger terminal gesture. */
+  const onTouchStart = (event) => {
+    if (event.touches.length !== 1 || terminal.modes.mouseTrackingMode !== 'none') return;
+    cancelAnimationFrame(momentumFrame);
+    momentumFrame = 0;
+    const touch = event.touches[0];
+    touchId = touch.identifier;
+    lastY = touch.clientY;
+    lastTime = performance.now();
+    velocity = 0;
+    moved = false;
+    event.stopImmediatePropagation();
+  };
+
+  /** @brief Accumulate a touch delta and render it at most once per frame. */
+  const onTouchMove = (event) => {
+    if (touchId === null) return;
+    const touch = findTouch(event.touches);
+    if (!touch) return;
+    const now = performance.now();
+    const delta = lastY - touch.clientY;
+    const elapsed = Math.max(1, now - lastTime);
+    lastY = touch.clientY;
+    lastTime = now;
+    if (delta) {
+      moved = true;
+      const amplifiedDelta = delta * dragGain;
+      const instantaneous = Math.max(-maximumVelocity, Math.min(maximumVelocity, amplifiedDelta / elapsed));
+      velocity = velocity * 0.25 + instantaneous * 0.75;
+      queueScroll(amplifiedDelta);
+    }
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  };
+
+  /** @brief Finish a touch gesture, focusing taps and gliding swipes. */
+  const onTouchEnd = (event) => {
+    if (touchId === null || (event.type !== 'touchcancel' && !findTouch(event.changedTouches))) return;
+    if (!moved) terminal.focus();
+    else if (event.type !== 'touchcancel' && Math.abs(velocity) >= 0.02) {
+      momentumTime = performance.now();
+      momentumFrame = requestAnimationFrame(glide);
+    }
+    touchId = null;
+    event.stopImmediatePropagation();
+  };
+
+  const options = { capture: true, passive: false };
+  host.addEventListener('touchstart', onTouchStart, options);
+  host.addEventListener('touchmove', onTouchMove, options);
+  host.addEventListener('touchend', onTouchEnd, options);
+  host.addEventListener('touchcancel', onTouchEnd, options);
+  return () => {
+    cancelAnimationFrame(scrollFrame);
+    cancelAnimationFrame(momentumFrame);
+    host.removeEventListener('touchstart', onTouchStart, options);
+    host.removeEventListener('touchmove', onTouchMove, options);
+    host.removeEventListener('touchend', onTouchEnd, options);
+    host.removeEventListener('touchcancel', onTouchEnd, options);
+  };
 }
 
 /** @brief Render a ControlDeck-style multi-session PTY terminal. */
@@ -1023,6 +1222,7 @@ async function renderTerminal() {
         <div class="terminal-tabs" id="terminal-tabs">${tabs}</div>
         <div class="terminal-actions">
           <span class="terminal-connection" id="term-connection"><span></span>${active ? 'Connecting…' : 'No active session'}</span>
+          <a id="term-trust" class="btn btn-ghost btn-sm" href="https://${escapeHtml(location.hostname)}:${Number(status.ws_port)}/" target="_blank" rel="noopener" hidden>Trust connection</a>
           <button type="button" id="term-copy" class="btn-ghost btn-sm" ${active ? '' : 'disabled'}>Copy</button>
           <button type="button" id="term-paste" class="btn-ghost btn-sm" ${active ? '' : 'disabled'}>Paste</button>
           <button type="button" id="term-new" class="btn-primary btn-sm">+ New</button>
@@ -1065,6 +1265,7 @@ async function renderTerminal() {
   const root = document.querySelector('#terminal-root');
   const host = document.querySelector('#term-host');
   const connection = document.querySelector('#term-connection');
+  const trustConnection = document.querySelector('#term-trust');
   const ctrlButton = document.querySelector('[data-key="ControlLeft"]');
   const fitAddon = new window.FitAddon.FitAddon();
   terminalInstance = new window.Terminal({
@@ -1080,6 +1281,7 @@ async function renderTerminal() {
   });
   terminalInstance.loadAddon(fitAddon);
   terminalInstance.open(host);
+  const disposeTouchScroller = installTerminalTouchScroller(host, terminalInstance);
 
   let disposed = false;
   let reconnectTimer = null;
@@ -1094,6 +1296,7 @@ async function renderTerminal() {
   const setConnectionState = (label, state) => {
     connection.lastChild.textContent = label;
     connection.dataset.state = state;
+    trustConnection.hidden = state !== 'error';
   };
 
   /** @brief Apply the visible viewport height and fit xterm on the next frame. */
@@ -1202,12 +1405,13 @@ async function renderTerminal() {
     socket.onclose = () => {
       if (disposed || generation !== socketGeneration || socket !== terminalSocket) return;
       terminalSocket = null;
+      reconnectAttempt += 1;
       setConnectionState('Reconnecting…', 'connecting');
-      const delay = Math.min(5000, 250 * (2 ** Math.min(reconnectAttempt++, 5)));
+      const delay = Math.min(5000, 250 * (2 ** Math.min(reconnectAttempt - 1, 5)));
       reconnectTimer = setTimeout(connect, delay);
     };
     socket.onerror = () => {
-      if (generation === socketGeneration) setConnectionState('Connection error', 'error');
+      if (generation === socketGeneration) setConnectionState('Connection error; retrying…', 'connecting');
     };
   };
 
@@ -1248,6 +1452,7 @@ async function renderTerminal() {
     document.removeEventListener('visibilitychange', onVisibilityChange);
     textarea?.removeEventListener('compositionstart', onCompositionStart);
     textarea?.removeEventListener('compositionend', onCompositionEnd);
+    disposeTouchScroller();
     if (terminalSocket) terminalSocket.close();
     terminalSocket = null;
     terminalInstance?.dispose();
@@ -1297,8 +1502,8 @@ async function lifecycleAction(action) {
   const confirmed = await confirmDialog({
     title: label,
     message: restarting
-      ? 'Restart SteamShine now? Active streams and terminal sessions will disconnect briefly.'
-      : 'Quit SteamShine now? Active streams and terminal sessions will disconnect.',
+      ? 'Restart SteamShine now? Active streams disconnect. OS-managed terminal shells remain running and this page reconnects to them after restart.'
+      : 'Quit SteamShine now? Active streams disconnect. OS-managed terminal shells remain available for the next service start.',
     confirmLabel: restarting ? 'Restart' : 'Quit',
   });
   if (!confirmed) return;

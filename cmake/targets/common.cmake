@@ -54,27 +54,64 @@ option(STEAMSHINE_BUILD_WEB_UI "Build the SteamShine Web UI" ON)
 
 if(SUNSHINE_BUILD_UPSTREAM_WEB_UI)
     find_program(NPM npm REQUIRED)
-    set(NPM_INSTALL_FLAGS "--ignore-scripts")
+    set(NPM_INSTALL_FLAGS --ignore-scripts)
     if (NPM_OFFLINE)
-        set(NPM_INSTALL_FLAGS "${NPM_INSTALL_FLAGS} --offline")
+        list(APPEND NPM_INSTALL_FLAGS --offline)
     endif()
-    add_custom_target(web-ui ALL
+
+    # Dependency installation is keyed only to the npm manifests. This avoids
+    # repeating `npm ci` for C++ builds and ordinary Web source changes.
+    set(SUNSHINE_WEB_NPM_STAMP "${CMAKE_BINARY_DIR}/web-ui/npm-ci.stamp")
+    add_custom_command(
+            OUTPUT "${SUNSHINE_WEB_NPM_STAMP}"
             WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-            COMMENT "Installing NPM Dependencies and Building the upstream Web UI"
+            COMMENT "Installing upstream Web UI NPM dependencies"
+            COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_BINARY_DIR}/web-ui"
             COMMAND "$<$<BOOL:${WIN32}>:cmd;/C>" "${NPM}" ci ${NPM_INSTALL_FLAGS}
-            COMMAND "${CMAKE_COMMAND}" -E env "SUNSHINE_BUILD_HOMEBREW=${NPM_BUILD_HOMEBREW}" "SUNSHINE_SOURCE_ASSETS_DIR=${NPM_SOURCE_ASSETS_DIR}" "SUNSHINE_ASSETS_DIR=${NPM_ASSETS_DIR}" "$<$<BOOL:${WIN32}>:cmd;/C>" "${NPM}" run build  # cmake-lint: disable=C0301
+            COMMAND "${CMAKE_COMMAND}" -E touch "${SUNSHINE_WEB_NPM_STAMP}"
+            DEPENDS "${CMAKE_SOURCE_DIR}/package.json" "${CMAKE_SOURCE_DIR}/package-lock.json"
             COMMAND_EXPAND_LISTS
             VERBATIM)
-    add_dependencies(sunshine web-ui)
+    add_custom_target(web-ui-dependencies DEPENDS "${SUNSHINE_WEB_NPM_STAMP}")
+
+    file(GLOB_RECURSE SUNSHINE_WEB_UI_SOURCES CONFIGURE_DEPENDS
+            "${SUNSHINE_SOURCE_ASSETS_DIR}/common/assets/web/*")
+    set(SUNSHINE_WEB_MANIFEST "${CMAKE_BINARY_DIR}/assets/web/.vite/manifest.json")
+    add_custom_command(
+            OUTPUT "${SUNSHINE_WEB_MANIFEST}"
+            WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+            COMMENT "Building the upstream Sunshine Web UI artifact"
+            COMMAND "${CMAKE_COMMAND}" -E env "SUNSHINE_BUILD_HOMEBREW=${NPM_BUILD_HOMEBREW}" "SUNSHINE_SOURCE_ASSETS_DIR=${NPM_SOURCE_ASSETS_DIR}" "SUNSHINE_ASSETS_DIR=${NPM_ASSETS_DIR}" "$<$<BOOL:${WIN32}>:cmd;/C>" "${NPM}" run build-clean  # cmake-lint: disable=C0301
+            DEPENDS "${SUNSHINE_WEB_NPM_STAMP}" "${CMAKE_SOURCE_DIR}/vite.config.js" ${SUNSHINE_WEB_UI_SOURCES}
+            COMMAND_EXPAND_LISTS
+            VERBATIM)
+    add_custom_target(web-ui ALL DEPENDS "${SUNSHINE_WEB_MANIFEST}")
 endif()
 
 if(STEAMSHINE_BUILD_WEB_UI)
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
-    add_custom_target(steamshine-web-ui ALL
+    file(GLOB_RECURSE STEAMSHINE_WEB_UI_SOURCES CONFIGURE_DEPENDS
+            "${SUNSHINE_SOURCE_ASSETS_DIR}/common/assets/steamshine/*")
+    set(STEAMSHINE_WEB_MANIFEST "${CMAKE_BINARY_DIR}/assets/steamshine/manifest.json")
+    add_custom_command(
+            OUTPUT "${STEAMSHINE_WEB_MANIFEST}"
             COMMENT "Building the SteamShine Web UI"
             COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/scripts/build-steamshine-web-assets.py" "${SUNSHINE_SOURCE_ASSETS_DIR}/common/assets/steamshine" "${CMAKE_BINARY_DIR}/assets/steamshine"
+            DEPENDS "${CMAKE_SOURCE_DIR}/scripts/build-steamshine-web-assets.py" ${STEAMSHINE_WEB_UI_SOURCES}
             VERBATIM)
-    add_dependencies(sunshine steamshine-web-ui)
+    add_custom_target(steamshine-web-ui ALL DEPENDS "${STEAMSHINE_WEB_MANIFEST}")
+endif()
+
+# Keep native and browser artifacts independently addressable. An explicit
+# `sunshine` build now compiles only the native executable, while callers that
+# need every browser bundle can request `web-artifacts`.
+add_custom_target(sunshine-artifact DEPENDS sunshine)
+add_custom_target(web-artifacts)
+if(TARGET web-ui)
+    add_dependencies(web-artifacts web-ui)
+endif()
+if(TARGET steamshine-web-ui)
+    add_dependencies(web-artifacts steamshine-web-ui)
 endif()
 
 # docs

@@ -380,6 +380,21 @@ namespace steamshine_gpuctl {
     return config::sunshine.steamshine_gpu_active_profile;
   }
 
+  std::optional<profile_t> active_profile() {
+    const auto name {active_profile_name()};
+    if (name.empty()) {
+      return std::nullopt;
+    }
+    const auto find_named = [&name](const std::vector<profile_t> &profiles) -> std::optional<profile_t> {
+      const auto found {std::ranges::find(profiles, name, &profile_t::name)};
+      return found == profiles.end() ? std::nullopt : std::optional<profile_t> {*found};
+    };
+    if (const auto builtin {find_named(builtin_profiles())}) {
+      return builtin;
+    }
+    return find_named(custom_profiles());
+  }
+
   apply_result_t activate_profile(const std::string &name) {
     detect();
     apply_result_t result;

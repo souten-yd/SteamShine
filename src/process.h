@@ -83,14 +83,15 @@ namespace proc {
   bool should_launch_owned_virtual_desktop(std::string_view app_command, std::size_t detached_command_count, bool owned_virtual_display);
 
   /**
-   * @brief Decide whether an application should prefer an owned Gamescope canvas.
+   * @brief Select the owned SteamOS canvas for a Moonlight application.
    *
-   * A Big Picture launch needs one stable display endpoint even when a physical
-   * KDE output happens to be capturable. Verified stock Game Mode remains a
-   * higher-priority attached source in the route selector.
+   * Every application launched by a Moonlight request uses the requested
+   * client geometry on a SteamShine-owned Gamescope when virtual display is
+   * enabled. Startup encoder probing is not an application launch and does not
+   * use this policy.
    *
-   * @param application Parsed application configuration.
-   * @return True when any configured launch command opens Steam Big Picture.
+   * @param application Valid application definition selected by Moonlight.
+   * @return Always true for a selected application.
    */
   bool should_prefer_owned_virtual_display(const struct ctx_t &application);
 
@@ -128,13 +129,13 @@ namespace proc {
   std::string select_effective_command(std::string_view app_command, bool owned_virtual_display, std::string_view virtual_desktop_command);
 
   /**
-   * @brief Decide whether teardown must preserve the resident Game Mode Steam shell.
+   * @brief Decide whether virtual-session teardown owns the resident Steam lifecycle.
    *
-   * @param preserve_attached_steam Whether the application used a non-owned attached Game Mode session.
+   * @param virtual_session_owns_steam_lifecycle Whether attached or owned session teardown handles Steam.
    * @param undo_command Configured teardown command.
    * @return True only for a Big Picture close request in an attached Game Mode session.
    */
-  bool should_skip_undo_command(bool preserve_attached_steam, std::string_view undo_command);
+  bool should_skip_undo_command(bool virtual_session_owns_steam_lifecycle, std::string_view undo_command);
 
   /**
    * @brief Apply one verified Gamescope endpoint to a child environment.
@@ -293,7 +294,7 @@ namespace proc {
 
     // If no command associated with _app_id, yet it's still running
     bool placebo {};
-    bool preserve_attached_steam_ {};  ///< Whether teardown must leave the non-owned Game Mode Steam shell open.
+    bool defer_session_steam_undo_ {};  ///< Whether virtual-session teardown owns the resident Steam lifecycle.
 
     boost::process::v1::child _process;
     boost::process::v1::group _process_group;
@@ -336,8 +337,13 @@ namespace proc {
   std::optional<proc::proc_t> parse(const std::string &file_name);
 
   /**
-   * @brief Initialize proc functions
-   * @return Unique pointer to `deinit_t` to manage cleanup
+   * @brief Initialize process and virtual-session shutdown cleanup.
+   *
+   * The returned guard first runs application undo commands while the owned
+   * display is still available, then stops that display and restores stock
+   * Game Mode. This ordering also applies to early returns during startup.
+   *
+   * @return Unique pointer to `deinit_t` that manages ordered cleanup.
    */
   std::unique_ptr<platf::deinit_t> init();
 

@@ -215,15 +215,17 @@ namespace steamos_virtual_session {
   };
 
   /**
-   * @brief Select whether one verified stock source may be handed off.
+   * @brief Select whether a client launch must replace the stock source.
    *
-   * @param policy Configured handoff policy.
-   * @param prefer_owned_session Whether the application requested an owned canvas.
+   * A real Moonlight application always receives its requested geometry from
+   * an owned Gamescope. Startup encoder probing remains non-destructive and
+   * may attach to stock Gamescope temporarily.
+   *
+   * @param prefer_owned_session Whether this is a client application launch.
    * @param startup_encoder_preflight Whether this is the startup HDR probe.
-   * @param activity Verified stock Steam activity classification.
-   * @return Attach for active, unknown, or preflight sources; otherwise handoff.
+   * @return Handoff for client launches; attach for startup probing.
    */
-  stock_handoff_action_e select_stock_handoff_action(stock_handoff_policy_e policy, bool prefer_owned_session, bool startup_encoder_preflight, stock_activity_e activity);
+  stock_handoff_action_e select_stock_handoff_action(bool prefer_owned_session, bool startup_encoder_preflight);
 
   /**
    * @brief Select the optional systemctl job-mode argument.

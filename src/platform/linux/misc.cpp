@@ -1499,8 +1499,21 @@ namespace platf {
 #endif
     }
 
+    /**
+     * A default SteamOS transition configuration captures only after a
+     * verified Gamescope endpoint has been prepared. Probing unrelated
+     * physical backends before that handoff produces permission and missing
+     * compositor errors without providing a usable source. Explicit capture
+     * selections continue to request their selected physical backend.
+     */
+    const bool gamescope_preflight_expected {
+      config::steamos_virtual_display.enabled &&
+      config::steamos_virtual_display.mode != steamos_virtual_session::virtual_display_mode_e::off &&
+      config::video.capture.empty()
+    };
+
 #ifdef SUNSHINE_BUILD_CUDA
-    if (((config::video.capture.empty() && sources.none()) || config::video.capture == "nvfbc") && verify_nvfbc()) {
+    if (((!gamescope_preflight_expected && config::video.capture.empty() && sources.none()) || config::video.capture == "nvfbc") && verify_nvfbc()) {
       sources[source::NVFBC] = true;
     }
 #endif
@@ -1510,29 +1523,29 @@ namespace platf {
     if (steamos_virtual_session::capture_backend_required()) {
       window_system = window_system_e::WAYLAND;
       sources[source::WAYLAND] = true;
-    } else if (((config::video.capture.empty() && sources.none()) || config::video.capture == "wlr") && verify_wl()) {
+    } else if (((!gamescope_preflight_expected && config::video.capture.empty() && sources.none()) || config::video.capture == "wlr") && verify_wl()) {
       sources[source::WAYLAND] = true;
     }
 #endif
 #ifdef SUNSHINE_BUILD_DRM
-    if (((config::video.capture.empty() && sources.none()) || config::video.capture == "kms") && verify_kms()) {
+    if (((!gamescope_preflight_expected && config::video.capture.empty() && sources.none()) || config::video.capture == "kms") && verify_kms()) {
       sources[source::KMS] = true;
     }
 #endif
 #ifdef SUNSHINE_BUILD_X11
     // We enumerate this capture backend regardless of other suitable sources,
     // since it may be needed as a NvFBC fallback for software encoding on X11.
-    if ((config::video.capture.empty() || config::video.capture == "x11") && verify_x11()) {
+    if (((!gamescope_preflight_expected && config::video.capture.empty()) || config::video.capture == "x11") && verify_x11()) {
       sources[source::X11] = true;
     }
 #endif
 #ifdef SUNSHINE_BUILD_KWIN
-    if (((config::video.capture.empty() && steamos_virtual_session::physical_output_connected() && live_desktop_endpoint) || config::video.capture == "kwin") && verify_kwin()) {
+    if (((!gamescope_preflight_expected && config::video.capture.empty() && steamos_virtual_session::physical_output_connected() && live_desktop_endpoint) || config::video.capture == "kwin") && verify_kwin()) {
       sources[source::KWIN] = true;
     }
 #endif
 #ifdef SUNSHINE_BUILD_PORTAL
-    if (steamos_virtual_session::should_probe_physical_portal(config::video.capture.empty(), config::video.capture == "portal", steamos_virtual_session::physical_output_connected() && live_desktop_endpoint,
+    if (steamos_virtual_session::should_probe_physical_portal(!gamescope_preflight_expected && config::video.capture.empty(), config::video.capture == "portal", steamos_virtual_session::physical_output_connected() && live_desktop_endpoint,
   #ifdef SUNSHINE_BUILD_KWIN
                                                               sources[source::KWIN]
   #else
@@ -1545,13 +1558,21 @@ namespace platf {
 #endif
     steamos_virtual_session::set_physical_compositor_capture_available(physical_compositor_capture_available());
 
-    if (sources.none()) {
-      BOOST_LOG(error) << "Unable to initialize capture method"sv;
+    /**
+     * Load EGL before evaluating physical capture availability. SteamOS can
+     * intentionally fail physical initialization and immediately continue
+     * with a verified Gamescope PipeWire source, whose DMA-BUF capability
+     * discovery also requires these entry points.
+     */
+    if (!gladLoaderLoadEGL(NULL)) {
+      BOOST_LOG(error) << "Failed to load EGL library symbols"sv;
       return nullptr;
     }
 
-    if (!gladLoaderLoadEGL(NULL)) {
-      BOOST_LOG(error) << "Failed to load EGL library symbols"sv;
+    if (sources.none() && gamescope_preflight_expected) {
+      BOOST_LOG(info) << "Physical capture probe deferred until verified Gamescope preflight"sv;
+    } else if (sources.none()) {
+      BOOST_LOG(error) << "Unable to initialize capture method"sv;
       return nullptr;
     }
 

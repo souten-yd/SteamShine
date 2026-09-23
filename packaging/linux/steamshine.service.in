@@ -12,7 +12,9 @@ Environment=STEAMSHINE_LAUNCH_MODE=systemd_user_service
 ExecStart=%h/.local/bin/steamshine %h/.config/steamshine/sunshine.conf
 Restart=on-failure
 RestartSec=3
-TimeoutStopSec=10
+# The maximum virtual-session stop plus stock-session recovery budget is 130s.
+# Leave systemd a final five-second margin beyond SteamShine's own watchdog.
+TimeoutStopSec=135
 
 [Install]
 WantedBy=default.target

@@ -4192,9 +4192,12 @@ namespace video {
     // A selected SteamOS Gamescope session uses one verified AMD dGPU and must not
     // silently turn a capture failure into CPU software encoding. This keeps
     // the normal path GPU-local and returns a launch error when Vulkan Video
-    // cannot be initialized on the selected render node.
+    // cannot be initialized on the selected render node. NVENC is excluded for
+    // the same reason, avoiding an expected CUDA probe being reported as an
+    // error on an AMD-only session.
     if (steamos_virtual_session::active()) {
       std::erase(encoder_list, &software);
+      std::erase(encoder_list, &nvenc);
     }
 
     // If we already have a good encoder, check to see if another probe is required

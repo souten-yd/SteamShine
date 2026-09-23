@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <chrono>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <map>
 #include <memory>
@@ -107,6 +108,62 @@ TEST(WebServicesTest, InvalidatesSessions) {
 }
 
 /**
+ * @brief Verify browser authentication survives a SteamShine service restart.
+ */
+TEST(WebServicesTest, PersistsSessionsAcrossServiceInstances) {
+  namespace fs = std::filesystem;
+  const auto original_username = config::sunshine.username;
+  const auto original_password = config::sunshine.password;
+  const auto original_salt = config::sunshine.salt;
+  config::sunshine.username = "web-services-persistence-test";
+  config::sunshine.salt = "web-services-persistence-salt";
+  config::sunshine.password = util::hex(crypto::hash("web-services-persistence-password" + config::sunshine.salt)).to_string();
+  const auto root {fs::temp_directory_path() / std::format("steamshine-web-session-{}", std::chrono::steady_clock::now().time_since_epoch().count())};
+  const auto path {root / "web-sessions.json"};
+
+  web::CredentialService credentials;
+  std::optional<web::session_t> created;
+  {
+    web::SessionService before {std::chrono::hours(8), path};
+    created = before.login(credentials, "web-services-persistence-test", "web-services-persistence-password");
+    ASSERT_TRUE(created.has_value());
+  }
+  ASSERT_TRUE(fs::exists(path));
+  const auto persisted_document = nlohmann::json::parse(file_handler::read_file(path.string().c_str()));
+  ASSERT_TRUE(persisted_document.is_object()) << persisted_document.dump(2);
+  ASSERT_EQ(persisted_document.at("sessions").size(), 1U) << persisted_document.dump(2);
+  EXPECT_EQ(persisted_document.at("sessions").at(0).at("id"), created->id);
+  {
+    web::SessionService after {std::chrono::hours(8), path};
+    const auto restored {after.validate(created->id)};
+    ASSERT_TRUE(restored.has_value());
+    EXPECT_EQ(restored->csrf_token, created->csrf_token);
+    EXPECT_EQ(restored->username, created->username);
+    after.logout(created->id);
+  }
+  {
+    web::SessionService after_logout {std::chrono::hours(8), path};
+    EXPECT_FALSE(after_logout.validate(created->id).has_value());
+  }
+  std::optional<web::session_t> credential_bound;
+  {
+    web::SessionService before_credential_change {std::chrono::hours(8), path};
+    credential_bound = before_credential_change.login(credentials, "web-services-persistence-test", "web-services-persistence-password");
+    ASSERT_TRUE(credential_bound.has_value());
+  }
+  config::sunshine.password = "different-configured-password-hash";
+  {
+    web::SessionService after_credential_change {std::chrono::hours(8), path};
+    EXPECT_FALSE(after_credential_change.validate(credential_bound->id).has_value());
+  }
+
+  fs::remove_all(root);
+  config::sunshine.username = original_username;
+  config::sunshine.password = original_password;
+  config::sunshine.salt = original_salt;
+}
+
+/**
  * @brief Verify diagnostic logs become bounded, categorized machine-readable entries.
  */
 TEST(WebServicesTest, StructuresDiagnosticLogsForAutomatedAnalysis) {
@@ -117,30 +174,96 @@ TEST(WebServicesTest, StructuresDiagnosticLogsForAutomatedAnalysis) {
     std::ofstream output {temporary_log};
     output << "[2026-09-23 10:00:00.000]: Info: RTSP client connected from private LAN\n"
            << "[2026-09-23 10:00:01.000]: Warning: Gamescope PipeWire source paused\n"
-           << "[2026-09-23 10:00:02.000]: Error: [wayland] desktop socket unavailable\n"
-           << "[2026-09-23 10:00:03.000]: Fatal: terminal websocket failed\n";
+           << "[2026-09-23 10:00:02.000]: Info: SteamShine Web action: POST /api/steamshine/v1/config/virtual-display\n"
+           << "[2026-09-23 10:00:03.000]: Info: SteamShine Web action: POST /api/steamshine/v1/terminal/start\n"
+           << "[2026-09-23 10:00:04.000]: Error: [wayland] desktop socket unavailable\n"
+           << "[2026-09-23 10:00:05.000]: Info: SteamShine Web action: POST /api/steamshine/v1/lifecycle/restart\n"
+           << "[2026-09-23 10:00:06.000]: Fatal: terminal websocket failed\n";
   }
   config::sunshine.log_file = temporary_log.string();
 
   const web::DiagnosticService diagnostics;
-  const auto snapshot = diagnostics.snapshot(65536U, 3U, 0U);
+  const auto snapshot = diagnostics.snapshot(65536U, 6U, 0U);
   ASSERT_TRUE(snapshot.is_object()) << snapshot.dump();
   ASSERT_EQ(snapshot.at("schema_version"), 1);
   ASSERT_TRUE(snapshot.at("log").is_object()) << snapshot.dump();
   ASSERT_TRUE(snapshot.at("log").at("entries").is_array()) << snapshot.dump();
-  ASSERT_EQ(snapshot.at("log").at("entries").size(), 3U);
+  ASSERT_EQ(snapshot.at("log").at("entries").size(), 6U);
   ASSERT_TRUE(snapshot.at("log").at("entries").at(0).is_object()) << snapshot.dump();
   EXPECT_EQ(snapshot.at("log").at("entries").at(0).at("component"), "gamescope");
-  EXPECT_EQ(snapshot.at("log").at("entries").at(1).at("component"), "desktop");
+  EXPECT_EQ(snapshot.at("log").at("entries").at(3).at("component"), "desktop");
   EXPECT_EQ(snapshot.at("log").at("entries").at(2).at("component"), "terminal");
-  EXPECT_EQ(snapshot.at("log").at("counts").at("info"), 1U);
+  EXPECT_EQ(snapshot.at("log").at("counts").at("info"), 4U);
   EXPECT_EQ(snapshot.at("log").at("counts").at("warning"), 1U);
   EXPECT_EQ(snapshot.at("log").at("counts").at("error"), 1U);
   EXPECT_EQ(snapshot.at("log").at("counts").at("fatal"), 1U);
+  ASSERT_EQ(snapshot.at("actions").size(), 3U);
+  EXPECT_EQ(snapshot.at("actions").at(0).at("method"), "POST");
+  EXPECT_EQ(snapshot.at("actions").at(0).at("path"), "/api/steamshine/v1/config/virtual-display");
+  EXPECT_EQ(snapshot.at("actions").at(1).at("path"), "/api/steamshine/v1/terminal/start");
+  EXPECT_EQ(snapshot.at("actions").at(2).at("path"), "/api/steamshine/v1/lifecycle/restart");
+  EXPECT_LT(snapshot.at("actions").at(0).at("timestamp").get<std::string>(), snapshot.at("actions").at(2).at("timestamp").get<std::string>());
+  ASSERT_EQ(snapshot.at("operation_timeline").size(), 3U);
+  EXPECT_EQ(snapshot.at("operation_timeline").at(0).at("component"), "gamescope");
+  EXPECT_EQ(snapshot.at("operation_timeline").at(1).at("severity"), "error");
+  EXPECT_EQ(snapshot.at("operation_timeline").at(2).at("event"), "terminal");
   EXPECT_TRUE(snapshot.at("recent_sessions").empty());
 
   config::sunshine.log_file = original_log_file;
   fs::remove(temporary_log);
+}
+
+/**
+ * @brief Verify a persistent reset hides prior logs and deletes completed reports only.
+ */
+TEST(WebServicesTest, ResetsDiagnosticHistoryWithoutTruncatingActiveLog) {
+  namespace fs = std::filesystem;
+  const auto original_log_file = config::sunshine.log_file;
+  const auto root = fs::temp_directory_path() / std::format(
+                                                  "steamshine-diagnostic-reset-{}",
+                                                  std::chrono::steady_clock::now().time_since_epoch().count()
+                                                );
+  const auto log = root / "steamshine.log";
+  const auto marker = root / "diagnostics-history.json";
+  const auto sessions = root / "session-diagnostics";
+  fs::create_directories(sessions);
+  {
+    std::ofstream output {log};
+    output << "[2026-09-23 11:00:00.000]: Error: error before reset\n"
+           << "[2026-09-23 11:00:01.000]: Info: SteamShine Web action: POST /api/steamshine/v1/config\n";
+  }
+  {
+    std::ofstream output {sessions / "session-before-reset.json"};
+    output << R"({"result":"failed"})";
+  }
+  config::sunshine.log_file = log.string();
+  const web::DiagnosticService diagnostics {marker, sessions};
+  const auto size_before_reset = fs::file_size(log);
+
+  const auto before = diagnostics.snapshot();
+  ASSERT_EQ(before.at("actions").size(), 1U);
+  ASSERT_EQ(before.at("recent_sessions").size(), 1U);
+  ASSERT_TRUE(diagnostics.reset_history().success);
+  EXPECT_EQ(fs::file_size(log), size_before_reset);
+
+  const auto reset = diagnostics.snapshot();
+  EXPECT_TRUE(reset.at("log").at("content").get<std::string>().empty());
+  EXPECT_TRUE(reset.at("actions").empty());
+  EXPECT_TRUE(reset.at("recent_sessions").empty());
+
+  {
+    std::ofstream output {log, std::ios::app};
+    output << "[2026-09-23 11:00:02.000]: Warning: warning after reset\n"
+           << "[2026-09-23 11:00:03.000]: Info: SteamShine Web action: POST /api/steamshine/v1/terminal/start\n";
+  }
+  const auto after = diagnostics.snapshot();
+  EXPECT_EQ(after.at("log").at("counts").at("error"), 0U);
+  EXPECT_EQ(after.at("log").at("counts").at("warning"), 1U);
+  ASSERT_EQ(after.at("actions").size(), 1U);
+  EXPECT_EQ(after.at("actions").at(0).at("path"), "/api/steamshine/v1/terminal/start");
+
+  config::sunshine.log_file = original_log_file;
+  fs::remove_all(root);
 }
 
 /**

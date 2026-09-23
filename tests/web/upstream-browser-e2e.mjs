@@ -206,6 +206,48 @@ try {
   }
   await steamshinePage.screenshot({ path: successScreenshotFile, fullPage: true });
 
+  const addonsResponse = await steamshinePage.goto(`${baseUrl}/steamshine/addons`, { waitUntil: 'networkidle' });
+  await steamshinePage.getByRole('heading', { name: 'Addons', exact: true }).waitFor({ timeout: 5000 });
+  const deckyStatus = await steamshinePage.evaluate(async () => {
+    const response = await fetch('/api/steamshine/v1/addons/decky');
+    return { status: response.status, body: await response.json() };
+  });
+  if (addonsResponse?.status() !== 200
+    || deckyStatus.status !== 200
+    || typeof deckyStatus.body.installed !== 'boolean'
+    || typeof deckyStatus.body.service_active !== 'boolean'
+    || typeof deckyStatus.body.management_available !== 'boolean') {
+    throw new Error(`SteamShine Addon status is invalid: ${JSON.stringify(deckyStatus)}`);
+  }
+  securityResults.addons_status = deckyStatus.status;
+
+  /** Keep destructive and recovery controls discoverable at phone width. */
+  await steamshinePage.setViewportSize({ width: 320, height: 700 });
+  const diagnosticsMobileResponse = await steamshinePage.goto(`${baseUrl}/steamshine/diagnostics`, { waitUntil: 'domcontentloaded' });
+  const diagnosticsReset = steamshinePage.getByRole('button', { name: 'Reset history' });
+  const mobileRestart = steamshinePage.getByRole('button', { name: 'Restart SteamShine' });
+  await diagnosticsReset.waitFor({ state: 'visible', timeout: 5000 });
+  await mobileRestart.waitFor({ state: 'visible', timeout: 5000 });
+  const mobileControls = await steamshinePage.evaluate(() => {
+    const reset = document.querySelector('#reset-diagnostics')?.getBoundingClientRect();
+    const restart = document.querySelector('#mobile-restart')?.getBoundingClientRect();
+    return {
+      reset: reset ? { width: reset.width, height: reset.height } : null,
+      restart: restart ? { width: restart.width, height: restart.height, label: document.querySelector('#mobile-restart')?.textContent?.trim() } : null,
+      horizontalOverflow: document.documentElement.scrollWidth > window.innerWidth,
+    };
+  });
+  if (diagnosticsMobileResponse?.status() !== 200
+    || !mobileControls.reset
+    || !mobileControls.restart
+    || mobileControls.restart.label !== 'Restart'
+    || mobileControls.restart.height < 44
+    || mobileControls.horizontalOverflow) {
+    throw new Error(`SteamShine mobile recovery controls failed: ${JSON.stringify(mobileControls)}`);
+  }
+  securityResults.diagnostics_reset_mobile = true;
+  securityResults.mobile_lifecycle_controls = mobileControls;
+
   /** Exercise the real PTY transport, session tabs, replay, and mobile geometry. */
   await steamshinePage.setViewportSize({ width: 1280, height: 800 });
   const terminalResponse = await steamshinePage.goto(`${baseUrl}/steamshine/terminal`, { waitUntil: 'domcontentloaded' });
@@ -234,6 +276,9 @@ try {
   await steamshinePage.locator(`[data-terminal-session="${firstTerminalId}"]`).click();
   await steamshinePage.waitForFunction(() => document.querySelector('#term-connection')?.dataset.state === 'open', undefined, { timeout: 10000 });
   await steamshinePage.waitForFunction((expectedHome) => document.querySelector('.xterm-rows')?.textContent?.includes(`STEAMSHINE_BROWSER_TERMINAL_OK:${expectedHome}`), homeDirectory, { timeout: 5000 });
+  await terminalInput.pressSequentially('seq 1 240', { delay: 1 });
+  await terminalInput.press('Enter');
+  await steamshinePage.waitForFunction(() => document.querySelector('.xterm-rows')?.textContent?.includes('240'), undefined, { timeout: 5000 });
 
   await steamshinePage.setViewportSize({ width: 320, height: 700 });
   await steamshinePage.waitForFunction(() => {
@@ -255,9 +300,42 @@ try {
     || terminalMobileGeometry.rootBottom > terminalMobileGeometry.viewportBottom + 1) {
     throw new Error(`SteamShine Terminal mobile geometry failed: ${JSON.stringify(terminalMobileGeometry)}`);
   }
+  const terminalTouchScroll = await steamshinePage.evaluate(async () => {
+    const target = document.querySelector('.terminal-host .xterm-screen');
+    const viewport = document.querySelector('.terminal-host .xterm-viewport');
+    if (!target || !viewport) return { error: 'terminal touch target is missing' };
+    const dispatchTouch = (type, clientY, active) => {
+      const event = new Event(type, { bubbles: true, cancelable: true });
+      const touch = { identifier: 7, clientY, pageY: clientY };
+      Object.defineProperties(event, {
+        touches: { value: active ? [touch] : [] },
+        changedTouches: { value: [touch] },
+      });
+      target.dispatchEvent(event);
+    };
+    const before = viewport.scrollTop;
+    dispatchTouch('touchstart', 120, true);
+    dispatchTouch('touchmove', 190, true);
+    dispatchTouch('touchmove', 260, true);
+    const synchronous = viewport.scrollTop;
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    const framed = viewport.scrollTop;
+    dispatchTouch('touchend', 260, false);
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    const glided = viewport.scrollTop;
+    return { before, synchronous, framed, glided };
+  });
+  if (terminalTouchScroll.error
+    || terminalTouchScroll.before <= 0
+    || terminalTouchScroll.synchronous !== terminalTouchScroll.before
+    || terminalTouchScroll.framed > terminalTouchScroll.before - 190
+    || terminalTouchScroll.glided > terminalTouchScroll.framed - 50) {
+    throw new Error(`SteamShine Terminal touch scrolling failed: ${JSON.stringify(terminalTouchScroll)}`);
+  }
   securityResults.terminal_multiple_sessions = true;
   securityResults.terminal_history_replay = true;
   securityResults.terminal_mobile_geometry = terminalMobileGeometry;
+  securityResults.terminal_mobile_touch_scroll = terminalTouchScroll;
 
   await steamshinePage.locator('#term-end').click();
   await steamshinePage.getByRole('alertdialog').getByRole('button', { name: 'End session' }).click();

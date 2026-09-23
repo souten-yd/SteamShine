@@ -3,6 +3,14 @@ You need to prefix commands with `C:\msys64\msys2_shell.cmd -defterm -here -no-s
 
 Prefix build directories with `cmake-build-`.
 
+Minimize rebuild latency before doing a deployable build. First classify the changed files and run the smallest
+focused target that compiles the affected code plus its directly relevant filtered tests (for example, the
+standalone SteamOS core target, one `test_sunshine` gtest filter, or the Web asset validator). Reuse a compatible
+existing `cmake-build-*` tree and do not reconfigure or rebuild unrelated targets merely to get early feedback.
+After focused validation passes, perform the pinned-image release build, package, ABI check, and host installation
+once. A final broader test pass is still required when shared runtime code or release packaging changed; this rule
+changes validation order and avoids redundant builds, not final coverage.
+
 For SteamOS binaries that will be installed or tested on the host, always build with the immutable container
 image and digest recorded in `ci/steamos/image.lock`. Do not use the `sunshine-build` distrobox or another
 rolling/latest Arch environment for a deployable binary: it can produce a binary that passes unit tests but

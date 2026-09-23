@@ -6,11 +6,20 @@
 #include "../tests_common.h"
 
 #include <algorithm>
+#include <boost/asio/error.hpp>
 #include <cstdint>
 #include <functional>
 #include <src/stream.h>
 #include <string>
 #include <vector>
+
+/**
+ * @brief Keep intentional RTSP listener cancellation out of Diagnostics errors.
+ */
+TEST(RtspShutdownTests, ClassifiesOnlyOperationCancellationAsExpected) {
+  EXPECT_TRUE(rtsp_stream::accept_error_is_shutdown(boost::asio::error::operation_aborted));
+  EXPECT_FALSE(rtsp_stream::accept_error_is_shutdown(boost::asio::error::connection_reset));
+}
 
 TEST(ConcatAndInsertTests, ConcatNoInsertionTest) {
   char b1[] = {'a', 'b'};

@@ -68,9 +68,9 @@ TEST(ProcessCommandSelectionTest, RestoresSafeOwnedVirtualDesktopDefault) {
 }
 
 /**
- * @brief Verify attached Game Mode preserves its resident Big Picture shell only.
+ * @brief Verify virtual-session teardown suppresses only the Big Picture close undo.
  */
-TEST(ProcessCommandSelectionTest, SkipsOnlyAttachedBigPictureCloseUndo) {
+TEST(ProcessCommandSelectionTest, SkipsOnlyVirtualSessionBigPictureCloseUndo) {
   EXPECT_TRUE(proc::should_skip_undo_command(true, "setsid steam steam://close/bigpicture"));
   EXPECT_FALSE(proc::should_skip_undo_command(false, "setsid steam steam://close/bigpicture"));
   EXPECT_FALSE(proc::should_skip_undo_command(true, "setsid steam steam://open/bigpicture"));
@@ -207,7 +207,7 @@ TEST(ProcessCommandSelectionTest, SelectsOwnedDesktopOnlyForCaptureOnlyApplicati
 /**
  * @brief Verify Big Picture launch commands request an owned canvas without name matching.
  */
-TEST(ProcessCommandSelectionTest, PrefersOwnedCanvasForBigPictureLaunch) {
+TEST(ProcessCommandSelectionTest, PrefersOwnedCanvasForEveryMoonlightApplication) {
   proc::ctx_t application {};
   application.name = "Localized Steam label";
   application.cmd = "steam steam://open/bigpicture";
@@ -218,7 +218,7 @@ TEST(ProcessCommandSelectionTest, PrefersOwnedCanvasForBigPictureLaunch) {
   EXPECT_TRUE(proc::should_prefer_owned_virtual_display(application));
 
   application.detached = {"game --launch"};
-  EXPECT_FALSE(proc::should_prefer_owned_virtual_display(application));
+  EXPECT_TRUE(proc::should_prefer_owned_virtual_display(application));
 
   application.prep_cmds.emplace_back("xdg-open steam://open/bigpicture", "", false);
   EXPECT_TRUE(proc::should_prefer_owned_virtual_display(application));
@@ -267,6 +267,33 @@ TEST(ProcessEnvironmentTest, RestoresBaselineBetweenLaunches) {
   EXPECT_TRUE(launch_environment["WAYLAND_DISPLAY"].empty());
   EXPECT_TRUE(launch_environment["PIPEWIRE_REMOTE"].empty());
 }
+
+#if defined(__linux__)
+/**
+ * @brief Recover virtual-session state when the process deinitializer runs.
+ */
+TEST(ProcessLifecycleTest, DeinitializerRecoversVirtualSessionState) {
+  const auto saved_virtual_display {config::steamos_virtual_display};
+  auto restore_configuration {util::fail_guard([&saved_virtual_display]() {
+    config::steamos_virtual_display = saved_virtual_display;
+    steamos_virtual_session::stop();
+  })};
+
+  config::steamos_virtual_display.enabled = true;
+  steamos_virtual_session::stop();
+  rtsp_stream::launch_session_t launch {};
+  launch.width = 1920;
+  std::string error;
+  ASSERT_FALSE(steamos_virtual_session::prepare(launch, error));
+  ASSERT_EQ(steamos_virtual_session::state(), steamos_virtual_session::state_e::Failed);
+
+  auto deinitializer {proc::init()};
+  ASSERT_TRUE(deinitializer);
+  deinitializer.reset();
+
+  EXPECT_EQ(steamos_virtual_session::state(), steamos_virtual_session::state_e::Idle);
+}
+#endif
 
 class ProcessPNGTest: public BaseTest {
 protected:

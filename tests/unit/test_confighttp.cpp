@@ -1431,3 +1431,23 @@ TEST(ConfigHttpTerminalTest, ClassifiesNonBlockingAcceptErrors) {
   EXPECT_FALSE(confighttp::terminal_accept_is_retryable(boost::asio::error::operation_aborted));
   EXPECT_FALSE(confighttp::terminal_accept_is_retryable({}));
 }
+
+/**
+ * @brief Verify Terminal peers use the same localhost and LAN policy as the Web UI.
+ */
+TEST(ConfigHttpTerminalTest, AppliesConfiguredWebUiNetworkScope) {
+  const auto original_scope = http::origin_web_ui_allowed;
+
+  http::origin_web_ui_allowed = net::PC;
+  EXPECT_TRUE(confighttp::terminal_peer_is_allowed("127.0.0.1"));
+  EXPECT_FALSE(confighttp::terminal_peer_is_allowed("192.168.68.57"));
+
+  http::origin_web_ui_allowed = net::LAN;
+  EXPECT_TRUE(confighttp::terminal_peer_is_allowed("192.168.68.57"));
+  EXPECT_FALSE(confighttp::terminal_peer_is_allowed("8.8.8.8"));
+
+  http::origin_web_ui_allowed = net::WAN;
+  EXPECT_TRUE(confighttp::terminal_peer_is_allowed("8.8.8.8"));
+
+  http::origin_web_ui_allowed = original_scope;
+}

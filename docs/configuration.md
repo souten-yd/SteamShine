@@ -2380,15 +2380,15 @@ with a stable @code{} input_route_error @endcode.
 
 ### steamos_virtual_display_enabled
 
-<table><tr><td>Description</td><td colspan="2">Enable SteamOS display-source policy.</td></tr><tr><td>Default</td><td colspan="2">@code{} disabled @endcode</td></tr><tr><td>Example</td><td colspan="2">@code{} steamos_virtual_display_enabled = enabled @endcode</td></tr></table>
+<table><tr><td>Description</td><td colspan="2">Enable the custom SteamOS startup encoder-probe policy. When disabled, startup uses safe automatic defaults. This does not disable the Moonlight invariant: every real client app stops stock Game Mode when present and uses a SteamShine-owned Gamescope at the requested geometry.</td></tr><tr><td>Default</td><td colspan="2">@code{} disabled @endcode</td></tr><tr><td>Example</td><td colspan="2">@code{} steamos_virtual_display_enabled = enabled @endcode</td></tr></table>
 
 ### steamos_virtual_display_mode
 
-<table><tr><td>Description</td><td colspan="2">@code{} off @endcode disables virtual displays, @code{} auto @endcode prefers a capturable physical Desktop and otherwise selects a verified Gamescope or owned virtual desktop, and @code{} force @endcode requires an owned private Gamescope.</td></tr><tr><td>Default</td><td colspan="2">@code{} auto @endcode</td></tr><tr><td>Example</td><td colspan="2">@code{} steamos_virtual_display_mode = auto @endcode</td></tr></table>
+<table><tr><td>Description</td><td colspan="2">Controls startup encoder probing. @code{} off @endcode does not create a display during startup probing, @code{} auto @endcode uses a verified available source, and @code{} force @endcode requires an owned startup source. A Moonlight app launch always uses an owned Gamescope regardless of this value.</td></tr><tr><td>Default</td><td colspan="2">@code{} auto @endcode</td></tr><tr><td>Example</td><td colspan="2">@code{} steamos_virtual_display_mode = auto @endcode</td></tr></table>
 
 ### steamos_session_source
 
-<table><tr><td>Description</td><td colspan="2">Select @code{} auto @endcode, @code{} existing_gamescope @endcode, or @code{} owned_private @endcode. Existing sources must pass process, PipeWire, GPU, and ownership checks.</td></tr><tr><td>Default</td><td colspan="2">@code{} auto @endcode</td></tr><tr><td>Example</td><td colspan="2">@code{} steamos_session_source = existing_gamescope @endcode</td></tr></table>
+<table><tr><td>Description</td><td colspan="2">Select the source for startup encoder probing: @code{} auto @endcode, @code{} existing_gamescope @endcode, or @code{} owned_private @endcode. Existing sources must pass process, PipeWire, GPU, and ownership checks. This does not change the client-launch owned-session invariant.</td></tr><tr><td>Default</td><td colspan="2">@code{} auto @endcode</td></tr><tr><td>Example</td><td colspan="2">@code{} steamos_session_source = existing_gamescope @endcode</td></tr></table>
 
 ### steamos_local_presentation
 
@@ -2400,7 +2400,7 @@ with a stable @code{} input_route_error @endcode.
 
 ### steamos_stock_session_handoff
 
-<table><tr><td>Description</td><td colspan="2">Select @code{} attach @endcode to preserve and mirror a verified stock Game Mode Gamescope. Select @code{} auto_idle @endcode to attach while a game is active or activity is unknown, but temporarily stop a uniquely verified idle stock session and use an owned headless Gamescope at the Moonlight-requested geometry. Stock Game Mode is restored after the owned session ends.</td></tr><tr><td>Default</td><td colspan="2">@code{} attach @endcode</td></tr><tr><td>Example</td><td colspan="2">@code{} steamos_stock_session_handoff = auto_idle @endcode</td></tr></table>
+<table><tr><td>Description</td><td colspan="2">Legacy compatibility value. On every real Moonlight app launch, SteamShine stops stock Game Mode when present and starts or reuses an owned Gamescope at the requested width, height, refresh rate, and HDR mode. An inactive stock target is a successful no-op. Startup encoder probing remains non-destructive, and stock Game Mode is restored after the owned client session ends.</td></tr><tr><td>Default</td><td colspan="2">@code{} attach @endcode</td></tr><tr><td>Example</td><td colspan="2">@code{} steamos_stock_session_handoff = attach @endcode</td></tr></table>
 
 ### steamos_geometry_alignment
 
@@ -2412,7 +2412,7 @@ with a stable @code{} input_route_error @endcode.
 
 ### steamos_keep_session_alive
 
-<table><tr><td>Description</td><td colspan="2">Retain a compatible SteamShine-owned session across a Moonlight disconnect. Explicit cancel or service stop still destroys owned resources.</td></tr><tr><td>Default</td><td colspan="2">@code{} enabled @endcode</td></tr><tr><td>Example</td><td colspan="2">@code{} steamos_keep_session_alive = enabled @endcode</td></tr></table>
+<table><tr><td>Description</td><td colspan="2">Retain a compatible SteamShine-owned session across an interrupted Moonlight connection so Resume can reuse Steam and Gamescope. Moonlight End Session, an explicit cancel, or service stop first asks the verified owned Steam process to shut down cleanly, then stops owned Gamescope and restores stock Game Mode.</td></tr><tr><td>Default</td><td colspan="2">@code{} enabled @endcode</td></tr><tr><td>Example</td><td colspan="2">@code{} steamos_keep_session_alive = enabled @endcode</td></tr></table>
 
 ### steamos_existing_gamescope_pid
 

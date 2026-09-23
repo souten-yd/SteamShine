@@ -171,6 +171,8 @@ grep -Fq 'VAAPI_AMD_DRIVER_AVAILABLE' <<<"${vaapi_output}"
 grep -Fq 'Environment=XDG_RUNTIME_DIR=%t' "${root_dir}/packaging/linux/steamshine.service.in"
 grep -Fq 'ExecStart=%h/.local/bin/steamshine %h/.config/steamshine/sunshine.conf' "${root_dir}/packaging/linux/steamshine.service.in"
 grep -Fq 'WantedBy=default.target' "${root_dir}/packaging/linux/steamshine.service.in"
+grep -Fq 'TimeoutStopSec=135' "${root_dir}/packaging/linux/steamshine.service.in"
+grep -Fq 'TimeoutStopSec=135' "${root_dir}/steamshine.sh"
 if grep -Eq 'graphical-session.target|User=deck|WAYLAND_DISPLAY=wayland-0|DISPLAY=:0' "${root_dir}/packaging/linux/steamshine.service.in"; then
   echo 'The packaged SteamShine user unit template is not Game Mode safe.' >&2
   exit 1

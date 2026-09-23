@@ -85,6 +85,13 @@ namespace web {
   };
 
   /**
+   * @brief Resolve the owner-private store used to survive service restarts.
+   *
+   * @return Absolute session-store path, or an empty path when unavailable.
+   */
+  std::filesystem::path default_web_session_path();
+
+  /**
    * @brief Manages short-lived, server-side SteamShine Web sessions.
    */
   class SessionService {
@@ -93,8 +100,13 @@ namespace web {
      * @brief Construct a server-side SteamShine session store.
      *
      * @param lifetime Lifetime assigned to newly created sessions.
+     * @param persistence_path Optional owner-private session store. An empty
+     * path keeps sessions in memory only, which is useful for isolated tests.
      */
-    explicit SessionService(std::chrono::steady_clock::duration lifetime = std::chrono::hours(8));
+    explicit SessionService(
+      std::chrono::system_clock::duration lifetime = std::chrono::hours(8),
+      std::filesystem::path persistence_path = {}
+    );
 
     /**
      * @brief Authenticate a user and create a server-side session.
@@ -142,19 +154,33 @@ namespace web {
     struct session_record_t {
       std::string csrf_token;  ///< CSRF token bound to this session.
       std::string username;  ///< Authenticated username.
-      std::chrono::steady_clock::time_point expiration;  ///< Monotonic expiration deadline.
+      std::string credential_identity;  ///< Credential hash identity that created the session.
+      std::chrono::system_clock::time_point expiration;  ///< Restart-stable expiration deadline.
     };
 
     /**
      * @brief Remove expired records while holding the session mutex.
      *
-     * @param now Monotonic time used to evaluate expiration.
+     * @param now Wall-clock time used to evaluate persisted expiration.
      */
-    void purge_expired(std::chrono::steady_clock::time_point now);
+    void purge_expired(std::chrono::system_clock::time_point now);
+
+    /**
+     * @brief Load valid session records from the owner-private store.
+     */
+    void load_persisted();
+
+    /**
+     * @brief Atomically persist the current records while holding the mutex.
+     *
+     * @return True when persistence is disabled or the store was replaced.
+     */
+    bool persist_locked() const;
 
     std::mutex mutex_;  ///< Mutex protecting session records.
     std::unordered_map<std::string, session_record_t> sessions_;  ///< Server-side sessions indexed by opaque identifier.
-    std::chrono::steady_clock::duration lifetime_;  ///< Lifetime assigned to newly created sessions.
+    std::chrono::system_clock::duration lifetime_;  ///< Lifetime assigned to newly created sessions.
+    std::filesystem::path persistence_path_;  ///< Owner-private restart-stable session store.
   };
 
   /**
@@ -498,6 +524,18 @@ namespace web {
   class DiagnosticService {
   public:
     /**
+     * @brief Construct diagnostics with owner-private persistence locations.
+     *
+     * Empty paths select the normal SteamShine state locations. Explicit
+     * paths allow isolated diagnostic reset tests without changing process
+     * environment variables.
+     *
+     * @param history_path File storing the current log-history baseline.
+     * @param session_path Directory containing completed session reports.
+     */
+    explicit DiagnosticService(std::filesystem::path history_path = {}, std::filesystem::path session_path = {});
+
+    /**
      * @brief Return recent log content without exposing arbitrary file reads.
      *
      * @param maximum_bytes Maximum number of trailing bytes to return.
@@ -523,5 +561,21 @@ namespace web {
       std::size_t maximum_entries = 256U,
       std::size_t maximum_sessions = 5U
     ) const;
+
+    /**
+     * @brief Hide prior service-log content and remove completed session reports.
+     *
+     * The active log file is not truncated because the asynchronous logger may
+     * still hold it open. Instead, an owner-private byte offset becomes the new
+     * history baseline while completed diagnostic report files are removed.
+     *
+     * @return Non-secret reset result for the Web API.
+     */
+    service_result_t reset_history() const;
+
+  private:
+    mutable std::mutex mutex_;  ///< Serializes destructive history resets.
+    std::filesystem::path history_path_;  ///< Owner-private persisted log baseline.
+    std::filesystem::path session_path_;  ///< Completed session report directory.
   };
 }  // namespace web

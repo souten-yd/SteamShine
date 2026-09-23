@@ -418,17 +418,23 @@ int main(int argc, char *argv[]) {
 
   task_pool.start(1);
 
+  const auto forced_shutdown_timeout {shutdown_watchdog_timeout(
+    config::steamos_virtual_display.enabled,
+    config::steamos_virtual_display.shutdown_timeout_seconds,
+    config::steamos_virtual_display.startup_timeout_seconds
+  )};
+
   // Create signal handler after logging has been initialized
   auto shutdown_event = mail::man->event<bool>(mail::shutdown);
-  on_signal(SIGINT, [&force_shutdown, &display_device_deinit_guard, shutdown_event]() {
+  on_signal(SIGINT, [&force_shutdown, &display_device_deinit_guard, shutdown_event, forced_shutdown_timeout]() {
     BOOST_LOG(info) << "Interrupt handler called"sv;
 
-    auto task = []() {
-      BOOST_LOG(fatal) << "10 seconds passed, yet Sunshine's still running: Forcing shutdown"sv;
+    auto task = [forced_shutdown_timeout]() {
+      BOOST_LOG(fatal) << forced_shutdown_timeout.count() << " seconds passed, yet Sunshine's still running: Forcing shutdown"sv;
       logging::log_flush();
       lifetime::debug_trap();
     };
-    force_shutdown = task_pool.pushDelayed(task, 10s).task_id;
+    force_shutdown = task_pool.pushDelayed(task, forced_shutdown_timeout).task_id;
 
     // Break out of the main loop
     shutdown_event->raise(true);
@@ -440,15 +446,15 @@ int main(int argc, char *argv[]) {
     display_device_deinit_guard = nullptr;
   });
 
-  on_signal(SIGTERM, [&force_shutdown, &display_device_deinit_guard, shutdown_event]() {
+  on_signal(SIGTERM, [&force_shutdown, &display_device_deinit_guard, shutdown_event, forced_shutdown_timeout]() {
     BOOST_LOG(info) << "Terminate handler called"sv;
 
-    auto task = []() {
-      BOOST_LOG(fatal) << "10 seconds passed, yet Sunshine's still running: Forcing shutdown"sv;
+    auto task = [forced_shutdown_timeout]() {
+      BOOST_LOG(fatal) << forced_shutdown_timeout.count() << " seconds passed, yet Sunshine's still running: Forcing shutdown"sv;
       logging::log_flush();
       lifetime::debug_trap();
     };
-    force_shutdown = task_pool.pushDelayed(task, 10s).task_id;
+    force_shutdown = task_pool.pushDelayed(task, forced_shutdown_timeout).task_id;
 
     // Break out of the main loop
     shutdown_event->raise(true);
@@ -489,12 +495,25 @@ int main(int argc, char *argv[]) {
 
   bool encoder_probe_failed {false};
 #if defined(__linux__)
-  if (steamos_virtual_session::capture_backend_required()) {
+  const bool force_virtual_encoder_preflight {should_force_virtual_encoder_preflight(
+    static_cast<bool>(platf_deinit_guard),
+    config::steamos_virtual_display.enabled,
+    config::steamos_virtual_display.mode != steamos_virtual_session::virtual_display_mode_e::off
+  )};
+  if (force_virtual_encoder_preflight) {
+    BOOST_LOG(info) << "Physical capture platform initialization failed; forcing Gamescope encoder preflight";
+  }
+  const bool virtual_encoder_preflight {should_prepare_virtual_encoder_preflight(
+    steamos_virtual_session::capture_backend_required(),
+    config::steamos_virtual_display.enabled,
+    config::steamos_virtual_display.mode != steamos_virtual_session::virtual_display_mode_e::off
+  )};
+  if (virtual_encoder_preflight || force_virtual_encoder_preflight) {
     std::string preflight_error;
     const bool probe_hdr {config::video.steamshine_hdr_policy != hdr_policy::policy_e::off};
     BOOST_LOG(info) << "Headless encoder probe requires a prepared virtual display; starting preflight"
                     << " hdr=" << (probe_hdr ? "true" : "false");
-    if (steamos_virtual_session::prepare_encoder_probe(probe_hdr, preflight_error)) {
+    if (steamos_virtual_session::prepare_encoder_probe(probe_hdr, preflight_error, force_virtual_encoder_preflight)) {
       platf::refresh_capture_environment();
       encoder_probe_failed = video::probe_encoders() != 0;
       if (encoder_probe_failed) {
@@ -556,7 +575,7 @@ int main(int argc, char *argv[]) {
 
   const bool start_system_tray {main_loop_uses_system_tray(tray_is_enabled && config::sunshine.system_tray, config::steamos_virtual_display.enabled)};
   if (tray_is_enabled && config::sunshine.system_tray && !start_system_tray) {
-    BOOST_LOG(warning) << "System tray disabled while SteamOS virtual display transitions are enabled"sv;
+    BOOST_LOG(info) << "System tray disabled while SteamOS virtual display transitions are enabled"sv;
   }
   if (start_system_tray) {
     BOOST_LOG(info) << "Starting system tray"sv;
@@ -577,6 +596,10 @@ int main(int argc, char *argv[]) {
   httpThread.join();
   configThread.join();
   rtspThread.join();
+
+  // Run application undo commands before stopping the owned compositor, then
+  // restore stock Game Mode while the task pool and logger remain available.
+  proc_deinit_guard.reset();
 
   task_pool.stop();
   task_pool.join();

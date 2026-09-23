@@ -38,6 +38,14 @@ namespace confighttp {
   bool terminal_accept_is_retryable(const boost::system::error_code &error);
 
   /**
+   * @brief Check a Terminal peer against the configured Web UI network scope.
+   *
+   * @param address Normalized remote IP address.
+   * @return True when the peer is within the configured PC, LAN, or WAN scope.
+   */
+  bool terminal_peer_is_allowed(std::string_view address);
+
+  /**
    * @brief Build the SteamShine page Content Security Policy for its terminal endpoint.
    *
    * @param host_header HTTP Host header used to select the browser-visible terminal host.

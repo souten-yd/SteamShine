@@ -544,6 +544,7 @@ namespace steam_session {
     return resident_environment_t {
       .steam_pid = resident->pid,
       .steam_start_time = resident->start_time,
+      .executable_path = resident->executable_path,
       .xdg_runtime_directory = resident->xdg_runtime_directory,
       .wayland_display = resident->wayland_display,
       .gamescope_wayland_display = resident->gamescope_wayland_display,

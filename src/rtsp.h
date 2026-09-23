@@ -6,6 +6,7 @@
 
 // standard includes
 #include <atomic>
+#include <boost/system/error_code.hpp>
 
 // local includes
 #include "crypto.h"
@@ -14,6 +15,14 @@
 
 namespace rtsp_stream {
   constexpr auto RTSP_SETUP_PORT = 21;  ///< GameStream base-port offset used for the RTSP setup listener.
+
+  /**
+   * @brief Test whether an RTSP accept error is normal shutdown cancellation.
+   *
+   * @param error Error returned by the asynchronous accept operation.
+   * @return True when shutdown intentionally canceled the pending accept.
+   */
+  bool accept_error_is_shutdown(const boost::system::error_code &error) noexcept;
 
   /**
    * @brief RTSP launch session state shared with stream setup.

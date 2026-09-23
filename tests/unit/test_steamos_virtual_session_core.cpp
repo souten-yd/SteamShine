@@ -340,6 +340,14 @@ namespace {
     EXPECT_EQ(select_session_route(request).route, session_route_e::reject);
     EXPECT_EQ(select_session_route(request).reason, "application_owned_private_host_unsupported");
 
+    request.host_supported = true;
+    request.feature_enabled = false;
+    request.mode = virtual_display_mode_e::off;
+    request.source_policy = session_source_policy_e::existing_gamescope;
+    request.verified_existing_gamescope_present = true;
+    EXPECT_EQ(select_session_route(request).route, session_route_e::new_owned_private);
+    EXPECT_EQ(select_session_route(request).reason, "application_owned_private");
+
     request = input(virtual_display_mode_e::auto_detect, session_source_policy_e::owned_private);
     request.capturable_output_present = true;
     request.verified_existing_gamescope_present = true;
@@ -574,12 +582,11 @@ namespace {
   }
 
   /**
-   * @brief Verify stock handoff is limited to an explicit idle application launch.
+   * @brief Verify client launches always hand stock Gamescope to an owned canvas.
    */
-  TEST(SteamOSVirtualSessionCore, SelectsStockSessionHandoffSafely) {
+  TEST(SteamOSVirtualSessionCore, SelectsOwnedStockSessionHandoffForClients) {
     using steamos_virtual_session::parse_stock_handoff_policy;
     using steamos_virtual_session::select_stock_handoff_action;
-    using steamos_virtual_session::stock_activity_e;
     using steamos_virtual_session::stock_handoff_action_e;
     using steamos_virtual_session::stock_handoff_policy_e;
     using steamos_virtual_session::stock_handoff_state_e;
@@ -589,12 +596,9 @@ namespace {
     EXPECT_FALSE(parse_stock_handoff_policy("always"));
     EXPECT_EQ(steamos_virtual_session::to_string(stock_handoff_policy_e::attach), "attach");
     EXPECT_EQ(steamos_virtual_session::to_string(stock_handoff_policy_e::auto_idle), "auto_idle");
-    EXPECT_EQ(select_stock_handoff_action(stock_handoff_policy_e::auto_idle, true, false, stock_activity_e::idle), stock_handoff_action_e::handoff_owned);
-    EXPECT_EQ(select_stock_handoff_action(stock_handoff_policy_e::attach, true, false, stock_activity_e::idle), stock_handoff_action_e::attach);
-    EXPECT_EQ(select_stock_handoff_action(stock_handoff_policy_e::auto_idle, false, false, stock_activity_e::idle), stock_handoff_action_e::attach);
-    EXPECT_EQ(select_stock_handoff_action(stock_handoff_policy_e::auto_idle, true, true, stock_activity_e::idle), stock_handoff_action_e::attach);
-    EXPECT_EQ(select_stock_handoff_action(stock_handoff_policy_e::auto_idle, true, false, stock_activity_e::active_game), stock_handoff_action_e::attach);
-    EXPECT_EQ(select_stock_handoff_action(stock_handoff_policy_e::auto_idle, true, false, stock_activity_e::unknown), stock_handoff_action_e::attach);
+    EXPECT_EQ(select_stock_handoff_action(true, false), stock_handoff_action_e::handoff_owned);
+    EXPECT_EQ(select_stock_handoff_action(false, false), stock_handoff_action_e::attach);
+    EXPECT_EQ(select_stock_handoff_action(true, true), stock_handoff_action_e::attach);
     EXPECT_FALSE(steamos_virtual_session::systemctl_job_mode_argument(true));
     ASSERT_TRUE(steamos_virtual_session::systemctl_job_mode_argument(false));
     EXPECT_EQ(*steamos_virtual_session::systemctl_job_mode_argument(false), "--no-block");
@@ -930,6 +934,7 @@ namespace {
       .parent_pid = 100,
       .start_time = 20,
       .executable_name = "steam",
+      .executable_path = "/usr/bin/steam",
       .xdg_runtime_directory = "/run/user/1000",
       .wayland_display = "gamescope-0",
       .x11_display = ":27",
@@ -944,6 +949,7 @@ namespace {
     ASSERT_TRUE(selected);
     EXPECT_EQ(selected->steam_pid, 101);
     EXPECT_EQ(selected->steam_start_time, 20U);
+    EXPECT_EQ(selected->executable_path, "/usr/bin/steam");
     EXPECT_EQ(selected->x11_display, ":27");
     EXPECT_EQ(selected->xdg_session_type, "x11");
     EXPECT_EQ(selected->xdg_current_desktop, "gamescope");

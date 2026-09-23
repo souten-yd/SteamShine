@@ -93,6 +93,17 @@ namespace steamshine_hwmonitor {
   metrics_snapshot_t sample();
 
   /**
+   * @brief Use the GPU tab's selected preset limit for Monitor's power cap.
+   *
+   * A missing, zero, or negative preset value preserves the live hwmon cap so
+   * unsupported or stale profile selections do not erase valid telemetry.
+   *
+   * @param snapshot Monitor snapshot to update.
+   * @param selected_power_cap_watts Selected preset limit, when resolvable.
+   */
+  void apply_selected_profile_power_cap(metrics_snapshot_t &snapshot, std::optional<double> selected_power_cap_watts);
+
+  /**
    * @brief Serialize a metrics snapshot to JSON (found via ADL from `nlohmann::json`).
    */
   void to_json(nlohmann::json &json, const gpu_snapshot_t &value);

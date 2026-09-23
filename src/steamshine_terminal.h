@@ -14,9 +14,36 @@
 #include <string_view>
 #include <vector>
 
+#if defined(__linux__)
+  #include <termios.h>
+#endif
+
 namespace steamshine_terminal {
 
   using output_callback_t = std::function<void(std::string_view)>;  ///< Callback invoked for one PTY output chunk.
+
+#if defined(__linux__)
+  /**
+   * @brief Close descriptors that a terminal child must not inherit.
+   *
+   * Standard input, output, and error remain open. This prevents persistent
+   * tmux servers from retaining SteamShine listener sockets across a service
+   * restart and blocking the replacement process from binding its ports.
+   */
+  void close_inherited_file_descriptors();
+
+  /**
+   * @brief Put a tmux attachment PTY into raw, non-echoing mode.
+   *
+   * This must run in the attachment child before tmux is executed. Otherwise,
+   * terminal capability replies can be echoed during the short interval before
+   * tmux configures the PTY, leaving fragments such as `0;276;0c` in history.
+   *
+   * @param terminal_fd File descriptor for the attachment PTY slave.
+   * @return True when the terminal attributes were updated.
+   */
+  bool prepare_tmux_attachment_terminal(int terminal_fd);
+#endif
 
   /**
    * @brief Public state for one web terminal session.
@@ -26,6 +53,7 @@ namespace steamshine_terminal {
     std::string name;  ///< Short user-facing session name.
     std::uint64_t created_at;  ///< Unix creation time in seconds.
     bool running;  ///< Whether the login shell is still alive.
+    bool persistent;  ///< Whether the shell survives a SteamShine restart.
   };
 
   /**
@@ -57,6 +85,14 @@ namespace steamshine_terminal {
    * @brief Terminate and remove every session.
    */
   void stop_all();
+
+  /**
+   * @brief Detach SteamShine from every session during service shutdown.
+   *
+   * OS-managed tmux sessions remain alive for the next SteamShine process.
+   * In-process fallback shells are terminated because their owner is exiting.
+   */
+  void detach_all();
 
   /**
    * @brief Test whether one session is running.

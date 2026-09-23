@@ -23,6 +23,7 @@
 #include "file_handler.h"
 #include "httpcommon.h"
 #include "input.h"
+#include "logging.h"
 #include "nvhttp.h"
 #include "platform/linux/gamescope_source.h"
 #include "process.h"
@@ -42,6 +43,15 @@ namespace web {
      * @brief URL-safe alphabet used for opaque browser tokens.
      */
     constexpr std::string_view SESSION_TOKEN_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+
+    /**
+     * @brief Return the configured credential identity without plaintext data.
+     *
+     * @return Username plus the already-hashed configured password and salt.
+     */
+    std::string web_credential_identity() {
+      return config::sunshine.username + '\n' + config::sunshine.password + '\n' + config::sunshine.salt;
+    }
 
     /**
      * @brief Production paired-client backend backed by existing NVHTTP operations.
@@ -165,6 +175,90 @@ namespace web {
     }
 
     /**
+     * @brief Resolve the owner-private diagnostics history baseline file.
+     *
+     * @return Absolute marker path, or an empty path when unavailable.
+     */
+    std::filesystem::path diagnostic_history_path() {
+      const auto profile_path {default_stream_profile_path()};
+      return profile_path.empty() ? std::filesystem::path {} : profile_path.parent_path() / "diagnostics-history.json";
+    }
+
+    /**
+     * @brief Load the retained byte offset for the active service log.
+     *
+     * @param history_path Owner-private history marker path.
+     * @return Byte offset, or zero when the marker is absent or stale.
+     */
+    std::uintmax_t diagnostic_log_offset(const std::filesystem::path &history_path) {
+      if (history_path.empty()) {
+        return 0;
+      }
+      try {
+        const auto marker = nlohmann::json::parse(file_handler::read_file(history_path.string().c_str()));
+        if (marker.value("schema_version", 0) != 1 || marker.value("log_path", "") != config::sunshine.log_file) {
+          return 0;
+        }
+        return marker.value("log_byte_offset", std::uintmax_t {0});
+      } catch (const std::exception &) {
+        return 0;
+      }
+    }
+
+    /**
+     * @brief Persist an owner-only diagnostics history marker through a temporary file.
+     *
+     * @param path Final marker path.
+     * @param offset Current active-log size used as the new baseline.
+     * @return True when the marker was durably replaced.
+     */
+    bool persist_diagnostic_history(const std::filesystem::path &path, const std::uintmax_t offset) {
+      if (path.empty()) {
+        return false;
+      }
+      std::error_code error;
+      std::filesystem::create_directories(path.parent_path(), error);
+      if (error) {
+        return false;
+      }
+      const auto marker = nlohmann::json::object({
+        {"schema_version", 1},
+        {"log_path", config::sunshine.log_file},
+        {"log_byte_offset", offset},
+      });
+      auto temporary {path};
+      temporary += ".tmp";
+      {
+        std::ofstream output {temporary, std::ios::binary | std::ios::trunc};
+        if (!output || !(output << marker.dump(2) << '\n')) {
+          return false;
+        }
+      }
+      std::filesystem::permissions(
+        temporary,
+        std::filesystem::perms::owner_read | std::filesystem::perms::owner_write,
+        std::filesystem::perm_options::replace,
+        error
+      );
+      if (error) {
+        std::filesystem::remove(temporary, error);
+        return false;
+      }
+      error.clear();
+      std::filesystem::remove(path, error);
+      if (error) {
+        std::filesystem::remove(temporary, error);
+        return false;
+      }
+      std::filesystem::rename(temporary, path, error);
+      if (error) {
+        std::filesystem::remove(temporary, error);
+        return false;
+      }
+      return true;
+    }
+
+    /**
      * @brief Classify a log message into a stable troubleshooting area.
      *
      * @param message Human-readable log message.
@@ -273,14 +367,25 @@ namespace web {
     return {true, "credentials_saved", "Credentials saved."};
   }
 
-  SessionService::SessionService(const std::chrono::steady_clock::duration lifetime):
-      lifetime_ {lifetime} {}
+  std::filesystem::path default_web_session_path() {
+    const auto profile_path {default_stream_profile_path()};
+    return profile_path.empty() ? std::filesystem::path {} : profile_path.parent_path() / "web-sessions.json";
+  }
+
+  SessionService::SessionService(
+    const std::chrono::system_clock::duration lifetime,
+    std::filesystem::path persistence_path
+  ):
+      lifetime_ {lifetime},
+      persistence_path_ {std::move(persistence_path)} {
+    load_persisted();
+  }
 
   std::optional<session_t> SessionService::login(const CredentialService &credential_service, const std::string_view username, const std::string_view password) {
     if (!credential_service.verify(username, password)) {
       return std::nullopt;
     }
-    const auto now = std::chrono::steady_clock::now();
+    const auto now = std::chrono::system_clock::now();
     session_t session {
       crypto::rand_alphabet(SESSION_TOKEN_SIZE, SESSION_TOKEN_ALPHABET),
       crypto::rand_alphabet(SESSION_TOKEN_SIZE, SESSION_TOKEN_ALPHABET),
@@ -288,16 +393,28 @@ namespace web {
     };
     std::scoped_lock lock(mutex_);
     purge_expired(now);
-    sessions_.emplace(session.id, session_record_t {session.csrf_token, session.username, now + lifetime_});
+    sessions_.emplace(session.id, session_record_t {session.csrf_token, session.username, web_credential_identity(), now + lifetime_});
+    if (!persist_locked()) {
+      BOOST_LOG(warning) << "SteamShine Web session could not be persisted for restart recovery";
+    }
     return session;
   }
 
   std::optional<session_t> SessionService::validate(const std::string_view session_id) {
-    const auto now = std::chrono::steady_clock::now();
+    const auto now = std::chrono::system_clock::now();
     std::scoped_lock lock(mutex_);
+    const auto previous_size {sessions_.size()};
     purge_expired(now);
+    if (sessions_.size() != previous_size) {
+      (void) persist_locked();
+    }
     const auto session = sessions_.find(std::string {session_id});
     if (session == sessions_.end()) {
+      return std::nullopt;
+    }
+    if (session->second.credential_identity != web_credential_identity()) {
+      sessions_.erase(session);
+      (void) persist_locked();
       return std::nullopt;
     }
     return session_t {session->first, session->second.csrf_token, session->second.username};
@@ -311,17 +428,101 @@ namespace web {
   void SessionService::logout(const std::string_view session_id) {
     std::scoped_lock lock(mutex_);
     sessions_.erase(std::string {session_id});
+    (void) persist_locked();
   }
 
   void SessionService::invalidate_all() {
     std::scoped_lock lock(mutex_);
     sessions_.clear();
+    (void) persist_locked();
   }
 
-  void SessionService::purge_expired(const std::chrono::steady_clock::time_point now) {
+  void SessionService::purge_expired(const std::chrono::system_clock::time_point now) {
     std::erase_if(sessions_, [&now](const auto &entry) {
       return entry.second.expiration <= now;
     });
+  }
+
+  void SessionService::load_persisted() {
+    if (persistence_path_.empty()) {
+      return;
+    }
+    try {
+      const auto document = nlohmann::json::parse(file_handler::read_file(persistence_path_.string().c_str()));
+      if (document.value("schema_version", 0) != 1 || !document.contains("sessions") || !document.at("sessions").is_array()) {
+        return;
+      }
+      const auto now {std::chrono::system_clock::now()};
+      for (const auto &value : document.at("sessions")) {
+        if (!value.is_object() || sessions_.size() >= 32U) {
+          break;
+        }
+        const auto id {value.value("id", "")};
+        const auto csrf_token {value.value("csrf_token", "")};
+        const auto username {value.value("username", "")};
+        const auto credential_identity {value.value("credential_identity", "")};
+        const auto expiration_seconds {value.value("expiration", std::int64_t {0})};
+        const auto expiration {std::chrono::system_clock::time_point {std::chrono::seconds {expiration_seconds}}};
+        if (id.size() != SESSION_TOKEN_SIZE || csrf_token.size() != SESSION_TOKEN_SIZE || username.empty() || username.size() > 64U || credential_identity.empty() || credential_identity.size() > 512U || expiration <= now) {
+          continue;
+        }
+        sessions_.emplace(id, session_record_t {csrf_token, username, credential_identity, expiration});
+      }
+    } catch (const std::exception &) {
+      // A missing, partial, or stale session store is equivalent to no login.
+    }
+  }
+
+  bool SessionService::persist_locked() const {
+    if (persistence_path_.empty()) {
+      return true;
+    }
+    std::error_code error;
+    std::filesystem::create_directories(persistence_path_.parent_path(), error);
+    if (error) {
+      return false;
+    }
+    nlohmann::json records = nlohmann::json::array();
+    for (const auto &[id, record] : sessions_) {
+      records.push_back({
+        {"id", id},
+        {"csrf_token", record.csrf_token},
+        {"username", record.username},
+        {"credential_identity", record.credential_identity},
+        {"expiration", std::chrono::duration_cast<std::chrono::seconds>(record.expiration.time_since_epoch()).count()},
+      });
+    }
+    const auto document = nlohmann::json::object({{"schema_version", 1}, {"sessions", std::move(records)}});
+    auto temporary {persistence_path_};
+    temporary += ".tmp";
+    {
+      std::ofstream output {temporary, std::ios::binary | std::ios::trunc};
+      if (!output || !(output << document.dump(2) << '\n')) {
+        return false;
+      }
+    }
+    std::filesystem::permissions(
+      temporary,
+      std::filesystem::perms::owner_read | std::filesystem::perms::owner_write,
+      std::filesystem::perm_options::replace,
+      error
+    );
+    if (error) {
+      std::filesystem::remove(temporary, error);
+      return false;
+    }
+    std::filesystem::rename(temporary, persistence_path_, error);
+    if (error) {
+      std::error_code remove_error;
+      std::filesystem::remove(persistence_path_, remove_error);
+      error.clear();
+      std::filesystem::rename(temporary, persistence_path_, error);
+    }
+    if (error) {
+      std::filesystem::remove(temporary, error);
+      return false;
+    }
+    return true;
   }
 
   PairingService::PairingService(std::shared_ptr<PairingClientBackend> backend):
@@ -994,8 +1195,16 @@ namespace web {
     };
   }
 
+  DiagnosticService::DiagnosticService(std::filesystem::path history_path, std::filesystem::path session_path):
+      history_path_ {history_path.empty() ? diagnostic_history_path() : std::move(history_path)},
+      session_path_ {session_path.empty() ? session_diagnostic_path() : std::move(session_path)} {}
+
   std::string DiagnosticService::recent_logs(const std::size_t maximum_bytes) const {
-    const auto content = file_handler::read_file(config::sunshine.log_file.c_str());
+    auto content = file_handler::read_file(config::sunshine.log_file.c_str());
+    const auto offset {diagnostic_log_offset(history_path_)};
+    if (offset > 0 && offset <= content.size()) {
+      content.erase(0, static_cast<std::size_t>(offset));
+    }
     return content.size() <= maximum_bytes ? content : content.substr(content.size() - maximum_bytes);
   }
 
@@ -1006,6 +1215,8 @@ namespace web {
   ) const {
     const auto content {recent_logs(maximum_bytes)};
     nlohmann::json entries = nlohmann::json::array();
+    nlohmann::json actions = nlohmann::json::array();
+    nlohmann::json operation_timeline = nlohmann::json::array();
     nlohmann::json counts = nlohmann::json::object({{"info", 0}, {"warning", 0}, {"error", 0}, {"fatal", 0}});
     std::istringstream lines {content};
     std::string line;
@@ -1036,10 +1247,50 @@ namespace web {
       if (entries.size() > maximum_entries) {
         entries.erase(entries.begin());
       }
+      constexpr std::string_view action_prefix {"SteamShine Web action: "};
+      if (message.starts_with(action_prefix)) {
+        const auto action {std::string_view {message}.substr(action_prefix.size())};
+        const auto separator {action.find(' ')};
+        if (separator != std::string_view::npos) {
+          actions.push_back(nlohmann::json::object({
+            {"timestamp", line.substr(1, timestamp_end - 1)},
+            {"method", action.substr(0, separator)},
+            {"path", action.substr(separator + 1)},
+          }));
+          if (actions.size() > maximum_entries) {
+            actions.erase(actions.begin());
+          }
+        }
+      }
+      const bool lifecycle_operation {
+        message.starts_with("SESSION_") ||
+        message.starts_with("STOCK_HANDOFF_") ||
+        message.starts_with("GAMESCOPE_") ||
+        message.starts_with("TERMINAL_") ||
+        message.find("Gamescope") != std::string::npos ||
+        message.find("PipeWire") != std::string::npos ||
+        message.find("encoder preflight") != std::string::npos ||
+        message.find("virtual session preparation") != std::string::npos ||
+        message.find("SteamShine Terminal") != std::string::npos ||
+        severity == "error" || severity == "fatal"
+      };
+      if (lifecycle_operation) {
+        const auto event_end {message.find(' ')};
+        operation_timeline.push_back(nlohmann::json::object({
+          {"timestamp", line.substr(1, timestamp_end - 1)},
+          {"severity", severity},
+          {"component", diagnostic_component(message)},
+          {"event", event_end == std::string::npos ? message : message.substr(0, event_end)},
+          {"message", message},
+        }));
+        if (operation_timeline.size() > maximum_entries) {
+          operation_timeline.erase(operation_timeline.begin());
+        }
+      }
     }
 
     nlohmann::json sessions = nlohmann::json::array();
-    const auto directory {session_diagnostic_path()};
+    const auto &directory {session_path_};
     std::vector<std::filesystem::directory_entry> files;
     std::error_code error;
     if (maximum_sessions > 0 && !directory.empty()) {
@@ -1070,7 +1321,35 @@ namespace web {
       {"schema_version", 1},
       {"service_binary_commit", build_info::commit()},
       {"log", nlohmann::json::object({{"content", content}, {"entries", std::move(entries)}, {"counts", std::move(counts)}})},
+      {"actions", std::move(actions)},
+      {"operation_timeline", std::move(operation_timeline)},
       {"recent_sessions", std::move(sessions)},
     });
+  }
+
+  service_result_t DiagnosticService::reset_history() const {
+    std::lock_guard lock {mutex_};
+    logging::log_flush();
+    std::error_code error;
+    const auto offset {std::filesystem::file_size(config::sunshine.log_file, error)};
+    if (error || !persist_diagnostic_history(history_path_, offset)) {
+      return {false, "diagnostic_reset_failed", "Unable to save the diagnostic history baseline."};
+    }
+
+    if (!session_path_.empty()) {
+      error.clear();
+      for (std::filesystem::directory_iterator iterator {session_path_, error}, end; !error && iterator != end; iterator.increment(error)) {
+        if (iterator->is_regular_file(error) && iterator->path().extension() == ".json") {
+          std::filesystem::remove(iterator->path(), error);
+          if (error) {
+            break;
+          }
+        }
+      }
+      if (error && error != std::errc::no_such_file_or_directory) {
+        return {false, "diagnostic_reset_failed", "Unable to remove completed session diagnostics."};
+      }
+    }
+    return {true, "diagnostic_history_reset", "Diagnostic history reset."};
   }
 }  // namespace web

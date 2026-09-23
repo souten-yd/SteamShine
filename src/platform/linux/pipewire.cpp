@@ -1169,7 +1169,11 @@ namespace pipewire {
 
         if (!wait_for_frame(deadline)) {
           if (sequence == 0 && !first_frame_timeout_logged_) {
-            BOOST_LOG(error) << "PIPEWIRE_FIRST_FRAME_TIMEOUT reason=no_producer_buffer"sv;
+            // An owned Gamescope commonly publishes its first real buffer a
+            // few seconds after the PipeWire node itself becomes visible.
+            // This individual capture deadline is therefore lifecycle
+            // evidence, not a terminal capture failure.
+            BOOST_LOG(info) << "PIPEWIRE_FIRST_FRAME_PENDING reason=no_producer_buffer"sv;
             first_frame_timeout_logged_ = true;
           }
           return platf::capture_e::timeout;

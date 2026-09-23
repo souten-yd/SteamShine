@@ -249,12 +249,10 @@ namespace steamos_virtual_session {
   }
 
   stock_handoff_action_e select_stock_handoff_action(
-    const stock_handoff_policy_e policy,
     const bool prefer_owned_session,
-    const bool startup_encoder_preflight,
-    const stock_activity_e activity
+    const bool startup_encoder_preflight
   ) {
-    return policy == stock_handoff_policy_e::auto_idle && prefer_owned_session && !startup_encoder_preflight && activity == stock_activity_e::idle ?
+    return prefer_owned_session && !startup_encoder_preflight ?
              stock_handoff_action_e::handoff_owned :
              stock_handoff_action_e::attach;
   }
@@ -407,6 +405,15 @@ namespace steamos_virtual_session {
   }
 
   session_route_decision_t select_session_route(const session_route_input_t &input) {
+    if (input.prefer_owned_session && !input.startup_preflight_owned_session) {
+      if (input.retained_owned_session) {
+        return {session_route_e::retained_owned_private, "application_retained_owned_private"};
+      }
+      return {
+        input.host_supported ? session_route_e::new_owned_private : session_route_e::reject,
+        input.host_supported ? "application_owned_private" : "application_owned_private_host_unsupported"
+      };
+    }
     if (!input.feature_enabled) {
       return {session_route_e::physical_desktop, "feature_disabled"};
     }
@@ -445,15 +452,6 @@ namespace steamos_virtual_session {
     }
     if (input.source_policy == session_source_policy_e::existing_gamescope) {
       return {session_route_e::reject, "existing_gamescope_unavailable"};
-    }
-    if (input.prefer_owned_session) {
-      if (input.retained_owned_session) {
-        return {session_route_e::retained_owned_private, "application_retained_owned_private"};
-      }
-      return {
-        input.host_supported ? session_route_e::new_owned_private : session_route_e::reject,
-        input.host_supported ? "application_owned_private" : "application_owned_private_host_unsupported"
-      };
     }
     if (input.capturable_output_present) {
       return {session_route_e::physical_desktop, "capturable_output_present"};

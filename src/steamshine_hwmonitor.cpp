@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cctype>
 #include <chrono>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <mutex>
@@ -316,6 +317,13 @@ namespace steamshine_hwmonitor {
     }
 
     return snapshot;
+  }
+
+  void apply_selected_profile_power_cap(metrics_snapshot_t &snapshot, const std::optional<double> selected_power_cap_watts) {
+    if (!snapshot.gpu || !selected_power_cap_watts || !std::isfinite(*selected_power_cap_watts) || *selected_power_cap_watts <= 0.0) {
+      return;
+    }
+    snapshot.gpu->power_cap_watts = *selected_power_cap_watts;
   }
 
   void to_json(nlohmann::json &json, const gpu_snapshot_t &value) {

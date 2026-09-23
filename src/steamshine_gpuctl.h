@@ -21,6 +21,7 @@
 #pragma once
 
 #include <nlohmann/json.hpp>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -107,6 +108,14 @@ namespace steamshine_gpuctl {
    * @brief Return the name of the profile most recently activated, or an empty string.
    */
   std::string active_profile_name();
+
+  /**
+   * @brief Resolve the profile most recently selected in the GPU tab.
+   *
+   * @return The selected built-in or custom profile, or no value when the
+   * stored name is empty or no longer exists.
+   */
+  std::optional<profile_t> active_profile();
 
   /**
    * @brief Apply a profile (built-in or custom) by name.

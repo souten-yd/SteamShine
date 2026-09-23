@@ -154,8 +154,10 @@ namespace steamos_virtual_session {
    * @param launch_session Moonlight request containing width, height, FPS, and HDR intent.
    * @param error Human-readable failure reason for the GameStream response.
    * @param force_owned_fallback Force an owned private canvas after physical-mode preparation fails.
-   * @param prefer_owned_session Prefer an owned canvas for the selected application while retaining verified Game Mode attachment.
-   * @param prefer_physical_desktop Prefer a usable physical compositor for the capture-only Desktop application.
+   * @param prefer_owned_session Require an owned client-sized canvas and hand
+   * off stock Game Mode when this is a real Moonlight application launch.
+   * @param prefer_physical_desktop Prefer a usable physical compositor only
+   * for non-client preparation paths.
    * @return True only after a Wayland readiness signal is observed.
    */
   bool prepare(
@@ -167,17 +169,18 @@ namespace steamos_virtual_session {
   );
 
   /**
-   * @brief Prepare the default virtual display for an encoder capability probe.
+   * @brief Prepare a verified Gamescope endpoint for startup encoder probing.
    *
    * This startup-only preflight runs before GameStream HTTP becomes visible so
    * a headless host advertises the HEVC/AV1 Main10 modes discovered from its
    * actual Gamescope capture path on the first Moonlight connection.
    *
-   * @param enable_hdr Whether the probe display should expose its HDR path.
-   * @param error Human-readable virtual-display preparation failure.
-   * @return True when a capture source is ready for the encoder probe.
+   * @param enable_hdr Whether the probe endpoint must support HDR encoding.
+   * @param error Receives a safe failure description.
+   * @param force_gamescope_capture Whether failed physical initialization requires Gamescope even with active scanout.
+   * @return True when the selected endpoint is ready for encoder probing.
    */
-  bool prepare_encoder_probe(bool enable_hdr, std::string &error);
+  bool prepare_encoder_probe(bool enable_hdr, std::string &error, bool force_gamescope_capture = false);
 
   /**
    * @brief Report whether SteamOS virtual-display capture is enabled.

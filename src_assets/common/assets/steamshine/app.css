@@ -103,7 +103,7 @@ a {
   flex-shrink: 0;
 }
 
-.mobile-topbar span {
+.mobile-topbar > .mobile-brand-label {
   font-weight: 700;
   font-size: 0.95rem;
   background: linear-gradient(135deg, var(--chrome-1), var(--chrome-2) 55%, var(--chrome-3));
@@ -113,8 +113,33 @@ a {
 }
 
 .mobile-topbar .icon-btn {
-  margin-left: auto;
+  min-width: 44px;
+  min-height: 44px;
+  margin-left: 0;
   color: var(--text-dim);
+}
+
+.mobile-restart-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  min-height: 44px;
+  padding: 0.45rem 0.65rem;
+  color: var(--text);
+  background: var(--bg-elev-2);
+  border-color: var(--border-strong);
+}
+
+.mobile-restart-btn svg {
+  width: 16px;
+  height: 16px;
+}
+
+.mobile-topbar .mobile-restart-btn span {
+  color: inherit;
+  font-size: 0.76rem;
+  font-weight: 650;
 }
 
 .shell.unauth {
@@ -313,6 +338,26 @@ a {
 .diagnostic-raw {
   max-height: 36rem;
   overflow: auto;
+}
+
+.diagnostic-actions {
+  display: grid;
+  gap: 0.4rem;
+  margin-top: 0.75rem;
+}
+
+.diagnostic-action {
+  display: grid;
+  grid-template-columns: minmax(10rem, auto) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 0.6rem;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+.diagnostic-action code {
+  overflow-wrap: anywhere;
+  color: var(--text);
 }
 
 /* ---- Main column ---- */
@@ -1017,6 +1062,10 @@ pre {
   flex-shrink: 0;
 }
 
+.terminal-actions [hidden] {
+  display: none !important;
+}
+
 .terminal-connection {
   display: inline-flex;
   align-items: center;
@@ -1065,6 +1114,7 @@ pre {
 
 .terminal-host .xterm {
   height: 100%;
+  touch-action: none;
 }
 
 .terminal-host .xterm-viewport {
@@ -1443,7 +1493,8 @@ pre {
     display: none;
   }
 
-  .terminal-actions > button {
+  .terminal-actions > button,
+  .terminal-actions > .btn {
     min-height: 38px;
     flex-shrink: 0;
   }
@@ -1459,5 +1510,11 @@ pre {
   .terminal-keybar button {
     min-width: 44px;
     min-height: 44px;
+  }
+}
+
+@media (max-width: 420px) {
+  .mobile-brand-label {
+    display: none;
   }
 }

@@ -119,6 +119,8 @@ set(SUNSHINE_TARGET_FILES
         "${CMAKE_SOURCE_DIR}/src/steamshine_hwmonitor.h"
         "${CMAKE_SOURCE_DIR}/src/steamshine_gpuctl.cpp"
         "${CMAKE_SOURCE_DIR}/src/steamshine_gpuctl.h"
+        "${CMAKE_SOURCE_DIR}/src/steamshine_addons.cpp"
+        "${CMAKE_SOURCE_DIR}/src/steamshine_addons.h"
         "${CMAKE_SOURCE_DIR}/src/steamshine_terminal.cpp"
         "${CMAKE_SOURCE_DIR}/src/steamshine_terminal.h"
         "${CMAKE_SOURCE_DIR}/src/platform/linux/gamescope_source.cpp"

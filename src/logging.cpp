@@ -168,7 +168,10 @@ namespace logging {
     sink->locked_backend()->add_stream(stream);
 #endif
 
-    sink->locked_backend()->add_stream(boost::make_shared<std::ofstream>(log_file));
+    // Keep prior startup failures available to the authenticated Diagnostics
+    // page after systemd starts a replacement process. The Web diagnostics
+    // reader remains tail-bounded and its reset marker can hide older runs.
+    sink->locked_backend()->add_stream(boost::make_shared<std::ofstream>(log_file, std::ios::app));
     sink->set_filter(severity >= min_log_level);
     sink->set_formatter(&formatter);
 

@@ -12,48 +12,48 @@ const config = ref(props.config)
     <div class="mb-3">
       <div class="form-check">
         <input id="steamos_virtual_display_enabled" v-model="config.steamos_virtual_display_enabled" class="form-check-input" type="checkbox" true-value="enabled" false-value="disabled" />
-        <label class="form-check-label" for="steamos_virtual_display_enabled">Enable SteamOS virtual display</label>
+        <label class="form-check-label" for="steamos_virtual_display_enabled">Enable custom startup display policy</label>
       </div>
-      <div class="form-text">Create a SteamShine-managed display when the selected policy requires it.</div>
+      <div class="form-text">Unchecked uses the safe automatic startup-probe defaults. It does not disable the Moonlight invariant: every client app stops stock Game Mode when present and uses a client-sized SteamShine-owned Gamescope.</div>
     </div>
     <div class="mb-3">
       <label class="form-label" for="steamos_session_source">Gamescope Session Source</label>
       <select id="steamos_session_source" v-model="config.steamos_session_source" class="form-select">
-        <option value="auto">Auto: verified Game Mode first, then private</option>
-        <option value="existing_gamescope">Existing Game Mode only</option>
-        <option value="owned_private">SteamShine private session only</option>
+        <option value="auto">Auto: verified stock first, then owned</option>
+        <option value="existing_gamescope">Verified stock Game Mode only</option>
+        <option value="owned_private">SteamShine-owned only</option>
       </select>
-      <div class="form-text">Existing Game Mode is accepted only after process, PipeWire node, and GPU checks succeed.</div>
+      <div class="form-text">Used only for startup encoder probing. A real Moonlight app never attaches to this source; it always hands off to an owned Gamescope.</div>
     </div>
     <div class="mb-3">
       <div class="form-check">
         <input id="steamos_keep_session_alive" v-model="config.steamos_keep_session_alive" class="form-check-input" type="checkbox" true-value="enabled" false-value="disabled" />
         <label class="form-check-label" for="steamos_keep_session_alive">Keep a SteamShine-owned session after disconnect</label>
       </div>
-      <div class="form-text">Disconnect preserves the owned session for reconnect. Explicit stop destroys only SteamShine-owned resources.</div>
+      <div class="form-text">Enabled preserves the owned Gamescope for a compatible Moonlight reconnect. Disabled stops it after the last stream and restores stock Game Mode.</div>
     </div>
     <div class="mb-3">
       <label class="form-label" for="steamos_existing_gamescope_pid">Existing Gamescope PID</label>
       <input id="steamos_existing_gamescope_pid" v-model="config.steamos_existing_gamescope_pid" class="form-control" type="number" min="0" step="1" />
-      <div class="form-text">Use 0 for automatic selection. A nonzero PID must be the uniquely verified current-user Game Mode Gamescope.</div>
+      <div class="form-text">Used only by startup probing. 0 selects automatically; a nonzero PID must be the uniquely verified current-user stock Game Mode Gamescope.</div>
     </div>
     <div class="mb-3">
       <label class="form-label" for="steamos_local_presentation">Local Presentation</label>
       <select id="steamos_local_presentation" v-model="config.steamos_local_presentation" class="form-select">
-        <option value="auto">Auto: fullscreen nested Gamescope when KWin is available</option>
+        <option value="auto">Auto: mirror with verified KWin and a physical output; otherwise remote only</option>
         <option value="off">Off: remote streaming only</option>
         <option value="mirror">Require fullscreen nested Gamescope</option>
       </select>
-      <div class="form-text">Existing Game Mode retains its physical output and is never mirrored a second time.</div>
+      <div class="form-text">Controls presentation of the Moonlight-owned Gamescope. Mirror requires a verified KWin Wayland endpoint and a connected physical output.</div>
     </div>
     <div class="mb-3">
       <label class="form-label" for="steamos_virtual_display_mode">Virtual Display Mode</label>
       <select id="steamos_virtual_display_mode" class="form-select" v-model="config.steamos_virtual_display_mode">
-        <option value="off">Off</option>
-        <option value="auto">Auto</option>
-        <option value="force">Force</option>
+        <option value="off">Off: do not create a display during startup probing</option>
+        <option value="auto">Auto: use a verified available source during startup probing</option>
+        <option value="force">Force: require an owned display during startup probing</option>
       </select>
-      <div class="form-text">Force requires a SteamShine-owned Gamescope display; local presentation selects fullscreen nested or remote-only headless operation.</div>
+      <div class="form-text">This changes startup encoder probing only. Off does not disable client handoff; Moonlight still gets its requested owned Gamescope geometry.</div>
     </div>
     <div class="mb-3">
       <label class="form-label" for="steamos_steam_migration">Desktop Steam migration</label>
@@ -63,14 +63,7 @@ const config = ref(props.config)
       </select>
       <div class="form-text">Auto uses Steam's normal shutdown command for owned headless or nested Gamescope. Active games, ambiguous metadata, and timeouts leave Steam running and reject the launch.</div>
     </div>
-    <div class="mb-3">
-      <label class="form-label" for="steamos_stock_session_handoff">Stock Game Mode handoff</label>
-      <select id="steamos_stock_session_handoff" v-model="config.steamos_stock_session_handoff" class="form-select">
-        <option value="attach">Attach to stock Gamescope</option>
-        <option value="auto_idle">Use owned headless when stock Steam is idle</option>
-      </select>
-      <div class="form-text">Active games and unknown activity remain on the verified stock Gamescope. Idle handoff restores stock Game Mode after the owned session ends.</div>
-    </div>
+    <div class="alert alert-info mb-3">Moonlight handoff is fixed: stop stock Game Mode if it exists, then start or reuse an owned Gamescope at the requested size, refresh rate, and HDR mode. An already-stopped stock session is a successful no-op. The legacy <code>steamos_stock_session_handoff</code> value is retained only for configuration compatibility.</div>
     <details class="mb-3">
       <summary class="mb-3">Advanced SteamOS session settings</summary>
       <div class="mb-3">

@@ -13,6 +13,15 @@
 #include <src/steamshine_terminal.h>
 #include <string>
 
+#if defined(__linux__)
+  #include <cerrno>
+  #include <fcntl.h>
+  #include <pty.h>
+  #include <sys/wait.h>
+  #include <termios.h>
+  #include <unistd.h>
+#endif
+
 using namespace std::literals;
 
 namespace {
@@ -54,6 +63,52 @@ TEST_F(SteamshineTerminalTest, RejectsUnknownSession) {
 }
 
 #if defined(__linux__)
+/**
+ * @brief Verify persistent terminal children cannot retain service sockets.
+ */
+TEST_F(SteamshineTerminalTest, ClosesInheritedDescriptorsInTerminalChild) {
+  int inherited_pipe[2] {-1, -1};
+  ASSERT_EQ(::pipe(inherited_pipe), 0);
+  ASSERT_GT(inherited_pipe[0], STDERR_FILENO);
+  ASSERT_GT(inherited_pipe[1], STDERR_FILENO);
+
+  const pid_t child {::fork()};
+  ASSERT_GE(child, 0);
+  if (child == 0) {
+    steamshine_terminal::close_inherited_file_descriptors();
+    errno = 0;
+    const bool read_closed {::fcntl(inherited_pipe[0], F_GETFD) == -1 && errno == EBADF};
+    errno = 0;
+    const bool write_closed {::fcntl(inherited_pipe[1], F_GETFD) == -1 && errno == EBADF};
+    _exit(read_closed && write_closed ? 0 : 1);
+  }
+
+  int status {};
+  ASSERT_EQ(::waitpid(child, &status, 0), child);
+  EXPECT_TRUE(WIFEXITED(status));
+  EXPECT_EQ(WEXITSTATUS(status), 0);
+  ::close(inherited_pipe[0]);
+  ::close(inherited_pipe[1]);
+}
+
+/**
+ * @brief Verify tmux attachment PTYs cannot echo terminal capability replies.
+ */
+TEST_F(SteamshineTerminalTest, PreparesTmuxAttachmentPtyWithoutEcho) {
+  int master_fd {-1};
+  int slave_fd {-1};
+  ASSERT_EQ(::openpty(&master_fd, &slave_fd, nullptr, nullptr, nullptr), 0);
+
+  ASSERT_TRUE(steamshine_terminal::prepare_tmux_attachment_terminal(slave_fd));
+  struct termios attributes {};
+  ASSERT_EQ(::tcgetattr(slave_fd, &attributes), 0);
+  EXPECT_EQ(attributes.c_lflag & ECHO, 0U);
+  EXPECT_EQ(attributes.c_lflag & ICANON, 0U);
+
+  ::close(slave_fd);
+  ::close(master_fd);
+}
+
 /**
  * @brief Verify independent sessions, PTY I/O, backlog replay, and selective deletion.
  */

@@ -166,7 +166,7 @@ jobs:
             python3 -m py_compile scripts/build-steamshine-web-assets.py scripts/validate-web-assets.py
             mkdir -p dist-web-assets
             npm ci --ignore-scripts
-            SUNSHINE_SOURCE_ASSETS_DIR="${GITHUB_WORKSPACE}/src_assets" SUNSHINE_ASSETS_DIR="${GITHUB_WORKSPACE}/dist-web-assets" npm run build
+            SUNSHINE_SOURCE_ASSETS_DIR="${GITHUB_WORKSPACE}/src_assets" SUNSHINE_ASSETS_DIR="${GITHUB_WORKSPACE}/dist-web-assets" npm run build-clean
             python3 scripts/build-steamshine-web-assets.py src_assets/common/assets/steamshine dist-web-assets/assets/steamshine
             python3 scripts/validate-web-assets.py dist-web-assets/assets/web --steamshine-root dist-web-assets/assets/steamshine
           fi
@@ -260,6 +260,8 @@ jobs:
           CCACHE_BASEDIR: ${{ github.workspace }}
           CCACHE_NAMESPACE: steamshine-release-v2
         run: cd "${GITHUB_WORKSPACE}" && cmake --build cmake-build-steamos --target sunshine steamshine_input_visualizer --parallel 4
+      - name: Build Web artifacts
+        run: cd "${GITHUB_WORKSPACE}" && cmake --build cmake-build-steamos --target web-artifacts --parallel 2
       - name: Report release compiler cache
         run: if command -v ccache >/dev/null; then CCACHE_DIR="${GITHUB_WORKSPACE}/.ccache/release" ccache --show-stats; fi
       - name: Record compile and link timing

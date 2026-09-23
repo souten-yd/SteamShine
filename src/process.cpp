@@ -83,15 +83,12 @@ namespace proc {
   }
 
   bool should_prefer_owned_virtual_display(const ctx_t &application) {
-    if (steam_session::command_opens_big_picture(application.cmd)) {
-      return true;
-    }
-    if (std::ranges::any_of(application.detached, steam_session::command_opens_big_picture)) {
-      return true;
-    }
-    return std::ranges::any_of(application.prep_cmds, [](const cmd_t &command) {
-      return steam_session::command_opens_big_picture(command.do_cmd);
-    });
+    (void) application;
+    // Every Moonlight application uses a client-sized owned canvas when the
+    // SteamOS virtual-display feature is enabled. Startup encoder probing is a
+    // separate call path and may still attach to stock Gamescope without
+    // replacing it.
+    return true;
   }
 
   bool should_prefer_physical_desktop(const ctx_t &application) {
@@ -122,8 +119,8 @@ namespace proc {
     return std::string {xwayland_virtual_desktop_command};
   }
 
-  bool should_skip_undo_command(const bool preserve_attached_steam, const std::string_view undo_command) {
-    return preserve_attached_steam && steam_session::command_closes_big_picture(undo_command);
+  bool should_skip_undo_command(const bool virtual_session_owns_steam_lifecycle, const std::string_view undo_command) {
+    return virtual_session_owns_steam_lifecycle && steam_session::command_closes_big_picture(undo_command);
   }
 
   void apply_session_display_environment(boost::process::v1::environment &environment, const std::optional<steamos_virtual_session::session_display_endpoint_t> &endpoint) {
@@ -169,10 +166,11 @@ namespace proc {
   class deinit_t: public platf::deinit_t {
   public:
     /**
-     * @brief Destroy the process subsystem deinitializer.
+     * @brief Stop launched applications before restoring the stock display session.
      */
     ~deinit_t() {
       proc.terminate();
+      steamos_virtual_session::stop();
     }
   };
 
@@ -286,7 +284,8 @@ namespace proc {
     _app_prep_it = _app_prep_begin;
 
     const auto virtual_status {steamos_virtual_session::status_snapshot()};
-    preserve_attached_steam_ = virtual_status.origin == steamos_virtual_session::session_origin_e::attached_existing;
+    defer_session_steam_undo_ = virtual_status.origin == steamos_virtual_session::session_origin_e::attached_existing ||
+                                virtual_status.origin == steamos_virtual_session::session_origin_e::owned_private;
     const bool prefer_physical_desktop {should_prefer_physical_desktop(_app)};
     const bool launch_owned_virtual_desktop {should_launch_owned_virtual_desktop(
       _app.cmd,
@@ -509,8 +508,8 @@ namespace proc {
       if (cmd.undo_cmd.empty()) {
         continue;
       }
-      if (should_skip_undo_command(preserve_attached_steam_, cmd.undo_cmd)) {
-        BOOST_LOG(info) << "Skipping Undo Cmd for attached Game Mode Steam: ["sv << cmd.undo_cmd << ']';
+      if (should_skip_undo_command(defer_session_steam_undo_, cmd.undo_cmd)) {
+        BOOST_LOG(info) << "Skipping Undo Cmd because the virtual session owns Steam teardown: ["sv << cmd.undo_cmd << ']';
         continue;
       }
 
@@ -547,7 +546,7 @@ namespace proc {
     }
 
     _app_id = -1;
-    preserve_attached_steam_ = false;
+    defer_session_steam_undo_ = false;
   }
 
   const std::vector<ctx_t> &proc_t::get_apps() const {

@@ -67,6 +67,7 @@
 #include "platform/common.h"
 #include "process.h"
 #include "rtsp.h"
+#include "steamshine_addons.h"
 #include "steamshine_gpuctl.h"
 #include "steamshine_hwmonitor.h"
 #include "steamshine_terminal.h"
@@ -81,7 +82,7 @@ using namespace std::literals;
 namespace confighttp {
   namespace fs = std::filesystem;
   const web::CredentialService credential_service {};  ///< Shared Web credential operations.
-  web::SessionService session_service {};  ///< Server-side SteamShine Web session operations.
+  web::SessionService session_service {std::chrono::hours(8), web::default_web_session_path()};  ///< Restart-stable SteamShine Web session operations.
   const web::PairingService pairing_service {};  ///< Shared Web pairing operations.
   const web::ClientService client_service {};  ///< Shared Web paired-client operations.
   std::atomic_bool steamshine_lifecycle_pending {false};  ///< Prevent duplicate Web lifecycle requests while shutdown begins.
@@ -132,6 +133,10 @@ namespace confighttp {
 
   bool terminal_accept_is_retryable(const boost::system::error_code &error) {
     return error == boost::asio::error::would_block || error == boost::asio::error::try_again;
+  }
+
+  bool terminal_peer_is_allowed(const std::string_view address) {
+    return net::from_address(address) <= http::origin_web_ui_allowed;
   }
 
   /**
@@ -1806,6 +1811,7 @@ namespace confighttp {
       }
       return {};
     }
+    BOOST_LOG(info) << "SteamShine Web action: " << request->method << ' ' << request->path;
     return session_id;
   }
 
@@ -2057,7 +2063,13 @@ namespace confighttp {
     if (require_steamshine_session(response, request).empty()) {
       return;
     }
-    send_steamshine_response(response, steamshine_hwmonitor::sample());
+    auto snapshot {steamshine_hwmonitor::sample()};
+    const auto profile {steamshine_gpuctl::active_profile()};
+    steamshine_hwmonitor::apply_selected_profile_power_cap(
+      snapshot,
+      profile ? std::optional<double> {profile->power_cap_watts} : std::nullopt
+    );
+    send_steamshine_response(response, snapshot);
   }
 
   /**
@@ -2319,6 +2331,46 @@ namespace confighttp {
   }
 
   /**
+   * @brief Return Decky Loader installation and service state for the Addon tab.
+   *
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   */
+  void steamshine_decky_status(const resp_https_t &response, const req_https_t &request) {
+    if (require_steamshine_session(response, request).empty()) {
+      return;
+    }
+    send_steamshine_response(response, steamshine_addons::decky_status());
+  }
+
+  /**
+   * @brief Run one allow-listed Decky Loader lifecycle operation.
+   *
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   */
+  void steamshine_decky_action(const resp_https_t &response, const req_https_t &request) {
+    if (require_steamshine_mutation(response, request).empty()) {
+      return;
+    }
+    nlohmann::json input;
+    if (!read_steamshine_json(response, request, input)) {
+      return;
+    }
+    const auto action {steamshine_addons::parse_decky_action(input.value("action", ""))};
+    if (!action) {
+      bad_request(response, request, "Unsupported Decky Loader action");
+      return;
+    }
+    const auto result {steamshine_addons::perform_decky_action(*action)};
+    if (!result.success) {
+      bad_request(response, request, result.message);
+      return;
+    }
+    send_steamshine_response(response, result);
+  }
+
+  /**
    * @brief Return sender recording state, capacity, usage, and completed files.
    *
    * @param response The HTTP response object.
@@ -2461,6 +2513,7 @@ namespace confighttp {
         {"name", session.name},
         {"created_at", session.created_at},
         {"running", session.running},
+        {"persistent", session.persistent},
       });
     }
     send_steamshine_response(response, {{"running", any_running}, {"sessions", std::move(sessions)}, {"ws_port", net::map_port(PORT_STEAMSHINE_TERMINAL)}});
@@ -2605,7 +2658,16 @@ namespace confighttp {
     if (!read_steamshine_json(response, request, input)) {
       return;
     }
-    const auto result = configuration_service.save_virtual_display(input.value("enabled", false), input.value("mode", ""), input.value("session_source", "auto"), input.value("local_presentation", "auto"), input.value("keep_session_alive", true), input.value("existing_gamescope_pid", 0), input.value("steam_migration", "auto_idle"), input.value("stock_session_handoff", "attach"));
+    const auto result = configuration_service.save_virtual_display(
+      input.value("enabled", config::steamos_virtual_display.enabled),
+      input.value("mode", std::string {steamos_virtual_session::to_string(config::steamos_virtual_display.mode)}),
+      input.value("session_source", std::string {steamos_virtual_session::to_string(config::steamos_virtual_display.session_source)}),
+      input.value("local_presentation", std::string {steamos_virtual_session::to_string(config::steamos_virtual_display.local_presentation)}),
+      input.value("keep_session_alive", config::steamos_virtual_display.keep_session_alive),
+      input.value("existing_gamescope_pid", config::steamos_virtual_display.existing_gamescope_pid),
+      input.value("steam_migration", std::string {steamos_virtual_session::to_string(config::steamos_virtual_display.steam_migration)}),
+      input.value("stock_session_handoff", std::string {steamos_virtual_session::to_string(config::steamos_virtual_display.stock_session_handoff)})
+    );
     send_steamshine_response(response, {{"status", result.success}, {"code", result.code}, {"message", result.message}});
   }
 
@@ -2687,6 +2749,20 @@ namespace confighttp {
     auto diagnostics = diagnostic_service.snapshot();
     diagnostics["status"] = status_snapshot_service.snapshot();
     send_steamshine_response(response, diagnostics);
+  }
+
+  /**
+   * @brief Reset the bounded diagnostic history visible to Web clients.
+   *
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   */
+  void steamshine_reset_diagnostics(const resp_https_t &response, const req_https_t &request) {
+    if (require_steamshine_mutation(response, request).empty()) {
+      return;
+    }
+    const auto result {diagnostic_service.reset_history()};
+    send_steamshine_response(response, {{"status", result.success}, {"code", result.code}, {"message", result.message}});
   }
 
   /**
@@ -3061,7 +3137,7 @@ namespace confighttp {
    * handshake is allowed to complete, completes the handshake, then blocks
    * reading client frames until the connection closes. No input/output is
    * relayed until the first client message proves CSRF-token possession.
-   * Runs on its own detached thread; see accept_and_run_ws() in start().
+   * Runs on its own joined connection thread; see accept_and_run_ws() in start().
    *
    * @param socket Freshly accepted TCP socket.
    * @param ssl_ctx Shared TLS context (certificate already loaded).
@@ -3076,11 +3152,17 @@ namespace confighttp {
     namespace http = boost::beast::http;
     using terminal_stream_t = websocket::stream<boost::asio::ssl::stream<boost::asio::ip::tcp::socket>>;
     try {
+      const auto remote_address {net::addr_to_normalized_string(socket.remote_endpoint().address())};
+      if (!terminal_peer_is_allowed(remote_address)) {
+        BOOST_LOG(info) << "SteamShine Terminal: [" << remote_address << "] -- denied";
+        return;
+      }
       auto ws {std::make_shared<terminal_stream_t>(std::move(socket), ssl_ctx)};
       const auto connection_id {connections.add([weak_ws = std::weak_ptr<terminal_stream_t> {ws}] {
         if (const auto active_ws {weak_ws.lock()}) {
           boost::system::error_code error;
           auto &transport {boost::beast::get_lowest_layer(*active_ws)};
+          transport.shutdown(boost::asio::ip::tcp::socket::shutdown_both, error);
           transport.cancel(error);
           transport.close(error);
         }
@@ -3105,8 +3187,18 @@ namespace confighttp {
       const std::string cookie_header {request.count(http::field::cookie) ? std::string {request[http::field::cookie]} : std::string {}};
       const auto session_id {get_ws_cookie_value(cookie_header, "steamshine_session")};
       const auto handshake_session {session_service.validate(session_id)};
-      if (!config::sunshine.steamshine_web_ui_enabled || !handshake_session.has_value() || !websocket::is_upgrade(request)) {
+      if (!config::sunshine.steamshine_web_ui_enabled || !handshake_session.has_value()) {
         http::response<http::string_body> response {http::status::unauthorized, request.version()};
+        response.prepare_payload();
+        http::write(ws->next_layer(), response);
+        return;
+      }
+      if (!websocket::is_upgrade(request)) {
+        http::response<http::string_body> response {http::status::ok, request.version()};
+        response.set(http::field::content_type, "text/html; charset=utf-8");
+        response.set(http::field::cache_control, "no-store");
+        response.set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'");
+        response.body() = "<!doctype html><meta charset=utf-8><title>SteamShine Terminal</title><style>body{font:16px system-ui;background:#111;color:#eee;padding:2rem}strong{color:#6ee7b7}</style><p><strong>Terminal connection is trusted.</strong></p><p>Return to SteamShine; it will reconnect automatically.</p>";
         response.prepare_payload();
         http::write(ws->next_layer(), response);
         return;
@@ -3268,7 +3360,7 @@ namespace confighttp {
     server.resource["^/pin/?$"]["GET"] = page_handler("pin.html");
     server.resource["^/troubleshooting/?$"]["GET"] = page_handler("troubleshooting.html");
     server.resource["^/welcome/?$"]["GET"] = page_handler("welcome.html", false, true);
-    server.resource["^/steamshine/?(?:setup|login|monitor|stream|applications|gpu|settings|config|pairing|clients|diagnostics|terminal)?/?$"]["GET"] = getSteamshinePage;
+    server.resource["^/steamshine/?(?:setup|login|monitor|stream|applications|gpu|addons|settings|config|pairing|clients|diagnostics|terminal)?/?$"]["GET"] = getSteamshinePage;
 
     // rest api
     server.resource["^/api/browse$"]["GET"] = browseDirectory;
@@ -3322,6 +3414,8 @@ namespace confighttp {
     server.resource["^/api/steamshine/v1/gpu/profiles$"]["POST"] = steamshine_handler(steamshine_save_gpu_profile);
     server.resource["^/api/steamshine/v1/gpu/profiles/([^/]+)$"]["DELETE"] = steamshine_handler(steamshine_delete_gpu_profile);
     server.resource["^/api/steamshine/v1/gpu/profiles/([^/]+)/activate$"]["POST"] = steamshine_handler(steamshine_activate_gpu_profile);
+    server.resource["^/api/steamshine/v1/addons/decky$"]["GET"] = steamshine_handler(steamshine_decky_status);
+    server.resource["^/api/steamshine/v1/addons/decky/action$"]["POST"] = steamshine_handler(steamshine_decky_action);
     server.resource["^/api/steamshine/v1/terminal/status$"]["GET"] = steamshine_handler(steamshine_terminal_status);
     server.resource["^/api/steamshine/v1/terminal/start$"]["POST"] = steamshine_handler(steamshine_terminal_start);
     server.resource["^/api/steamshine/v1/terminal/stop$"]["POST"] = steamshine_handler(steamshine_terminal_stop);
@@ -3334,6 +3428,7 @@ namespace confighttp {
     server.resource["^/api/steamshine/v1/clients/.+$"]["DELETE"] = steamshine_handler(steamshine_revoke_client);
     server.resource["^/api/steamshine/v1/logs/recent$"]["GET"] = steamshine_handler(steamshine_recent_logs);
     server.resource["^/api/steamshine/v1/diagnostics$"]["GET"] = steamshine_handler(steamshine_diagnostics);
+    server.resource["^/api/steamshine/v1/diagnostics/reset$"]["POST"] = steamshine_handler(steamshine_reset_diagnostics);
 
     // static/dynamic resources
     server.resource["^/images/sunshine.ico$"]["GET"] = getFaviconImage;
@@ -3429,9 +3524,10 @@ namespace confighttp {
     server.stop();
     boost::system::error_code close_error;
     terminal_acceptor.close(close_error);
+    terminal_connections.close_all();
 
     tcp.join();
     terminal_ws_thread.join();
-    steamshine_terminal::stop_all();
+    steamshine_terminal::detach_all();
   }
 }  // namespace confighttp

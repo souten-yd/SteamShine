@@ -146,6 +146,11 @@ namespace {
     output << "[ \"$#\" -gt 0 ] && shift\n";
     output << "\"$@\" &\n";
     output << "bootstrap_child=$!\n";
+    output << "steam_child=\n";
+    if (mode == "resident-steam") {
+      output << directory.string() << "/steam &\n";
+      output << "steam_child=$!\n";
+    }
     if (mode == "leave-child") {
       output << "sh -c 'trap \"\" TERM INT; while :; do sleep 1; done' &\n";
       output << "ignored_child=$!\n";
@@ -163,7 +168,7 @@ namespace {
       std::filesystem::permissions(executable, std::filesystem::perms::owner_exec, std::filesystem::perm_options::add);
       return executable;
     }
-    output << "trap 'kill \"$socket_child\" \"$eis_child\" \"$x11_child\" \"$bootstrap_child\" 2>/dev/null; wait \"$socket_child\" \"$eis_child\" \"$x11_child\" \"$bootstrap_child\" 2>/dev/null; [ -z \"$stale_x11_path\" ] || rm -f \"$stale_x11_path\"; exit 0' TERM INT\n";
+    output << "trap 'kill \"$socket_child\" \"$eis_child\" \"$x11_child\" \"$bootstrap_child\" ${steam_child:+\"$steam_child\"} 2>/dev/null; wait \"$socket_child\" \"$eis_child\" \"$x11_child\" \"$bootstrap_child\" ${steam_child:+\"$steam_child\"} 2>/dev/null; [ -z \"$stale_x11_path\" ] || rm -f \"$stale_x11_path\"; exit 0' TERM INT\n";
     output << "wait \"$socket_child\"\n";
     output.close();
     std::filesystem::permissions(executable, std::filesystem::perms::owner_exec, std::filesystem::perm_options::add);
@@ -424,6 +429,23 @@ TEST_F(SteamOSVirtualSessionTest, CleansOnlyMarkedOrphanRuntimeDirectories) {
 
   EXPECT_FALSE(std::filesystem::exists(owned));
   EXPECT_TRUE(std::filesystem::exists(foreign));
+}
+
+/**
+ * @brief Verify client-owned sessions remain recoverable when startup display policy is disabled.
+ */
+TEST_F(SteamOSVirtualSessionTest, CleansMarkedOrphansWhenStartupDisplayPolicyIsDisabled) {
+  const auto owned {root / "runtime" / "steamshine" / "session-orphan"};
+  std::filesystem::create_directories(owned);
+  {
+    std::ofstream marker {owned / "steamshine-owner"};
+    marker << "steamshine-steamos-virtual-session-v1\n";
+  }
+  config::steamos_virtual_display.enabled = false;
+
+  steamos_virtual_session::cleanup_orphan_sessions();
+
+  EXPECT_FALSE(std::filesystem::exists(owned));
 }
 
 TEST_F(SteamOSVirtualSessionTest, DoesNotCleanOrphansOutsideUserRuntime) {
@@ -875,6 +897,37 @@ TEST_F(SteamOSVirtualSessionTest, FakeGamescopeReadinessAndCleanup) {
 }
 
 /**
+ * @brief Verify explicit owned teardown lets Steam persist state before Gamescope exits.
+ */
+TEST_F(SteamOSVirtualSessionTest, GracefullyStopsResidentSteamBeforeOwnedGamescope) {
+  #ifndef STEAMSHINE_FAKE_STEAM_PATH
+  GTEST_SKIP() << "The standalone lifecycle fixture provides the fake Steam executable";
+  #else
+  const auto fake_steam {root / "steam"};
+  ASSERT_TRUE(std::filesystem::copy_file(STEAMSHINE_FAKE_STEAM_PATH, fake_steam));
+  std::filesystem::permissions(fake_steam, std::filesystem::perms::owner_exec, std::filesystem::perm_options::add);
+  config::steamos_virtual_display.gamescope_path = make_fake_gamescope(root, "resident-steam").string();
+  rtsp_stream::launch_session_t launch {};
+  std::string error;
+  ASSERT_TRUE(steamos_virtual_session::prepare(launch, error)) << error;
+  const auto endpoint {steamos_virtual_session::application_environment()};
+  ASSERT_TRUE(endpoint);
+  const auto pid_file {std::filesystem::path {endpoint->xdg_runtime_directory} / "fake-steam.pid"};
+  for (int attempt {}; attempt < 100 && !std::filesystem::exists(pid_file); ++attempt) {
+    std::this_thread::sleep_for(std::chrono::milliseconds {10});
+  }
+  ASSERT_TRUE(std::filesystem::exists(pid_file));
+
+  steamos_virtual_session::stop();
+
+  std::ifstream marker {root / "runtime" / "fake-steam-shutdown"};
+  std::string observation;
+  std::getline(marker, observation);
+  EXPECT_EQ(observation, "gamescope_alive=true");
+  #endif
+}
+
+/**
  * @brief Verify startup encoder preflight uses default geometry and enables HDR.
  */
 TEST_F(SteamOSVirtualSessionTest, EncoderProbePreparesDefaultHdrDisplay) {
@@ -892,6 +945,19 @@ TEST_F(SteamOSVirtualSessionTest, EncoderProbePreparesDefaultHdrDisplay) {
   std::ifstream arguments_file {std::filesystem::path {endpoint->xdg_runtime_directory} / "gamescope-arguments"};
   const std::string arguments {(std::istreambuf_iterator<char> {arguments_file}), std::istreambuf_iterator<char> {}};
   EXPECT_NE(arguments.find("--hdr-enabled\n"), std::string::npos);
+}
+
+/**
+ * @brief Verify failed physical initialization forces Gamescope despite active scanout.
+ */
+TEST_F(SteamOSVirtualSessionTest, EncoderProbeForcesGamescopeAfterPhysicalCaptureFailure) {
+  config::steamos_virtual_display.mode = steamos_virtual_session::virtual_display_mode_e::auto_detect;
+  std::string error;
+  ASSERT_TRUE(steamos_virtual_session::prepare_encoder_probe(false, error, true)) << error;
+
+  const auto snapshot {steamos_virtual_session::status_snapshot()};
+  EXPECT_EQ(snapshot.origin, steamos_virtual_session::session_origin_e::owned_private);
+  EXPECT_EQ(snapshot.selection_reason, "physical_mode_virtual_fallback");
 }
 
 /**
@@ -941,7 +1007,7 @@ TEST_F(SteamOSVirtualSessionTest, FakeGamescopeDisplaySevenAcceptsX11Probe) {
   ::close(probe);
 }
 
-TEST_F(SteamOSVirtualSessionTest, CaptureLossRetainsOwnershipForSafeCleanup) {
+TEST_F(SteamOSVirtualSessionTest, CaptureLossCleansOwnedSessionDuringStreamTeardown) {
   rtsp_stream::launch_session_t launch {};
   launch.id = 43;
   std::string error;
@@ -955,7 +1021,7 @@ TEST_F(SteamOSVirtualSessionTest, CaptureLossRetainsOwnershipForSafeCleanup) {
   steamos_virtual_session::mark_capture_lost();
   EXPECT_EQ(steamos_virtual_session::state(), steamos_virtual_session::state_e::Failed);
 
-  steamos_virtual_session::stop();
+  steamos_virtual_session::mark_streaming_disconnected();
 
   EXPECT_EQ(steamos_virtual_session::state(), steamos_virtual_session::state_e::Idle);
   EXPECT_FALSE(steamos_virtual_session::active());

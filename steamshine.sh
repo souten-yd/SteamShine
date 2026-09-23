@@ -165,6 +165,49 @@ service_file() { printf '%s\n' "${HOME}/.config/systemd/user/${SERVICE_UNIT}"; }
 service_wants_link() { printf '%s\n' "${HOME}/.config/systemd/user/default.target.wants/${SERVICE_UNIT}"; }
 gamescope_guard_dropin() { printf '%s\n' "${HOME}/.config/systemd/user/gamescope-session.service.d/90-steamshine-headless-guard.conf"; }
 gamescope_guard_executable() { printf '%s\n' "${PREFIX}/libexec/steamshine/steamshine-gamescope-session-guard"; }
+decky_helper_source() { printf '%s\n' "${PREFIX}/share/steamshine/current/scripts/steamshine-decky-helper.sh"; }
+decky_helper_executable() { printf '%s\n' '/var/lib/steamshine/helpers/steamshine-decky-helper'; }
+decky_sudoers_file() { printf '%s\n' '/etc/sudoers.d/steamshine-decky'; }
+
+# Install a root-owned, fixed-argument privilege boundary for the Addon tab.
+# Failure to authorize does not break streaming; the UI remains read-only and
+# explains that repair must be run once with sudo authorization.
+install_decky_helper() {
+  is_steamos_or_arch || return 0
+  local source helper sudoers temporary username
+  source="$(decky_helper_source)"
+  helper="$(decky_helper_executable)"
+  sudoers="$(decky_sudoers_file)"
+  username="$(id -un)"
+  [[ -x "${source}" ]] || return 0
+  [[ "${username}" =~ ^[A-Za-z0-9_-]+$ ]] || { say 'Decky helper skipped: unsupported local user name.'; return 0; }
+  if sudo -n true 2>/dev/null; then
+    :
+  elif [[ -x "${helper}" ]] && sudo -n "${helper}" authorize 2>/dev/null && cmp -s -- "${source}" "${helper}"; then
+    run sudo -n "${helper}" configure-input
+    return 0
+  else
+    if "${NON_INTERACTIVE}"; then
+      say 'Decky Addon management remains read-only; run SteamShine repair interactively once to authorize its fixed helper.'
+      return 0
+    fi
+    sudo -v || { say 'Decky Addon helper authorization was not granted; status remains read-only.'; return 0; }
+  fi
+  temporary="$(mktemp)"
+  cat >"${temporary}" <<EOF
+Cmnd_Alias STEAMSHINE_DECKY = ${helper} authorize, ${helper} configure-input, ${helper} install, ${helper} update, ${helper} uninstall, ${helper} start, ${helper} remove-helper
+${username} ALL=(root) NOPASSWD: STEAMSHINE_DECKY
+EOF
+  if ! visudo -cf "${temporary}" >/dev/null; then
+    rm -f -- "${temporary}"
+    die 'Generated Decky helper sudoers policy is invalid.' "${EXIT_SERVICE}"
+  fi
+  run sudo /usr/bin/install -d -m 0755 -o root -g root "$(dirname -- "${helper}")"
+  run sudo /usr/bin/install -m 0755 -o root -g root "${source}" "${helper}"
+  run sudo /usr/bin/install -m 0440 -o root -g root "${temporary}" "${sudoers}"
+  rm -f -- "${temporary}"
+  run sudo -n "${helper}" configure-input
+}
 systemd_user_path() {
   local path="$1"
   if [[ "${path}" == "${HOME}" ]]; then
@@ -235,7 +278,9 @@ Environment=STEAMSHINE_LAUNCH_MODE=systemd_user_service
 ExecStart=${executable} ${config}
 Restart=on-failure
 RestartSec=3
-TimeoutStopSec=10
+# The maximum virtual-session stop plus stock-session recovery budget is 130s.
+# Leave systemd a final five-second margin beyond SteamShine's own watchdog.
+TimeoutStopSec=135
 
 [Install]
 WantedBy=default.target
@@ -451,6 +496,7 @@ install() {
   configure
   configure_recommended
   migrate_existing_apps
+  install_decky_helper
   if "${NO_SERVICE}"; then
     say 'SteamShine is installed; the systemd user service was not changed'
     return
@@ -638,6 +684,7 @@ update() {
   configure
   configure_recommended
   migrate_existing_apps
+  install_decky_helper
   if "${NO_SERVICE}"; then
     say 'SteamShine was updated; the systemd user service was not changed'
     return
@@ -663,6 +710,7 @@ repair() {
   configure
   configure_recommended
   migrate_existing_apps
+  install_decky_helper
   "${NO_SERVICE}" && { say 'SteamShine files were repaired; the systemd user service was not changed'; return; }
   service_active && active_before=true || true
   if "${active_before}"; then
@@ -694,6 +742,11 @@ uninstall() {
     run rm -f "$(service_file)" "$(service_wants_link)" "$(gamescope_guard_dropin)" "$(gamescope_guard_executable)"
     run systemctl --user daemon-reload || true
     run systemctl --user reset-failed "${SERVICE_UNIT}" || true
+  fi
+  if [[ -x "$(decky_helper_executable)" ]]; then
+    if ! run sudo -n "$(decky_helper_executable)" remove-helper; then
+      say 'Privileged helper cleanup needs authorization; run SteamShine repair interactively before uninstalling to refresh its policy.'
+    fi
   fi
   run rm -f "${PREFIX}/bin/steamshine" "${PREFIX}/bin/steamshine-input-visualizer"
   run rm -rf -- "${PREFIX}/share/steamshine" "${HOME}/.cache/steamshine" "${BUILD_DIR}" "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/steamshine"

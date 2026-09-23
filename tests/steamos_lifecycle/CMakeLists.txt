@@ -21,6 +21,7 @@ add_library(steamos_virtual_session_lifecycle STATIC
     "${CMAKE_CURRENT_LIST_DIR}/../../src/platform/linux/pipewire_capture.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/../../src/platform/linux/host_desktop_endpoint.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/../../src/platform/linux/steam_session.cpp"
+    "${CMAKE_CURRENT_LIST_DIR}/../../src/steamshine_addons.cpp"
     "stubs.cpp"
 )
 target_include_directories(steamos_virtual_session_lifecycle PUBLIC "${CMAKE_CURRENT_LIST_DIR}/../..")
@@ -28,9 +29,15 @@ target_link_libraries(steamos_virtual_session_lifecycle PRIVATE Boost::log Boost
 target_compile_definitions(steamos_virtual_session_lifecycle PRIVATE SUNSHINE_TESTS)
 target_compile_options(steamos_virtual_session_lifecycle PRIVATE -Wall -Wno-sign-compare)
 
+add_executable(fake_steam fake_steam.cc)
+
 add_executable(test_steamos_virtual_session_lifecycle
     "${CMAKE_CURRENT_LIST_DIR}/../unit/test_steamos_virtual_session.cpp"
 )
 target_link_libraries(test_steamos_virtual_session_lifecycle PRIVATE steamos_virtual_session_lifecycle gtest_main Boost::log Boost::log_setup Boost::thread Boost::filesystem OpenSSL::Crypto)
-target_compile_definitions(test_steamos_virtual_session_lifecycle PRIVATE SUNSHINE_TESTS)
+target_compile_definitions(test_steamos_virtual_session_lifecycle PRIVATE
+    SUNSHINE_TESTS
+    STEAMSHINE_FAKE_STEAM_PATH="$<TARGET_FILE:fake_steam>"
+)
+add_dependencies(test_steamos_virtual_session_lifecycle fake_steam)
 add_test(NAME SteamOSVirtualSessionLifecycle COMMAND test_steamos_virtual_session_lifecycle)

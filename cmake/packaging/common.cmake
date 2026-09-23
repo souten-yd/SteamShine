@@ -19,19 +19,26 @@ set(CPACK_STRIP_FILES YES)
 # install common assets
 install(DIRECTORY "${SUNSHINE_SOURCE_ASSETS_DIR}/common/assets/"
         DESTINATION "${SUNSHINE_ASSETS_DIR}"
-        PATTERN "web" EXCLUDE)
+        PATTERN "web" EXCLUDE
+        PATTERN "steamshine" EXCLUDE)
 # copy assets to build directory, for running without install
 file(GLOB_RECURSE ALL_ASSETS
         RELATIVE "${SUNSHINE_SOURCE_ASSETS_DIR}/common/assets/" "${SUNSHINE_SOURCE_ASSETS_DIR}/common/assets/*")
-list(FILTER ALL_ASSETS EXCLUDE REGEX "^web/.*$")  # Filter out the web directory
-foreach(asset ${ALL_ASSETS})  # Copy assets to build directory, excluding the web directory
+list(FILTER ALL_ASSETS EXCLUDE REGEX "^(web|steamshine)/.*$")  # Filter out generated Web artifacts
+foreach(asset ${ALL_ASSETS})  # Copy assets to build directory, excluding generated Web directories
     file(COPY "${SUNSHINE_SOURCE_ASSETS_DIR}/common/assets/${asset}"
             DESTINATION "${CMAKE_CURRENT_BINARY_DIR}/assets")
 endforeach()
 
-# install built vite assets
-install(DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/assets/web"
-        DESTINATION "${SUNSHINE_ASSETS_DIR}")
+# Install only Web artifacts enabled for this build configuration.
+if(SUNSHINE_BUILD_UPSTREAM_WEB_UI)
+    install(DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/assets/web"
+            DESTINATION "${SUNSHINE_ASSETS_DIR}")
+endif()
+if(STEAMSHINE_BUILD_WEB_UI)
+    install(DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/assets/steamshine"
+            DESTINATION "${SUNSHINE_ASSETS_DIR}")
+endif()
 
 # platform specific packaging
 if(WIN32)

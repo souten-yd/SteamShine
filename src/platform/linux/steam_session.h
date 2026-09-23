@@ -49,6 +49,7 @@ namespace steam_session {
   struct resident_environment_t {
     int steam_pid {-1};  ///< Resident Steam process supplying the environment.
     uint64_t steam_start_time {0};  ///< Start time binding the snapshot to that process.
+    std::string executable_path;  ///< Canonical Steam executable used for a graceful shutdown request.
     std::string xdg_runtime_directory;  ///< `XDG_RUNTIME_DIR` value.
     std::string wayland_display;  ///< `WAYLAND_DISPLAY` value.
     std::string gamescope_wayland_display;  ///< `GAMESCOPE_WAYLAND_DISPLAY` value.

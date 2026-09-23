@@ -450,7 +450,12 @@ namespace platf::publish {
 
     if (!group) {
       if (!(group = avahi::entry_group_new(c, entry_group_callback, nullptr))) {
-        BOOST_LOG(error) << "avahi::entry_group_new() failed: "sv << avahi::strerror(avahi::client_errno(c));
+        const auto avahi_error {avahi::client_errno(c)};
+        if (avahi_error == avahi::ERR_NOT_PERMITTED) {
+          BOOST_LOG(info) << "mDNS publication disabled by the host Avahi policy; direct-address discovery remains available"sv;
+        } else {
+          BOOST_LOG(error) << "avahi::entry_group_new() failed: "sv << avahi::strerror(avahi_error);
+        }
         return;
       }
     }

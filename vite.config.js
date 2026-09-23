@@ -42,6 +42,19 @@ else {
 
 let header = fs.readFileSync(resolve(assetsSrcPath, "template_header.html"))
 
+/**
+ * @brief Build Codecov plugins only when an upload token is explicitly available.
+ *
+ * Local and release builds otherwise waste time retrying an upload that cannot
+ * authenticate, while CI retains bundle analysis when it provides the token.
+ */
+const codecovPlugins = process.env.CODECOV_TOKEN ? codecovVitePlugin({
+    enableBundleAnalysis: true,
+    bundleName: "sunshine",
+    uploadToken: process.env.CODECOV_TOKEN,
+    gitService: "github",
+}) : [];
+
 // https://vitejs.dev/config/
 export default defineConfig({
     resolve: {
@@ -54,12 +67,7 @@ export default defineConfig({
         vue(),
         ViteEjsPlugin({ header }),
         // The Codecov vite plugin should be after all other plugins
-        codecovVitePlugin({
-            enableBundleAnalysis: true,
-            bundleName: "sunshine",
-            uploadToken: process.env.CODECOV_TOKEN,
-            gitService: "github",
-        }),
+        ...codecovPlugins,
     ],
     root: resolve(assetsSrcPath),
     build: {
