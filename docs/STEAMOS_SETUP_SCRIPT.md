@@ -30,7 +30,9 @@ Normal installation and repair provision a separate root-owned runtime helper. I
 profile values against driver-reported limits and writes only fixed AMD GPU/CPU sysfs attributes,
 allowing GPU power profiles to survive artifact updates without making the service privileged. The
 selected GPU profile is verified against live sysfs on activation and is reapplied after every service
-start.
+start. Interactive authorization is required only when the helper is first installed or replaced; its
+command-specific sudoers default prevents a later broad SteamOS rule from restoring password prompts
+for this helper.
 
 `install` downloads the newest published SteamShine GitHub Release when no artifact-selection option
 is supplied. It requires exactly one `steamshine-steamos-x86_64-<commit>.tar.zst` asset and its

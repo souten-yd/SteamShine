@@ -204,6 +204,7 @@ install_runtime_helper() {
   temporary="$(mktemp)"
   cat >"${temporary}" <<EOF
 Cmnd_Alias STEAMSHINE_RUNTIME = ${helper} authorize, ${helper} apply-profile *, ${helper} remove-helper
+Defaults!STEAMSHINE_RUNTIME !authenticate
 ${username} ALL=(root) NOPASSWD: STEAMSHINE_RUNTIME
 EOF
   if ! visudo -cf "${temporary}" >/dev/null; then

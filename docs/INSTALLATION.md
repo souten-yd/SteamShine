@@ -33,7 +33,9 @@ scoped sudoers entry. SteamShine itself remains unprivileged. The helper accepts
 profile values, rediscovers the AMD GPU and CPU sysfs paths itself, checks every value against the
 driver's ranges, and writes only its fixed allow-list. `--no-service` skips this host integration. GPU
 profile activation reads the live power cap back from the driver, reports a failed application as an
-error, and reapplies the selected profile whenever the service starts.
+error, and reapplies the selected profile whenever the service starts. The one-time interactive
+authorization is not repeated after reboot; a command-specific sudoers default keeps only this
+validated helper non-interactive even when a later distribution rule restores password authentication.
 
 The user unit sets `XDG_RUNTIME_DIR=%t`, `PIPEWIRE_RUNTIME_DIR=%t`, and
 `DBUS_SESSION_BUS_ADDRESS=unix:path=%t/bus`. `WAYLAND_DISPLAY`, `DISPLAY`, and

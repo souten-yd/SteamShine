@@ -173,6 +173,7 @@ if "${root_dir}/scripts/steamshine-runtime-helper.sh" authorize >/dev/null 2>&1;
   exit 1
 fi
 grep -Fq 'steamshine-runtime-helper.sh' "${root_dir}/scripts/package-steamos-artifact.sh"
+grep -Fq 'Defaults!STEAMSHINE_RUNTIME !authenticate' "${root_dir}/steamshine.sh"
 grep -Fq 'Environment=XDG_RUNTIME_DIR=%t' "${root_dir}/packaging/linux/steamshine.service.in"
 grep -Fq 'ExecStart=%h/.local/bin/steamshine %h/.config/steamshine/sunshine.conf' "${root_dir}/packaging/linux/steamshine.service.in"
 grep -Fq 'WantedBy=default.target' "${root_dir}/packaging/linux/steamshine.service.in"
