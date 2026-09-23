@@ -1084,7 +1084,10 @@ function terminalSessionLabel(session) {
  * can deliver several moves per frame, so coalescing their pixel deltas keeps
  * the terminal attached to the finger without repeatedly rendering stale
  * intermediate positions. A short decaying glide preserves native-like
- * momentum after the finger is released.
+ * momentum after the finger is released. Touch gestures always operate the
+ * local history viewport, including when tmux advertises mouse tracking;
+ * otherwise tmux mouse mode and `touch-action: none` leave mobile users with
+ * no way to reach scrollback.
  *
  * @param host Element containing the opened xterm instance.
  * @param terminal Open xterm terminal controlled by the viewport.
@@ -1139,7 +1142,7 @@ function installTerminalTouchScroller(host, terminal) {
 
   /** @brief Begin tracking a single-finger terminal gesture. */
   const onTouchStart = (event) => {
-    if (event.touches.length !== 1 || terminal.modes.mouseTrackingMode !== 'none') return;
+    if (event.touches.length !== 1) return;
     cancelAnimationFrame(momentumFrame);
     momentumFrame = 0;
     const touch = event.touches[0];
@@ -1300,6 +1303,8 @@ async function renderTerminal() {
   let composing = false;
   let sessionRunning = active.running;
   let socketGeneration = 0;
+  let terminalInputReady = false;
+  let staleReportSuppressionUntil = 0;
 
   /** @brief Update the compact connection badge without moving terminal geometry. */
   const setConnectionState = (label, state) => {
@@ -1322,9 +1327,20 @@ async function renderTerminal() {
     });
   };
 
-  /** @brief Send input to the active shell, applying the one-shot Ctrl helper. */
+  /**
+   * @brief Send interactive input after retained terminal output has replayed.
+   *
+   * xterm.js answers terminal capability queries while parsing output. Retained
+   * tmux history can contain queries that are no longer current, so forwarding
+   * replies during replay would inject strings such as `0;276;0c` at the shell
+   * prompt. Live replies remain enabled once the ordered ready marker drains.
+   */
   const sendInput = (data) => {
-    if (!data) return;
+    if (!data || !terminalInputReady) return;
+    if (performance.now() < staleReportSuppressionUntil) {
+      data = data.replace(/\x1b\[(?:\?|>)[0-9;]*c/g, '');
+      if (!data) return;
+    }
     if (ctrlActive && data.length === 1) {
       const code = data.toUpperCase().charCodeAt(0);
       if (code >= 64 && code <= 95) data = String.fromCharCode(code & 31);
@@ -1383,8 +1399,10 @@ async function renderTerminal() {
     if (previous) previous.close();
     const generation = ++socketGeneration;
     const socket = new WebSocket(`wss://${location.hostname}:${status.ws_port}/api/steamshine/v1/terminal/stream`);
+    let connectionErrored = false;
     socket.binaryType = 'arraybuffer';
     terminalSocket = socket;
+    terminalInputReady = false;
     host.classList.add('replaying');
     terminalInstance.reset();
     setConnectionState(reconnectAttempt ? 'Reconnecting…' : 'Connecting…', 'connecting');
@@ -1403,6 +1421,11 @@ async function renderTerminal() {
           terminalInstance.write('', () => {
             if (disposed || generation !== socketGeneration) return;
             host.classList.remove('replaying');
+            // xterm can dispatch capability replies one task after its write
+            // callback. Discard only those reports during this brief grace
+            // period while allowing ordinary keyboard input immediately.
+            staleReportSuppressionUntil = performance.now() + 1000;
+            terminalInputReady = true;
             setConnectionState('Connected', 'open');
             scheduleFit();
           });
@@ -1414,13 +1437,15 @@ async function renderTerminal() {
     socket.onclose = () => {
       if (disposed || generation !== socketGeneration || socket !== terminalSocket) return;
       terminalSocket = null;
+      terminalInputReady = false;
       reconnectAttempt += 1;
-      setConnectionState('Reconnecting…', 'connecting');
+      setConnectionState(connectionErrored ? 'Connection error; trust the terminal certificate, then retrying…' : 'Reconnecting…', connectionErrored ? 'error' : 'connecting');
       const delay = Math.min(5000, 250 * (2 ** Math.min(reconnectAttempt - 1, 5)));
       reconnectTimer = setTimeout(connect, delay);
     };
     socket.onerror = () => {
-      if (generation === socketGeneration) setConnectionState('Connection error; retrying…', 'connecting');
+      connectionErrored = true;
+      if (generation === socketGeneration) setConnectionState('Connection error; trust the terminal certificate, then retrying…', 'error');
     };
   };
 

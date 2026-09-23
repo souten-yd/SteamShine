@@ -270,15 +270,34 @@ try {
   await terminalInput.press('Enter');
   await steamshinePage.waitForFunction((expectedHome) => document.querySelector('.xterm-rows')?.textContent?.includes(`STEAMSHINE_BROWSER_TERMINAL_OK:${expectedHome}`), homeDirectory, { timeout: 5000 });
 
+  // Queue terminal capability requests while this session is not displayed.
+  // On replay xterm.js answers them, but those stale replies must never be
+  // forwarded to the current shell prompt as strings such as `0;276;0c`.
+  await terminalInput.pressSequentially("(sleep 3; printf '\\033[c\\033[>c') &", { delay: 1 });
+  await terminalInput.press('Enter');
+
   await steamshinePage.locator('#term-new').click();
   await steamshinePage.waitForFunction(() => document.querySelectorAll('.terminal-tab').length === 2, undefined, { timeout: 5000 });
   await steamshinePage.waitForFunction(() => document.querySelector('#term-connection')?.dataset.state === 'open', undefined, { timeout: 10000 });
+  await steamshinePage.waitForTimeout(3500);
   await steamshinePage.locator(`[data-terminal-session="${firstTerminalId}"]`).click();
   await steamshinePage.waitForFunction(() => document.querySelector('#term-connection')?.dataset.state === 'open', undefined, { timeout: 10000 });
   await steamshinePage.waitForFunction((expectedHome) => document.querySelector('.xterm-rows')?.textContent?.includes(`STEAMSHINE_BROWSER_TERMINAL_OK:${expectedHome}`), homeDirectory, { timeout: 5000 });
+  const replayProofFile = join(homeDirectory, 'terminal-replay-input-ok');
+  await terminalInput.pressSequentially("printf 'STEAMSHINE_TERMINAL_REPLAY_INPUT_OK\\n' > \"$HOME/terminal-replay-input-ok\"", { delay: 1 });
+  await terminalInput.press('Enter');
+  let replayProof = '';
+  for (let attempt = 0; attempt < 50 && replayProof.trim() !== 'STEAMSHINE_TERMINAL_REPLAY_INPUT_OK'; ++attempt) {
+    try { replayProof = await readFile(replayProofFile, 'utf8'); } catch { await new Promise((resolve) => setTimeout(resolve, 100)); }
+  }
+  if (replayProof.trim() !== 'STEAMSHINE_TERMINAL_REPLAY_INPUT_OK') {
+    throw new Error('Terminal replay responses contaminated or blocked the next shell command.');
+  }
   await terminalInput.pressSequentially('seq 1 240', { delay: 1 });
   await terminalInput.press('Enter');
   await steamshinePage.waitForFunction(() => document.querySelector('.xterm-rows')?.textContent?.includes('240'), undefined, { timeout: 5000 });
+  await terminalInput.pressSequentially("printf '\\033[?1000h'", { delay: 1 });
+  await terminalInput.press('Enter');
 
   await steamshinePage.setViewportSize({ width: 320, height: 700 });
   await steamshinePage.waitForFunction(() => {
@@ -334,8 +353,12 @@ try {
   }
   securityResults.terminal_multiple_sessions = true;
   securityResults.terminal_history_replay = true;
+  securityResults.terminal_replay_input_isolation = true;
   securityResults.terminal_mobile_geometry = terminalMobileGeometry;
   securityResults.terminal_mobile_touch_scroll = terminalTouchScroll;
+
+  await terminalInput.pressSequentially("printf '\\033[?1000l'", { delay: 1 });
+  await terminalInput.press('Enter');
 
   await steamshinePage.locator('#term-end').click();
   await steamshinePage.getByRole('alertdialog').getByRole('button', { name: 'End session' }).click();
