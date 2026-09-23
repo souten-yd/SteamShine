@@ -32,7 +32,8 @@ allowing GPU power profiles to survive artifact updates without making the servi
 selected GPU profile is verified against live sysfs on activation and is reapplied after every service
 start. Interactive authorization is required only when the helper is first installed or replaced; its
 command-specific sudoers default prevents a later broad SteamOS rule from restoring password prompts
-for this helper.
+for this helper. Repair tests that policy while explicitly ignoring any temporary sudo timestamp, so
+a recently entered password cannot be mistaken for persistent non-interactive authorization.
 
 `install` downloads the newest published SteamShine GitHub Release when no artifact-selection option
 is supplied. It requires exactly one `steamshine-steamos-x86_64-<commit>.tar.zst` asset and its

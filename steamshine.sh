@@ -184,7 +184,7 @@ install_runtime_helper() {
   username="$(id -un)"
   [[ -x "${source}" ]] || return 0
   [[ "${username}" =~ ^[A-Za-z0-9_-]+$ ]] || { say 'Runtime capability helper skipped: unsupported local user name.'; return 0; }
-  if [[ -x "${helper}" ]] && [[ "$(stat -c %u:%a -- "${helper}" 2>/dev/null)" == 0:755 ]] && sudo -n "${helper}" authorize 2>/dev/null; then
+  if [[ -x "${helper}" ]] && [[ "$(stat -c %u:%a -- "${helper}" 2>/dev/null)" == 0:755 ]] && sudo -n -k "${helper}" authorize 2>/dev/null; then
     if cmp -s -- "${source}" "${helper}"; then
       return 0
     elif "${NON_INTERACTIVE}"; then
@@ -215,7 +215,7 @@ EOF
   run sudo /usr/bin/install -m 0755 -o root -g root "${source}" "${helper}"
   run sudo /usr/bin/install -m 0440 -o root -g root "${temporary}" "${sudoers}"
   rm -f -- "${temporary}"
-  run sudo -n "${helper}" authorize
+  run sudo -n -k "${helper}" authorize
   RUNTIME_HELPER_CHANGED=true
 }
 
