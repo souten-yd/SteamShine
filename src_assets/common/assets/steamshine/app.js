@@ -1080,14 +1080,15 @@ function terminalSessionLabel(session) {
 /**
  * @brief Install a frame-coalesced touch scroller for an xterm viewport.
  *
- * xterm updates its viewport synchronously for every touchmove. Mobile browsers
- * can deliver several moves per frame, so coalescing their pixel deltas keeps
- * the terminal attached to the finger without repeatedly rendering stale
- * intermediate positions. A short decaying glide preserves native-like
- * momentum after the finger is released. Touch gestures always operate the
- * local history viewport, including when tmux advertises mouse tracking;
- * otherwise tmux mouse mode and `touch-action: none` leave mobile users with
- * no way to reach scrollback.
+ * Mobile browsers can deliver several moves per frame, so coalescing their
+ * pixel deltas keeps the terminal attached to the finger without repeatedly
+ * rendering stale intermediate positions. Scrolling is applied through
+ * xterm's buffer API instead of mutating the viewport DOM, which xterm can
+ * overwrite on mobile render cycles. A short decaying glide preserves
+ * native-like momentum after the finger is released. Touch gestures always
+ * operate the local history viewport, including when tmux advertises mouse
+ * tracking; otherwise tmux mouse mode and `touch-action: none` leave mobile
+ * users with no way to reach scrollback.
  *
  * @param host Element containing the opened xterm instance.
  * @param terminal Open xterm terminal controlled by the viewport.
@@ -1116,12 +1117,17 @@ function installTerminalTouchScroller(host, terminal) {
   /** @brief Apply all input received during the current display frame at once. */
   const flushScroll = () => {
     scrollFrame = 0;
-    const pixels = pendingPixels;
-    pendingPixels = 0;
-    if (!pixels) return;
-    const before = viewport.scrollTop;
-    viewport.scrollTop += pixels;
-    if (viewport.scrollTop === before) velocity = 0;
+    const row = host.querySelector('.xterm-rows > div');
+    const lineHeight = row?.getBoundingClientRect().height || 16;
+    const lines = pendingPixels < 0 ? Math.ceil(pendingPixels / lineHeight) : Math.floor(pendingPixels / lineHeight);
+    if (!lines) return;
+    pendingPixels -= lines * lineHeight;
+    const before = terminal.buffer.active.viewportY;
+    terminal.scrollLines(lines);
+    if (terminal.buffer.active.viewportY === before) {
+      pendingPixels = 0;
+      velocity = 0;
+    }
   };
 
   /** @brief Queue one viewport update without forcing layout for every touchmove. */

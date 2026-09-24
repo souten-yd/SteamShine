@@ -339,6 +339,7 @@ try {
     dispatchTouch('touchmove', 260, true);
     const synchronous = viewport.scrollTop;
     await new Promise((resolve) => requestAnimationFrame(resolve));
+    await new Promise((resolve) => requestAnimationFrame(resolve));
     const framed = viewport.scrollTop;
     dispatchTouch('touchend', 260, false);
     await new Promise((resolve) => setTimeout(resolve, 250));
