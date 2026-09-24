@@ -9,7 +9,9 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdlib>
+#include <filesystem>
 #include <mutex>
+#include <optional>
 #include <src/steamshine_terminal.h>
 #include <string>
 
@@ -31,18 +33,58 @@ namespace {
    */
   class SteamshineTerminalTest: public testing::Test {
   protected:
+#if defined(__linux__)
+    std::filesystem::path isolated_tmux_root_;  ///< Private tmux socket directory used by this test only.
+    std::optional<std::string> original_tmux_;  ///< Inherited tmux client identity restored after the test.
+    std::optional<std::string> original_tmux_tmpdir_;  ///< Inherited tmux socket root restored after the test.
+#endif
+
     /**
-     * @brief Begin each test with an empty session registry.
+     * @brief Begin each test with an empty, isolated tmux server.
+     *
+     * A developer commonly runs this suite from the SteamShine Web Terminal.
+     * tmux gives its own client identity precedence over TMUX_TMPDIR, so both
+     * values must be isolated before stop_all() can safely clean test sessions.
      */
     void SetUp() override {
+#if defined(__linux__)
+      if (const char *value {std::getenv("TMUX")}) {
+        original_tmux_ = value;
+      }
+      if (const char *value {std::getenv("TMUX_TMPDIR")}) {
+        original_tmux_tmpdir_ = value;
+      }
+      isolated_tmux_root_ = std::filesystem::temp_directory_path() / std::format(
+                                                                       "steamshine-terminal-test-{}-{}",
+                                                                       ::getpid(),
+                                                                       std::chrono::steady_clock::now().time_since_epoch().count()
+                                                                     );
+      ASSERT_TRUE(std::filesystem::create_directories(isolated_tmux_root_));
+      ASSERT_EQ(::unsetenv("TMUX"), 0);
+      ASSERT_EQ(::setenv("TMUX_TMPDIR", isolated_tmux_root_.c_str(), 1), 0);
+#endif
       steamshine_terminal::stop_all();
     }
 
     /**
-     * @brief Reap every shell even when a test exits early.
+     * @brief Reap isolated shells and restore the caller's tmux environment.
      */
     void TearDown() override {
       steamshine_terminal::stop_all();
+#if defined(__linux__)
+      if (original_tmux_) {
+        (void) ::setenv("TMUX", original_tmux_->c_str(), 1);
+      } else {
+        (void) ::unsetenv("TMUX");
+      }
+      if (original_tmux_tmpdir_) {
+        (void) ::setenv("TMUX_TMPDIR", original_tmux_tmpdir_->c_str(), 1);
+      } else {
+        (void) ::unsetenv("TMUX_TMPDIR");
+      }
+      std::error_code error;
+      std::filesystem::remove_all(isolated_tmux_root_, error);
+#endif
     }
   };
 
@@ -54,11 +96,13 @@ namespace {
 TEST_F(SteamshineTerminalTest, RejectsUnknownSession) {
   EXPECT_FALSE(steamshine_terminal::running("missing"));
   EXPECT_FALSE(steamshine_terminal::write_input("missing", "echo ignored\n"));
+  EXPECT_FALSE(steamshine_terminal::scroll("missing", -1));
+  EXPECT_FALSE(steamshine_terminal::scroll("missing", 0));
   EXPECT_FALSE(steamshine_terminal::resize("missing", 100, 40));
   EXPECT_EQ(steamshine_terminal::subscribe("missing", [](std::string_view) {
             }),
             0U);
-  EXPECT_FALSE(steamshine_terminal::stop("missing"));
+  EXPECT_FALSE(steamshine_terminal::stop("missing", "invalid"));
   EXPECT_TRUE(steamshine_terminal::list().empty());
 }
 
@@ -123,9 +167,10 @@ TEST_F(SteamshineTerminalTest, ManagesIndependentSessionsAndReplaysOutput) {
 
   const auto sessions {steamshine_terminal::list()};
   ASSERT_EQ(sessions.size(), 2U);
-  EXPECT_NE(std::ranges::find(sessions, first, &steamshine_terminal::session_snapshot_t::id), sessions.end());
+  const auto first_session {std::ranges::find(sessions, first, &steamshine_terminal::session_snapshot_t::id)};
+  ASSERT_NE(first_session, sessions.end());
+  EXPECT_FALSE(first_session->explicit_end_token.empty());
   EXPECT_NE(std::ranges::find(sessions, second, &steamshine_terminal::session_snapshot_t::id), sessions.end());
-  EXPECT_TRUE(steamshine_terminal::resize(first, 111, 37));
 
   std::mutex output_mutex;
   std::condition_variable output_ready;
@@ -138,6 +183,13 @@ TEST_F(SteamshineTerminalTest, ManagesIndependentSessionsAndReplaysOutput) {
     output_ready.notify_all();
   })};
   ASSERT_NE(subscription, 0U);
+  EXPECT_FALSE(steamshine_terminal::scroll(first, 0));
+  if (first_session->persistent) {
+    EXPECT_TRUE(steamshine_terminal::scroll(first, -2));
+  } else {
+    EXPECT_FALSE(steamshine_terminal::scroll(first, -2));
+  }
+  EXPECT_TRUE(steamshine_terminal::resize(first, 111, 37));
   ASSERT_TRUE(steamshine_terminal::write_input(first, "printf 'STEAMSHINE_TERMINAL_TEST:%s\\n' \"$PWD\"\n"));
   {
     std::unique_lock lock {output_mutex};
@@ -157,7 +209,9 @@ TEST_F(SteamshineTerminalTest, ManagesIndependentSessionsAndReplaysOutput) {
   EXPECT_NE(replay.find("STEAMSHINE_TERMINAL_TEST"), std::string::npos);
   steamshine_terminal::unsubscribe(first, replay_subscription);
 
-  EXPECT_TRUE(steamshine_terminal::stop(first));
+  EXPECT_FALSE(steamshine_terminal::stop(first, "stale-token"));
+  EXPECT_TRUE(steamshine_terminal::running(first));
+  EXPECT_TRUE(steamshine_terminal::stop(first, first_session->explicit_end_token));
   EXPECT_FALSE(steamshine_terminal::running(first));
   EXPECT_TRUE(steamshine_terminal::running(second));
   ASSERT_EQ(steamshine_terminal::list().size(), 1U);

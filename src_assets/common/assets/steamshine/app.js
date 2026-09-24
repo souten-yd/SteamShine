@@ -1064,10 +1064,13 @@ async function createTerminalSession() {
 }
 
 /** @brief Stop one PTY session after confirming the destructive action. */
-async function stopTerminalSession(sessionId) {
+async function stopTerminalSession(session) {
   if (!await confirmDialog({ title: 'End terminal session', message: 'This stops the shell and every process started from it.', confirmLabel: 'End session' })) return false;
-  await json(await api('/terminal/stop', { method: 'POST', body: JSON.stringify({ session_id: sessionId }) }));
-  if (sessionStorage.getItem(TERMINAL_ACTIVE_SESSION_KEY) === sessionId) sessionStorage.removeItem(TERMINAL_ACTIVE_SESSION_KEY);
+  await json(await api('/terminal/stop', {
+    method: 'POST',
+    body: JSON.stringify({ session_id: session.id, explicit_end_token: session.explicit_end_token, intent: 'explicit_user_end' }),
+  }));
+  if (sessionStorage.getItem(TERMINAL_ACTIVE_SESSION_KEY) === session.id) sessionStorage.removeItem(TERMINAL_ACTIVE_SESSION_KEY);
   return true;
 }
 
@@ -1092,9 +1095,11 @@ function terminalSessionLabel(session) {
  *
  * @param host Element containing the opened xterm instance.
  * @param terminal Open xterm terminal controlled by the viewport.
+ * @param scrollRemote Callback that returns true after forwarding lines to a
+ * remote history owner such as tmux, or false to use xterm's local buffer.
  * @return Cleanup callback that removes listeners and pending animation frames.
  */
-function installTerminalTouchScroller(host, terminal) {
+function installTerminalTouchScroller(host, terminal, scrollRemote) {
   const viewport = host.querySelector('.xterm-viewport');
   if (!viewport) return () => {};
 
@@ -1122,6 +1127,7 @@ function installTerminalTouchScroller(host, terminal) {
     const lines = pendingPixels < 0 ? Math.ceil(pendingPixels / lineHeight) : Math.floor(pendingPixels / lineHeight);
     if (!lines) return;
     pendingPixels -= lines * lineHeight;
+    if (scrollRemote(lines)) return;
     const before = terminal.buffer.active.viewportY;
     terminal.scrollLines(lines);
     if (terminal.buffer.active.viewportY === before) {
@@ -1270,12 +1276,13 @@ async function renderTerminal() {
     rerender();
   }));
   document.querySelectorAll('[data-terminal-close]').forEach((button) => button.addEventListener('click', async () => {
-    try { if (await stopTerminalSession(button.dataset.terminalClose)) rerender(); } catch (error) { toast(error.message, 'error'); }
+    const session = sessions.find((candidate) => candidate.id === button.dataset.terminalClose);
+    try { if (session && await stopTerminalSession(session)) rerender(); } catch (error) { toast(error.message, 'error'); }
   }));
 
   if (!active) return;
   document.querySelector('#term-end').onclick = async () => {
-    try { if (await stopTerminalSession(active.id)) rerender(); } catch (error) { toast(error.message, 'error'); }
+    try { if (await stopTerminalSession(active)) rerender(); } catch (error) { toast(error.message, 'error'); }
   };
 
   await loadScriptOnce('/steamshine/vendor/xterm/xterm.js');
@@ -1299,7 +1306,11 @@ async function renderTerminal() {
   });
   terminalInstance.loadAddon(fitAddon);
   terminalInstance.open(host);
-  const disposeTouchScroller = installTerminalTouchScroller(host, terminalInstance);
+  const disposeTouchScroller = installTerminalTouchScroller(host, terminalInstance, (lines) => {
+    if (!active.persistent || !terminalInputReady || terminalSocket?.readyState !== WebSocket.OPEN) return false;
+    terminalSocket.send(JSON.stringify({ type: 'scroll', lines }));
+    return true;
+  });
 
   let disposed = false;
   let reconnectTimer = null;

@@ -1250,6 +1250,7 @@ namespace stream {
       net::peer_t peer;
       std::uint32_t seq;
       std::chrono::steady_clock::time_point last_fec_feedback_at {};  ///< Time of the preceding modern Moonlight FEC report.
+      std::uint64_t invalid_fec_feedback_count {};  ///< Invalid optional frame-FEC reports observed in this session.
 
       platf::feedback_queue_t feedback_queue;
       safe::mail_raw_t::event_t<video::hdr_info_t> hdr_queue;
@@ -1922,7 +1923,14 @@ namespace stream {
     server->map(FRAME_FEC_STATUS_PACKET_TYPE, [](session_t *session, const std::string_view &payload) {
       const auto status {parse_frame_fec_status(payload)};
       if (!status) {
-        BOOST_LOG(warning) << "Ignoring invalid Moonlight frame FEC status payload";
+        const auto invalid_count {++session->control.invalid_fec_feedback_count};
+        if (invalid_count == 1) {
+          BOOST_LOG(warning) << "Ignoring invalid optional Moonlight frame FEC status payload"
+                             << " bytes=" << payload.size() << " further_occurrences=debug";
+        } else {
+          BOOST_LOG(debug) << "Ignoring repeated invalid Moonlight frame FEC status payload"
+                           << " count=" << invalid_count << " bytes=" << payload.size();
+        }
         return;
       }
 

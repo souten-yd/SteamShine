@@ -2,10 +2,11 @@
  * Run upstream Sunshine Web UI setup, login, and PIN-page browser validation.
  */
 import { chromium, request } from '@playwright/test';
+import { execFile as execFileCallback, spawn } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { spawn } from 'node:child_process';
+import { promisify } from 'node:util';
 
 const binary = process.env.STEAMSHINE_BINARY;
 const reportDirectory = process.env.STEAMSHINE_BROWSER_REPORT_DIR;
@@ -30,9 +31,15 @@ const failedRequests = [];
 const websocketErrors = [];
 const securityResults = {};
 const responsiveViewports = [];
+const execFile = promisify(execFileCallback);
 let server;
 let browser;
 let browserVersion = '';
+
+/** Environment isolated from any tmux server hosting the developer's Web Terminal. */
+const isolatedServerEnvironment = { ...process.env };
+delete isolatedServerEnvironment.TMUX;
+delete isolatedServerEnvironment.TMUX_TMPDIR;
 
 /** Wait until the real HTTPS listener accepts a browser navigation. */
 async function waitForWelcome(page) {
@@ -91,7 +98,12 @@ try {
   ].join('\n'));
   const logHandle = await import('node:fs').then(({ createWriteStream }) => createWriteStream(logFile));
   server = spawn(binary, [configFile], {
-    env: { ...process.env, HOME: homeDirectory, XDG_RUNTIME_DIR: join(homeDirectory, 'run') },
+    env: {
+      ...isolatedServerEnvironment,
+      HOME: homeDirectory,
+      TMUX_TMPDIR: join(homeDirectory, 'run'),
+      XDG_RUNTIME_DIR: join(homeDirectory, 'run'),
+    },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   server.stdout.pipe(logHandle);
@@ -299,6 +311,9 @@ try {
   await steamshinePage.waitForFunction(() => document.querySelector('.xterm-rows')?.textContent?.includes('240'), undefined, { timeout: 5000 });
   await terminalInput.pressSequentially("printf '\\033[?1000h'", { delay: 1 });
   await terminalInput.press('Enter');
+  const terminalStatus = await steamshinePage.evaluate(async () => (await fetch('/api/steamshine/v1/terminal/status')).json());
+  const activeTerminal = terminalStatus.sessions?.find((session) => session.id === firstTerminalId);
+  if (!activeTerminal) throw new Error('Active Terminal session disappeared before the touch-scroll test.');
 
   await steamshinePage.setViewportSize({ width: 320, height: 700 });
   await steamshinePage.waitForFunction(() => {
@@ -346,13 +361,29 @@ try {
     const glided = viewport.scrollTop;
     return { before, synchronous, framed, glided };
   });
-  if (terminalTouchScroll.error
-    || terminalTouchScroll.before <= 0
+  let remoteScrollPosition = 0;
+  if (activeTerminal.persistent) {
+    const result = await execFile('tmux', ['display-message', '-p', '-t', activeTerminal.name, '#{scroll_position}'], {
+      env: { ...isolatedServerEnvironment, TMUX_TMPDIR: join(homeDirectory, 'run') },
+    });
+    remoteScrollPosition = Number.parseInt(result.stdout.trim(), 10);
+  }
+  const localScrollFailed = !activeTerminal.persistent && (
+    terminalTouchScroll.before <= 0
     || terminalTouchScroll.synchronous !== terminalTouchScroll.before
     || terminalTouchScroll.framed > terminalTouchScroll.before - 190
-    || terminalTouchScroll.glided > terminalTouchScroll.framed - 50) {
+    || terminalTouchScroll.glided > terminalTouchScroll.framed - 50
+  );
+  const remoteScrollFailed = activeTerminal.persistent && (
+    !Number.isFinite(remoteScrollPosition)
+    || remoteScrollPosition <= 0
+    || terminalTouchScroll.framed !== terminalTouchScroll.before
+  );
+  if (terminalTouchScroll.error || localScrollFailed || remoteScrollFailed) {
     throw new Error(`SteamShine Terminal touch scrolling failed: ${JSON.stringify(terminalTouchScroll)}`);
   }
+  terminalTouchScroll.backend = activeTerminal.persistent ? 'tmux' : 'xterm';
+  terminalTouchScroll.remoteScrollPosition = remoteScrollPosition;
   securityResults.terminal_multiple_sessions = true;
   securityResults.terminal_history_replay = true;
   securityResults.terminal_replay_input_isolation = true;

@@ -172,7 +172,7 @@ The original Sunshine web UI is still there, unchanged. SteamShine adds a second
 | **Display** | The virtual-display policy: mode, session source, local mirroring, and session retention. |
 | **Addon** | Decky Loader status plus official stable install, update/repair, and uninstall controls. An inactive installed Decky service is started before an owned client session launches. |
 | **Pin** / **Clients** | Four-digit pairing, and revoking clients you've paired. |
-| **Terminal** | Multiple OS-managed tmux shell sessions with tabs, reconnect history across SteamShine restarts, mouse-wheel scrollback, responsive sizing, clipboard actions, and a touch-friendly helper-key row. |
+| **Terminal** | Multiple OS-managed tmux shell sessions with tabs, reconnect history across SteamShine restarts, tmux-backed mouse/touch scrollback, responsive sizing, clipboard actions, and a touch-friendly helper-key row. Closing or reconnecting the browser only detaches the view; ending a shell requires a fresh, explicitly confirmed request. |
 
 Everything else stays in Sunshine's own configuration editor, one click away on every page — the
 panel deliberately does not mirror settings you would only change once.

@@ -4,6 +4,7 @@
  */
 #include "steamshine_terminal.h"
 
+#include "crypto.h"
 #include "logging.h"
 
 #include <algorithm>
@@ -74,12 +75,14 @@ namespace steamshine_terminal {
     struct session_t {
       std::string id;  ///< Stable API identifier.
       std::string name;  ///< User-facing name.
+      std::string explicit_end_token;  ///< Process-local nonce authorizing explicit deletion.
       std::uint64_t created_at;  ///< Unix creation time in seconds.
       bool persistent {false};  ///< Whether tmux owns the shell outside this process.
       std::string tmux_name;  ///< OS-managed tmux name when persistent.
       std::mutex pty_mutex;  ///< Protects the current attachment PTY and child state.
       int master_fd {-1};  ///< Master side of the current pseudo terminal.
       bool stopping {false};  ///< Whether explicit deletion or service shutdown has begun.
+      bool copy_mode_active {false};  ///< Whether Web touch scrolling placed tmux in copy mode.
 #if defined(__linux__)
       pid_t pid {-1};  ///< Fallback shell or tmux attachment process identifier.
 #endif
@@ -301,6 +304,7 @@ namespace steamshine_terminal {
           auto session {std::make_shared<session_t>()};
           session->id = id;
           session->name = name;
+          session->explicit_end_token = crypto::rand_alphabet(32);
           session->created_at = created_at;
           session->persistent = true;
           session->tmux_name = name;
@@ -473,6 +477,7 @@ namespace steamshine_terminal {
     auto session {std::make_shared<session_t>()};
     session->id = std::format("{}-{}", created_at, numeric_id);
     session->name = std::format("Shell {}", numeric_id);
+    session->explicit_end_token = crypto::rand_alphabet(32);
     session->created_at = created_at;
 
     if (tmux_available()) {
@@ -534,9 +539,9 @@ namespace steamshine_terminal {
       std::lock_guard lock {session->pty_mutex};
 #if defined(__linux__)
       const bool is_running {session->persistent ? tmux_session_running(session->tmux_name) : session->pid > 0 && !session->stopping};
-      result.push_back({session->id, session->name, session->created_at, is_running, session->persistent});
+      result.push_back({session->id, session->name, session->explicit_end_token, session->created_at, is_running, session->persistent});
 #else
-      result.push_back({session->id, session->name, session->created_at, false, false});
+      result.push_back({session->id, session->name, session->explicit_end_token, session->created_at, false, false});
 #endif
     }
     std::ranges::sort(result, [](const auto &left, const auto &right) {
@@ -545,7 +550,7 @@ namespace steamshine_terminal {
     return result;
   }
 
-  bool stop(const std::string_view session_id) {
+  bool stop(const std::string_view session_id, const std::string_view explicit_end_token) {
 #if defined(__linux__)
     synchronize_tmux_sessions();
 #endif
@@ -553,7 +558,7 @@ namespace steamshine_terminal {
     {
       std::lock_guard lock {sessions_mutex};
       const auto found {sessions.find(std::string {session_id})};
-      if (found == sessions.end()) {
+      if (found == sessions.end() || explicit_end_token.empty() || found->second->explicit_end_token != explicit_end_token) {
         return false;
       }
       session = found->second;
@@ -646,6 +651,10 @@ namespace steamshine_terminal {
     if (session->master_fd < 0 || session->stopping) {
       return false;
     }
+    if (session->persistent && session->copy_mode_active) {
+      (void) run_command({"tmux", "send-keys", "-t", session->tmux_name, "-X", "cancel"});
+      session->copy_mode_active = false;
+    }
     std::size_t offset {};
     while (offset < data.size()) {
       const auto written {::write(session->master_fd, data.data() + offset, data.size() - offset)};
@@ -661,6 +670,41 @@ namespace steamshine_terminal {
 #else
     (void) session_id;
     (void) data;
+    return false;
+#endif
+  }
+
+  bool scroll(const std::string_view session_id, const int lines) {
+#if defined(__linux__)
+    if (lines == 0) {
+      return false;
+    }
+    const auto session {find_session(session_id)};
+    if (!session) {
+      return false;
+    }
+    std::lock_guard lock {session->pty_mutex};
+    if (!session->persistent || session->master_fd < 0 || session->stopping) {
+      return false;
+    }
+
+    const auto repeat_count {std::to_string(std::clamp(std::abs(lines), 1, 200))};
+    const std::string command {lines < 0 ? "scroll-up" : "scroll-down"};
+    if (!session->copy_mode_active) {
+      if (lines > 0 || run_command({"tmux", "copy-mode", "-t", session->tmux_name}).exit_code != 0) {
+        return false;
+      }
+      session->copy_mode_active = true;
+    }
+    const auto result {run_command({"tmux", "send-keys", "-t", session->tmux_name, "-X", "-N", repeat_count, command})};
+    if (result.exit_code != 0) {
+      session->copy_mode_active = false;
+      return false;
+    }
+    return true;
+#else
+    (void) session_id;
+    (void) lines;
     return false;
 #endif
   }

@@ -2511,6 +2511,7 @@ namespace confighttp {
       sessions.push_back({
         {"id", session.id},
         {"name", session.name},
+        {"explicit_end_token", session.explicit_end_token},
         {"created_at", session.created_at},
         {"running", session.running},
         {"persistent", session.persistent},
@@ -2552,10 +2553,17 @@ namespace confighttp {
       return;
     }
     const auto session_id {input.value("session_id", "")};
-    if (session_id.empty() || !steamshine_terminal::stop(session_id)) {
-      not_found(response, request, "Terminal session was not found");
+    const auto explicit_end_token {input.value("explicit_end_token", "")};
+    const auto explicit_intent {input.value("intent", "")};
+    const auto address {net::addr_to_normalized_string(request->remote_endpoint().address())};
+    if (session_id.empty() || explicit_intent != "explicit_user_end" || !steamshine_terminal::stop(session_id, explicit_end_token)) {
+      BOOST_LOG(info) << "TERMINAL_SESSION_END_REJECTED id=" << session_id
+                      << " source=web address=" << address << " reason=stale_or_missing_confirmation";
+      bad_request(response, request, "Refresh the Terminal page and confirm End again");
       return;
     }
+    BOOST_LOG(info) << "TERMINAL_SESSION_EXPLICIT_END id=" << session_id
+                    << " source=web address=" << address;
     send_steamshine_response(response, {{"status", true}});
   }
 
@@ -3272,6 +3280,11 @@ namespace confighttp {
         const auto type {payload.value("type", "")};
         if (type == "input") {
           steamshine_terminal::write_input(terminal_session_id, payload.value("data", ""));
+        } else if (type == "scroll") {
+          const auto lines {std::clamp(payload.value("lines", 0), -200, 200)};
+          if (lines != 0) {
+            steamshine_terminal::scroll(terminal_session_id, lines);
+          }
         } else if (type == "resize") {
           steamshine_terminal::resize(
             terminal_session_id,

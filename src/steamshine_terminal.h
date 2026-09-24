@@ -51,6 +51,7 @@ namespace steamshine_terminal {
   struct session_snapshot_t {
     std::string id;  ///< Stable identifier used by the HTTP and WebSocket APIs.
     std::string name;  ///< Short user-facing session name.
+    std::string explicit_end_token;  ///< Process-local nonce required to explicitly terminate this session.
     std::uint64_t created_at;  ///< Unix creation time in seconds.
     bool running;  ///< Whether the login shell is still alive.
     bool persistent;  ///< Whether the shell survives a SteamShine restart.
@@ -76,10 +77,15 @@ namespace steamshine_terminal {
   /**
    * @brief Terminate and remove one session.
    *
+   * Browser disconnects and stale pages cannot invoke this operation without
+   * the current process-local confirmation token returned by list().
+   *
    * @param session_id Session to terminate.
-   * @return True when the session existed and was removed.
+   * @param explicit_end_token Confirmation nonce returned by list().
+   * @return True when the session and confirmation token matched and the
+   * session was removed.
    */
-  bool stop(std::string_view session_id);
+  bool stop(std::string_view session_id, std::string_view explicit_end_token);
 
   /**
    * @brief Terminate and remove every session.
@@ -110,6 +116,19 @@ namespace steamshine_terminal {
    * @return True when all bytes were written to a running PTY.
    */
   bool write_input(std::string_view session_id, std::string_view data);
+
+  /**
+   * @brief Scroll one persistent tmux session's retained history.
+   *
+   * Negative lines move toward older output and positive lines move toward
+   * the live bottom. In-process fallback PTYs do not expose a remote history
+   * mode and therefore reject this operation.
+   *
+   * @param session_id Destination session.
+   * @param lines Signed number of history lines to move.
+   * @return True when tmux accepted the scroll operation.
+   */
+  bool scroll(std::string_view session_id, int lines);
 
   /**
    * @brief Resize one PTY window.
