@@ -15,9 +15,9 @@
 #include <future>
 #include <limits>
 #include <numeric>
+#include <optional>
 #include <queue>
 #include <span>
-#include <optional>
 #include <utility>
 
 // lib includes

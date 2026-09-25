@@ -25,6 +25,7 @@
 #if defined(__linux__) || defined(__FreeBSD__)
   #include "linux/input/input_key_mapping.h"
   #include "linux/input/input_seat.h"
+
   #include <linux/input-event-codes.h>
 #endif
 
@@ -526,7 +527,7 @@ namespace platf::virtualhid {
     if (capabilities.supports_touchscreen) {
       lvh::CreateTouchscreenOptions options;
       options.profile = lvh::profiles::touchscreen();
-    scope_device_to_seat(options.profile);
+      scope_device_to_seat(options.profile);
       options.stable_id = "sunshine-touchscreen";
       auto created = global->runtime->create_touchscreen(options);
       if (created) {
@@ -538,7 +539,7 @@ namespace platf::virtualhid {
     if (capabilities.supports_pen_tablet) {
       lvh::CreatePenTabletOptions options;
       options.profile = lvh::profiles::pen_tablet();
-    scope_device_to_seat(options.profile);
+      scope_device_to_seat(options.profile);
       options.stable_id = "sunshine-pen-tablet";
       auto created = global->runtime->create_pen_tablet(options);
       if (created) {
@@ -552,7 +553,7 @@ namespace platf::virtualhid {
   client_context_t::~client_context_t() {
 #if defined(__linux__) || defined(__FreeBSD__)
     if (global && gamescope_pointer_state.reset()) {
-      global->gamescope_eis.button(BTN_LEFT, false);
+      global->gamescope_eis->button(BTN_LEFT, false);
     }
 #endif
   }
@@ -831,7 +832,7 @@ namespace platf::virtualhid {
 
   void move_mouse(input_context_t &context, int delta_x, int delta_y) {
 #if defined(__linux__) || defined(__FreeBSD__)
-    if (!gamescope_input_uses_desktop_device(context.gamescope_eis.move(delta_x, delta_y))) {
+    if (!gamescope_input_uses_desktop_device(context.gamescope_eis->move(delta_x, delta_y))) {
       return;
     }
     if (!context.desktop_mouse_initialized) {
@@ -845,7 +846,7 @@ namespace platf::virtualhid {
 
   void abs_mouse(input_context_t &context, const touch_port_t &touch_port, float x, float y) {
 #if defined(__linux__) || defined(__FreeBSD__)
-    if (!gamescope_input_uses_desktop_device(context.gamescope_eis.move_absolute(x, y))) {
+    if (!gamescope_input_uses_desktop_device(context.gamescope_eis->move_absolute(x, y))) {
       return;
     }
     if (!context.desktop_mouse_initialized) {
@@ -871,7 +872,7 @@ namespace platf::virtualhid {
     if (button < BUTTON_LEFT || button > BUTTON_X2) {
       return;
     }
-    if (!gamescope_input_uses_desktop_device(context.gamescope_eis.button(buttons[button - BUTTON_LEFT], !release))) {
+    if (!gamescope_input_uses_desktop_device(context.gamescope_eis->button(buttons[button - BUTTON_LEFT], !release))) {
       return;
     }
     if (!context.desktop_mouse_initialized) {
@@ -890,7 +891,7 @@ namespace platf::virtualhid {
 
   void scroll(input_context_t &context, int high_res_distance) {
 #if defined(__linux__) || defined(__FreeBSD__)
-    if (!gamescope_input_uses_desktop_device(context.gamescope_eis.scroll(0, high_res_distance))) {
+    if (!gamescope_input_uses_desktop_device(context.gamescope_eis->scroll(0, high_res_distance))) {
       return;
     }
     if (!context.desktop_mouse_initialized) {
@@ -904,7 +905,7 @@ namespace platf::virtualhid {
 
   void hscroll(input_context_t &context, int high_res_distance) {
 #if defined(__linux__) || defined(__FreeBSD__)
-    if (!gamescope_input_uses_desktop_device(context.gamescope_eis.scroll(high_res_distance, 0))) {
+    if (!gamescope_input_uses_desktop_device(context.gamescope_eis->scroll(high_res_distance, 0))) {
       return;
     }
     if (!context.desktop_mouse_initialized) {
@@ -919,10 +920,10 @@ namespace platf::virtualhid {
   void keyboard_update(input_context_t &context, std::uint16_t modcode, bool release, std::uint8_t flags) {
 #if defined(__linux__) || defined(__FreeBSD__)
     if (const auto keycode = keyboard::linux_keycode(modcode)) {
-      if (context.gamescope_eis.key(*keycode, !release) != gamescope_input_result_e::desktop) {
+      if (context.gamescope_eis->key(*keycode, !release) != gamescope_input_result_e::desktop) {
         return;
       }
-    } else if (context.gamescope_eis.refresh() != gamescope_input_result_e::desktop) {
+    } else if (context.gamescope_eis->refresh() != gamescope_input_result_e::desktop) {
       return;
     }
 #endif
@@ -933,7 +934,7 @@ namespace platf::virtualhid {
 
   void unicode(input_context_t &context, const char *utf8, int size) {
 #if defined(__linux__) || defined(__FreeBSD__)
-    if (context.gamescope_eis.refresh() != gamescope_input_result_e::desktop) {
+    if (context.gamescope_eis->refresh() != gamescope_input_result_e::desktop) {
       BOOST_LOG(warning) << "Gamescope EIS text input is unavailable; physical desktop fallback is blocked";
       return;
     }
@@ -945,7 +946,7 @@ namespace platf::virtualhid {
 
   void touch_update(client_context_t &context, const touch_port_t &touch_port, const touch_input_t &touch) {
 #if defined(__linux__) || defined(__FreeBSD__)
-    const auto route {context.global->gamescope_eis.refresh()};
+    const auto route {context.global->gamescope_eis->refresh()};
     if (route != gamescope_input_result_e::desktop) {
       if (route == gamescope_input_result_e::blocked) {
         context.gamescope_pointer_state.reset();
@@ -955,10 +956,10 @@ namespace platf::virtualhid {
           case LI_TOUCH_EVENT_HOVER:
           case LI_TOUCH_EVENT_DOWN:
           case LI_TOUCH_EVENT_MOVE:
-            context.global->gamescope_eis.move_absolute(touch.x, touch.y);
+            context.global->gamescope_eis->move_absolute(touch.x, touch.y);
             if (touch.eventType == LI_TOUCH_EVENT_DOWN) {
               if (const auto transition {context.gamescope_pointer_state.update(gamescope_pointer_source_e::touch, true)}) {
-                context.global->gamescope_eis.button(BTN_LEFT, *transition);
+                context.global->gamescope_eis->button(BTN_LEFT, *transition);
               }
             }
             break;
@@ -967,7 +968,7 @@ namespace platf::virtualhid {
           case LI_TOUCH_EVENT_UP:
           case LI_TOUCH_EVENT_HOVER_LEAVE:
             if (const auto transition {context.gamescope_pointer_state.update(gamescope_pointer_source_e::touch, false)}) {
-              context.global->gamescope_eis.button(BTN_LEFT, *transition);
+              context.global->gamescope_eis->button(BTN_LEFT, *transition);
             }
             break;
         }
@@ -1020,16 +1021,16 @@ namespace platf::virtualhid {
 
   void pen_update(client_context_t &context, const touch_port_t &touch_port, const pen_input_t &pen) {
 #if defined(__linux__) || defined(__FreeBSD__)
-    const auto route {context.global->gamescope_eis.refresh()};
+    const auto route {context.global->gamescope_eis->refresh()};
     if (route != gamescope_input_result_e::desktop) {
       if (route == gamescope_input_result_e::blocked) {
         context.gamescope_pointer_state.reset();
       }
       if (route == gamescope_input_result_e::delivered) {
-        context.global->gamescope_eis.move_absolute(pen.x, pen.y);
+        context.global->gamescope_eis->move_absolute(pen.x, pen.y);
         const bool touching {pen.eventType == LI_TOUCH_EVENT_DOWN || pen.eventType == LI_TOUCH_EVENT_MOVE};
         if (const auto transition {context.gamescope_pointer_state.update(gamescope_pointer_source_e::pen, touching)}) {
-          context.global->gamescope_eis.button(BTN_LEFT, *transition);
+          context.global->gamescope_eis->button(BTN_LEFT, *transition);
         }
       }
       return;

@@ -16,12 +16,12 @@ extern "C" {
 #include <cmath>
 #include <condition_variable>
 #include <cstdlib>
-#include <iterator>
-#include <list>
-#include <mutex>
 #include <cstring>
 #include <functional>
+#include <iterator>
+#include <list>
 #include <memory>
+#include <mutex>
 #include <span>
 #include <string>
 #include <string_view>
@@ -37,8 +37,8 @@ extern "C" {
 #include "input.h"
 #include "logging.h"
 #include "platform/common.h"
-#include "steamos_virtual_session_core.h"
 #include "platform/virtualhid_input.h"
+#include "steamos_virtual_session_core.h"
 #include "thread_pool.h"
 #include "utility.h"
 

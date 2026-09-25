@@ -356,7 +356,7 @@ namespace pipewire {
         {
           static_cast<int32_t>(stream_data.format.info.raw.max_framerate.num),
           static_cast<int32_t>(stream_data.format.info.raw.max_framerate.denom)
-      };
+        };
       int rate_comparison = av_cmp_q(negotiated_rate, requested_framerate);
       bool variable_rate = negotiated_rate.num == 0 && negotiated_rate.den == 1;
       bool pacing_required = variable_rate || rate_comparison > 0;
@@ -1095,8 +1095,8 @@ namespace pipewire {
       delay = ::video::capture_frame_interval(config);
       const auto kwin_version = get_running_kwin_version();
       const bool variable_desktop_rate = !source_controls_pacing() &&
-                                        (kwin_version.size() < 3 || kwin_version[0] == 5 ||
-                                         (kwin_version[0] == 6 && (kwin_version[1] < 7 || (kwin_version[1] == 7 && kwin_version[2] < 80))));
+                                         (kwin_version.size() < 3 || kwin_version[0] == 5 ||
+                                          (kwin_version[0] == 6 && (kwin_version[1] < 7 || (kwin_version[1] == 7 && kwin_version[2] < 80))));
       const AVRational fps = variable_desktop_rate ? AVRational {0, 1} : ::video::framerate_to_rational(config);
       framerate_numerator = fps.num;
       framerate_denominator = fps.den;

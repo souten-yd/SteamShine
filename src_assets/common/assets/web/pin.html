@@ -104,7 +104,7 @@
        */
       async loadPendingPairings() {
         try {
-          const response = await apiFetch('./api/pin', {method: 'GET'});
+          const response = await apiFetch('/api/pin', {method: 'GET'});
           if (!response.ok) {
             throw new Error(`HTTP ${response.status}`);
           }
@@ -135,7 +135,7 @@
           pin: this.pin,
           name: this.name,
         });
-        const response = await apiFetch('./api/pin', {
+        const response = await apiFetch('/api/pin', {
           method: "POST",
           headers: {
             'Content-Type': 'application/json'
@@ -161,7 +161,7 @@
           return;
         }
 
-        const response = await apiFetch('./api/pin', {
+        const response = await apiFetch('/api/pin', {
           method: 'DELETE',
           headers: {
             'Content-Type': 'application/json',

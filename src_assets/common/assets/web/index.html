@@ -200,14 +200,14 @@
         // The Virtual HID Driver also backs relative mouse input when controllers are disabled.
         if (this.platform === 'windows') {
           try {
-            const virtualInputStatus = await fetch("./api/virtual-input/status").then((r) => r.json());
+            const virtualInputStatus = await fetch("/api/virtual-input/status").then((r) => r.json());
             this.virtualhid = virtualInputStatus.virtualhid;
             this.vigembus = virtualInputStatus.vigembus;
           } catch (e) {
             console.error("Failed to fetch virtual input driver status:", e);
           }
           try {
-            this.virtualhidLicense = await fetch("./api/virtual-input/license").then((r) => r.json());
+            this.virtualhidLicense = await fetch("/api/virtual-input/license").then((r) => r.json());
           } catch (e) {
             console.error("Failed to fetch Virtual HID Driver license status:", e);
           }

@@ -28,7 +28,18 @@ input, capture/encoding, shared input/video interfaces, Web UI, and packaging.
 7. Push validation results to the draft pull request, then merge after required
    validation passes.
 
+## Integration decisions
+
+- Upstream libvirtualhid replaces inputtino. The verified Gamescope EIS route, fail-closed input behavior, combined touch/pen state, lazy desktop mouse creation, seat naming, and route diagnostics are retained.
+- Pending pairing IDs are required in both management interfaces. Requests are listed behind the existing authentication boundary; PINs are applied to the selected request only.
+- Bounded coalescing input and blocking video queues remain available alongside the upstream nonblocking rejection policy. Retained input queues resume on client reconnect.
+- Gamescope capture retains producer-driven pacing and buffer leases. Desktop PipeWire receives the upstream KWin pacing policy and memory-buffer fixes. Vulkan Wayland capture retains the DMA-BUF route.
+- Steam launch commands enable Gamescope's Steam focus/overlay integration. Ordinary applications retain normal window focus. The mode is included in retained-session compatibility and preserves the HDR flag.
+- The pinned SteamOS image and prepared FFmpeg remain unchanged; the upstream Vulkan queue API is version guarded. Non-English locale files remain unchanged per repository policy.
+
 ## Status
 
 Initial integration assessment complete. Implementation and validation are in progress.
 No upstream update has been installed on the host.
+
+Focused compilation of input, virtual HID, PipeWire, video, and configuration HTTP completed. The standalone SteamOS core suite passed 53 tests, including Steam overlay mode selection and retained-session compatibility. Full regression, packaged ABI, and hardware checks remain in progress.

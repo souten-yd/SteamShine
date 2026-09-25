@@ -30,6 +30,7 @@ TEST(RtspShutdownTests, ClassifiesOnlyOperationCancellationAsExpected) {
   EXPECT_TRUE(rtsp_stream::accept_error_is_shutdown(boost::asio::error::operation_aborted));
   EXPECT_FALSE(rtsp_stream::accept_error_is_shutdown(boost::asio::error::connection_reset));
 }
+
 // local includes
 #include <src/network.h>
 

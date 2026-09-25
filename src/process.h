@@ -96,6 +96,13 @@ namespace proc {
   bool should_prefer_owned_virtual_display(const struct ctx_t &application);
 
   /**
+   * @brief Detect a configured Steam launch that needs Gamescope Steam UI integration.
+   * @param application Application commands to inspect before creating the compositor.
+   * @return True when a main, detached, or preparation command launches Steam.
+   */
+  bool requires_steam_ui(const ctx_t &application);
+
+  /**
    * @brief Decide whether an application represents the capture-only Desktop.
    *
    * @param application Parsed application configuration.

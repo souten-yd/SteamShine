@@ -601,6 +601,7 @@ namespace steamos_virtual_session {
     owned_backend_e backend {owned_backend_e::headless};  ///< Owned compositor backend.
     std::uint64_t host_endpoint_generation {0};  ///< Outer KWin endpoint generation, or zero for headless.
     bool local_presentation_required {false};  ///< Whether the request requires local presentation.
+    bool steam_ui {false};  ///< Steam-specific app-ID and overlay focus policy.
   };
 
   /**
@@ -659,8 +660,8 @@ namespace steamos_virtual_session {
    *
    * The result never uses an option absent from @p help_text. This keeps the
    * virtual-display provider compatible with the Gamescope version installed on
-   * the SteamOS host. Owned sessions intentionally omit `--steam` so ordinary
-   * applications without a Steam AppID remain eligible for focus and capture.
+   * the SteamOS host. Steam launches enable `--steam` so focus IDs reach the
+   * Steam overlay. Other applications retain ordinary window focus.
    *
    * @param help_text Output captured from `gamescope --help`.
    * Modern headless Gamescope receives both nested game dimensions and output
@@ -674,7 +675,8 @@ namespace steamos_virtual_session {
    * @param gpu_device PCI vendor/device identifier accepted by Gamescope, if selected.
    * @param error Receives a reason when the advertised option set is insufficient.
    * @param backend Owned compositor backend to construct.
+   * @param steam_ui Whether Steam app-ID focus and overlay integration are required.
    * @return Arguments after the executable, or an empty vector on failure.
    */
-  std::vector<std::string> gamescope_arguments(const std::string &help_text, int width, int height, int fps, bool enable_hdr, const std::string &gpu_device, std::string &error, owned_backend_e backend = owned_backend_e::headless);
+  std::vector<std::string> gamescope_arguments(const std::string &help_text, int width, int height, int fps, bool enable_hdr, const std::string &gpu_device, std::string &error, owned_backend_e backend = owned_backend_e::headless, bool steam_ui = false);
 }  // namespace steamos_virtual_session

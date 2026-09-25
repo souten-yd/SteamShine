@@ -62,6 +62,7 @@ namespace wl {
     }
     return fd;
   }
+
   namespace {
     const gbm_bo_accessors_t gbm_bo_accessors {
       .get_plane_count = gbm_bo_get_plane_count,

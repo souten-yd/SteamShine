@@ -22,7 +22,7 @@ namespace platf {
     if (!input) {
       return {"unavailable", "input_backend_unavailable"};
     }
-    auto &sender = virtualhid::get_input_context(input).gamescope_eis;
+    auto &sender = *virtualhid::get_input_context(input).gamescope_eis;
     switch (sender.refresh()) {
       case gamescope_input_result_e::desktop:
         return {"desktop", ""};

@@ -31,6 +31,11 @@ namespace wl {
     }
 #endif
 
+#ifdef SUNSHINE_BUILD_VULKAN
+    if (hwdevice_type == platf::mem_type_e::vulkan) {
+      return true;
+    }
+#endif
     return false;
   }
 

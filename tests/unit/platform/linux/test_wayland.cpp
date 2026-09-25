@@ -104,6 +104,15 @@ TEST(WaylandCaptureTest, UsesVramForCudaOnlyWhenCudaSupportIsBuilt) {
   #endif
 }
 
+/** @brief Preserve DMA-BUF capture for the SteamOS Vulkan encoder. */
+TEST(WaylandCaptureTest, UsesVramForVulkanWhenBuilt) {
+  #ifdef SUNSHINE_BUILD_VULKAN
+  EXPECT_TRUE(wl::use_vram_capture(platf::mem_type_e::vulkan));
+  #else
+  EXPECT_FALSE(wl::use_vram_capture(platf::mem_type_e::vulkan));
+  #endif
+}
+
 TEST(WaylandInterfaceTest, RecordsOnlyExplicitDmabufModifiers) {
   constexpr std::uint32_t format = DRM_FORMAT_XRGB8888;
   constexpr std::uint64_t explicit_modifier = 0x100000000000004;

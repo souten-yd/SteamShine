@@ -845,7 +845,7 @@
         },
         resetPortalToken() {
           this.portalResetPressed = true;
-          apiFetch("./api/reset-portal-token", {
+          apiFetch("/api/reset-portal-token", {
             method: "POST",
             headers: {
               "Content-Type": "application/json"
@@ -855,7 +855,7 @@
             .then((r) => {
               this.portalResetStatus = r.status;
               if (r.status) {
-                apiFetch("./api/restart", {
+                apiFetch("/api/restart", {
                   method: "POST",
                   headers: {
                     "Content-Type": "application/json"

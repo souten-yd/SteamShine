@@ -52,7 +52,7 @@ namespace platf::virtualhid {
     void refresh_mouse();
 
 #if defined(__linux__) || defined(__FreeBSD__)
-    gamescope_eis_input_t gamescope_eis;  ///< Sender isolated to the selected Gamescope session.
+    std::unique_ptr<gamescope_eis_input_t> gamescope_eis {std::make_unique<gamescope_eis_input_t>()};  ///< Sender isolated to the selected Gamescope session.
     bool desktop_mouse_initialized {false};  ///< Whether desktop-only mouse creation was attempted.
 #endif
     std::unique_ptr<lvh::Runtime> runtime;  ///< libvirtualhid runtime.

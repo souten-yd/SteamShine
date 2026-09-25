@@ -433,7 +433,7 @@ namespace safe {
      * @param max_elements Maximum number of queued elements.
      * @param overflow Capacity behavior used when the queue is full.
      */
-    queue_t(std::uint32_t max_elements = 32, const queue_overflow_e overflow = queue_overflow_e::clear_pending):
+    explicit queue_t(std::uint32_t max_elements = 32, const queue_overflow_e overflow = queue_overflow_e::clear_pending):
         _max_elements {std::max(max_elements, 1U)},
         _overflow {overflow} {
     }

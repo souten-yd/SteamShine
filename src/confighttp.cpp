@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cctype>
+#include <charconv>
 #include <chrono>
 #include <cstdint>
 #include <deque>
@@ -18,12 +19,11 @@
 #include <fstream>
 #include <map>
 #include <mutex>
+#include <new>
+#include <optional>
 #include <string_view>
 #include <thread>
 #include <unordered_map>
-#include <charconv>
-#include <new>
-#include <optional>
 #include <utility>
 #include <vector>
 
@@ -2123,7 +2123,14 @@ namespace confighttp {
     try {
       nlohmann::json output_tree;
       nlohmann::json input_tree = nlohmann::json::parse(ss);
-      const auto result = pairing_service.submit_pin(input_tree.value("pairing_id", ""), input_tree.value("pin", ""), input_tree.value("name", ""));
+      const std::string pairing_id = input_tree.value("pairing_id", "");
+      const std::string pin = input_tree.value("pin", "");
+      const std::string name = input_tree.value("name", "");
+      if (!nvhttp::is_valid_pairing_id(pairing_id) || !nvhttp::is_valid_pairing_pin(pin) || !nvhttp::is_valid_pairing_name(name)) {
+        bad_request(response, request, "A pending pairing ID, four-digit PIN, and valid client name are required");
+        return;
+      }
+      const auto result = pairing_service.submit_pin(pairing_id, pin, name);
       output_tree["status"] = result.success;
       output_tree["code"] = result.code;
       if (!result.success) {

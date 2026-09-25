@@ -495,6 +495,11 @@ namespace nvhttp {
     }
     launch_session->unique_id = (get_arg(args, "uniqueid", "unknown"));
     launch_session->appid = (int) util::from_view(get_arg(args, "appid", "unknown"));
+    const auto application = std::ranges::find_if(proc::proc.get_apps(), [&](const proc::ctx_t &app) {
+      return app.id == std::to_string(launch_session->appid);
+    });
+    launch_session->steam_ui = application != proc::proc.get_apps().end() && proc::requires_steam_ui(*application);
+
     launch_session->enable_sops = util::from_view(get_arg(args, "sops", "0"));
     launch_session->surround_info = (int) util::from_view(get_arg(args, "surroundAudioInfo", "196610"));
     launch_session->surround_params = (get_arg(args, "surroundParams", ""));

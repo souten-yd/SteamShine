@@ -92,6 +92,18 @@ namespace proc {
     return true;
   }
 
+  bool requires_steam_ui(const ctx_t &application) {
+    if (steam_session::command_references_steam(application.cmd)) {
+      return true;
+    }
+    if (std::ranges::any_of(application.detached, steam_session::command_references_steam)) {
+      return true;
+    }
+    return std::ranges::any_of(application.prep_cmds, [](const cmd_t &command) {
+      return steam_session::command_references_steam(command.do_cmd);
+    });
+  }
+
   bool should_prefer_physical_desktop(const ctx_t &application) {
     return application.cmd.empty() && application.detached.empty();
   }
