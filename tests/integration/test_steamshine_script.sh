@@ -11,6 +11,21 @@ trap 'rm -rf -- "${test_root}" "${fake_dri}"' EXIT
 source "${root_dir}/tests/fixtures/steamos/fixture.sh"
 steamos_fixture_init "${test_root}/fixture"
 
+# The privileged helper must install every upstream virtual-device permission.
+# Compare actual generated rules with the backend's canonical rules, including
+# property import ordering; legacy names remain available for rollback.
+bash "${root_dir}/scripts/steamshine-decky-helper.sh" print-input-rules >"${test_root}/input.rules"
+python3 - "${root_dir}/src_assets/linux/misc/60-sunshine.rules" "${test_root}/input.rules" <<'PYRULES'
+from pathlib import Path
+import sys
+
+active = lambda path: [line.strip() for line in Path(path).read_text().splitlines() if line.strip() and not line.lstrip().startswith('#')]
+upstream, installed = map(active, sys.argv[1:])
+assert installed[:len(upstream)] == upstream, 'Installed input rules diverge from the current virtual HID backend'
+assert any('Sunshine X-Box One (virtual)' in line for line in installed), 'Rollback controller permissions were removed'
+assert any('Sunshine PS5 (virtual)' in line for line in installed), 'Rollback HID permissions were removed'
+PYRULES
+
 # Every deployable SteamOS workflow job must use the immutable image recorded
 # in the repository lock rather than an independently updated digest.
 locked_image="$(sed -n 's/^image=//p' "${root_dir}/ci/steamos/image.lock")"

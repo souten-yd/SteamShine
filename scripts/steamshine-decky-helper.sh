@@ -8,9 +8,43 @@ readonly caller="${SUDO_USER:-}"
 readonly install_url="https://github.com/SteamDeckHomebrew/decky-installer/releases/latest/download/install_release.sh"
 readonly uninstall_url="https://github.com/SteamDeckHomebrew/decky-installer/releases/latest/download/uninstall.sh"
 
+## @brief Print immutable input permissions for installation and validation.
+## @return Zero after writing the libvirtualhid and rollback-compatible rules.
+print_input_rules() {
+  cat <<'STEAMSHINE_INPUT_RULES'
+# Allows Sunshine to access /dev/uinput
+KERNEL=="uinput", SUBSYSTEM=="misc", OPTIONS+="static_node=uinput", GROUP="input", MODE="0660", TAG+="uaccess"
+
+# Allows Sunshine to access /dev/uhid
+KERNEL=="uhid", GROUP="input", MODE="0660", TAG+="uaccess"
+
+# Joypads
+# HID physical and unique identifiers are uevent properties on the hidraw
+# node's HID parent, rather than sysfs attributes exposed to ATTRS matching.
+SUBSYSTEM=="hidraw", KERNEL=="hidraw*", IMPORT{parent}="HID_*"
+SUBSYSTEM=="hidraw", KERNEL=="hidraw*", ENV{HID_PHYS}=="libvirtualhid/uhid/*", GROUP="input", MODE="0660", TAG+="uaccess"
+SUBSYSTEM=="input", KERNEL=="event*", ATTRS{phys}=="libvirtualhid/uhid/*", GROUP="input", MODE="0660", TAG+="uaccess"
+SUBSYSTEM=="hidraw", KERNEL=="hidraw*", ENV{HID_NAME}=="Sunshine (libvirtualhid)*", GROUP="input", MODE="0660", TAG+="uaccess"
+SUBSYSTEMS=="input", ATTRS{name}=="Sunshine (libvirtualhid)*", GROUP="input", MODE="0660", TAG+="uaccess"
+
+# Keep legacy inputtino devices accessible during rollback.
+KERNEL=="hidraw*", ATTRS{name}=="Sunshine PS5 (virtual) pad*", GROUP="input", MODE="0660", TAG+="uaccess"
+SUBSYSTEMS=="input", ATTRS{name}=="Sunshine X-Box One (virtual) pad*", GROUP="input", MODE="0660", TAG+="uaccess"
+SUBSYSTEMS=="input", ATTRS{name}=="Sunshine gamepad (virtual) motion sensors*", GROUP="input", MODE="0660", TAG+="uaccess"
+SUBSYSTEMS=="input", ATTRS{name}=="Sunshine Nintendo (virtual) pad*", GROUP="input", MODE="0660", TAG+="uaccess"
+SUBSYSTEMS=="input", ATTRS{name}=="Sunshine PS5 (virtual) pad*", GROUP="input", MODE="0660", TAG+="uaccess"
+STEAMSHINE_INPUT_RULES
+}
+
+# This read-only operation needs no privileged caller or host mutation.
+if [[ "${action}" == print-input-rules && $# -eq 1 ]]; then
+  print_input_rules
+  exit
+fi
+
 [[ "${EUID}" -eq 0 ]] || { echo 'Decky helper must run as root.' >&2; exit 77; }
 [[ -n "${caller}" && "${caller}" != root ]] || { echo 'Decky helper requires an authenticated non-root caller.' >&2; exit 77; }
-[[ $# -eq 1 ]] || { echo 'Usage: steamshine-decky-helper authorize|configure-input|install|update|uninstall|start|remove-helper' >&2; exit 64; }
+[[ $# -eq 1 ]] || { echo 'Usage: steamshine-decky-helper print-input-rules|authorize|configure-input|install|update|uninstall|start|remove-helper' >&2; exit 64; }
 
 case "${action}" in
   authorize)
@@ -20,15 +54,7 @@ case "${action}" in
     rule_file='/etc/udev/rules.d/60-steamshine.rules'
     temporary_rule="$(mktemp /etc/udev/rules.d/.60-steamshine.rules.XXXXXX)"
     trap 'rm -f -- "${temporary_rule}"' EXIT
-    {
-      printf '%s\n' 'KERNEL=="uinput", SUBSYSTEM=="misc", OPTIONS+="static_node=uinput", GROUP="input", MODE="0660", TAG+="uaccess"'
-      printf '%s\n' 'KERNEL=="uhid", SUBSYSTEM=="misc", GROUP="input", MODE="0660", TAG+="uaccess"'
-      printf '%s\n' 'KERNEL=="hidraw*", ATTRS{name}=="Sunshine PS5 (virtual) pad*", GROUP="input", MODE="0660", TAG+="uaccess"'
-      printf '%s\n' 'SUBSYSTEMS=="input", ATTRS{name}=="Sunshine X-Box One (virtual) pad*", GROUP="input", MODE="0660", TAG+="uaccess"'
-      printf '%s\n' 'SUBSYSTEMS=="input", ATTRS{name}=="Sunshine gamepad (virtual) motion sensors*", GROUP="input", MODE="0660", TAG+="uaccess"'
-      printf '%s\n' 'SUBSYSTEMS=="input", ATTRS{name}=="Sunshine Nintendo (virtual) pad*", GROUP="input", MODE="0660", TAG+="uaccess"'
-      printf '%s\n' 'SUBSYSTEMS=="input", ATTRS{name}=="Sunshine PS5 (virtual) pad*", GROUP="input", MODE="0660", TAG+="uaccess"'
-    } >"${temporary_rule}"
+    print_input_rules >"${temporary_rule}"
     chmod 0644 "${temporary_rule}"
     chown root:root "${temporary_rule}"
     mv -f -- "${temporary_rule}" "${rule_file}"

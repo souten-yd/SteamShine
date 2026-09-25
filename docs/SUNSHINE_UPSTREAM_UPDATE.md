@@ -37,9 +37,32 @@ input, capture/encoding, shared input/video interfaces, Web UI, and packaging.
 - Steam launch commands enable Gamescope's Steam focus/overlay integration. Ordinary applications retain normal window focus. The mode is included in retained-session compatibility and preserves the HDR flag.
 - The pinned SteamOS image and prepared FFmpeg remain unchanged; the upstream Vulkan queue API is version guarded. Non-English locale files remain unchanged per repository policy.
 
-## Status
+## Steam overlay behavior
 
-Initial integration assessment complete. Implementation and validation are in progress.
-No upstream update has been installed on the host.
+Owned Gamescope sessions enable `--steam` when the launch command, detached command,
+or preparation command starts Steam. Gamescope uses this mode to publish Steam app
+IDs and focused-app properties consumed by the Big Picture overlay. Ordinary programs
+keep the existing window-focus behavior. Retained sessions cannot be reused across
+these two modes. HDR and the socket-identity WSI fix are independent of this selection.
 
-Focused compilation of input, virtual HID, PipeWire, video, and configuration HTTP completed. The standalone SteamOS core suite passed 53 tests, including Steam overlay mode selection and retained-session compatibility. Full regression, packaged ABI, and hardware checks remain in progress.
+## Validation and deployment
+
+The integration passes the 53-test standalone SteamOS core suite, 56-test lifecycle
+suite, and broad headless regression (770 passed, two platform/display-dependent
+skips). Hardware audio, encoder, gamepad, and visual tray suites require a real session;
+the 60-second input producer test is run separately during focused validation.
+Installer/virtual-display fixtures and both management interfaces' real Chromium checks
+cover setup, authentication, selected pending pairing requests, terminals, and session
+invalidation. The new virtual input refresh tests preserve deferred desktop devices.
+
+Build deployable artifacts only in the image pinned by `ci/steamos/image.lock`, then
+package with `scripts/package-steamos-artifact.sh`. Validate the packaged binaries
+with host `ldd` before using the normal installer; keep its prior immutable version
+for rollback. Final CI and host HDR/overlay observations are recorded in the pull request.
+
+The privileged input helper now prints and installs the upstream libvirtualhid rules,
+including HID parent properties, while retaining legacy inputtino rules for rollback.
+Updating an existing root-owned helper uses the installer's existing sudo authorization
+path. The read-only `print-input-rules` command allows validation without root access.
+Existing SteamOS controller rules can also grant access; verify the resulting event and
+hidraw nodes during host acceptance rather than assuming a particular permission rule.
