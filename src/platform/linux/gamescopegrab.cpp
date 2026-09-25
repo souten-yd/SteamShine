@@ -79,6 +79,11 @@ namespace gamescope_pipewire {
      *
      * @return False because a live stream is only needed for real capture.
      */
+    /** @copydoc pipewire::pipewire_display_t::source_controls_pacing */
+    bool source_controls_pacing() const override {
+      return true;
+    }
+
     bool live_stream_required_for_encoder_probe() const override {
       return false;
     }

@@ -9,12 +9,12 @@
   },
   "type": "module",
   "dependencies": {
-    "@lucide/vue": "1.25.0",
+    "@lucide/vue": "1.46.0",
     "bootstrap": "5.3.8",
     "date-fns": "4.4.0",
-    "marked": "18.0.7",
-    "vue": "3.5.40",
-    "vue-i18n": "11.4.7",
+    "marked": "18.0.12",
+    "vue": "3.5.42",
+    "vue-i18n": "11.4.10",
     "vue3-simple-icons": "16.10.0"
   },
   "devDependencies": {
@@ -22,7 +22,12 @@
     "@playwright/test": "1.55.1",
     "@vitejs/plugin-vue": "6.0.8",
     "serve": "14.2.6",
-    "vite": "6.4.3",
+    "vite": "8.3.0",
     "vite-plugin-ejs": "2.0.0"
+  },
+  "overrides": {
+    "@codecov/vite-plugin": {
+      "vite": "$vite"
+    }
   }
 }

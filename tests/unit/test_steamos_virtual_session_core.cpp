@@ -1312,3 +1312,30 @@ namespace {
     EXPECT_FALSE(host_desktop_endpoint::select_unique_endpoint({partial}).has_value());
   }
 }  // namespace
+
+/** @brief Steam launches explicitly request compositor overlay focus support. */
+TEST(SteamOSVirtualSessionCore, EnablesSteamOverlayOnlyWhenRequestedAndSupported) {
+  const std::string help = "--backend headless --nested-width --nested-height --output-width --output-height --nested-refresh --expose-wayland";
+  std::string error;
+  const auto missing = steamos_virtual_session::gamescope_arguments(help, 1920, 1080, 60, false, {}, error, steamos_virtual_session::owned_backend_e::headless, true);
+  EXPECT_TRUE(missing.empty());
+  EXPECT_FALSE(error.empty());
+  error.clear();
+  const auto steam = steamos_virtual_session::gamescope_arguments(help + " --steam --hdr-enabled", 1920, 1080, 60, true, {}, error, steamos_virtual_session::owned_backend_e::headless, true);
+  EXPECT_TRUE(error.empty());
+  EXPECT_NE(std::ranges::find(steam, "--steam"), steam.end());
+  EXPECT_NE(std::ranges::find(steam, "--hdr-enabled"), steam.end());
+  const auto desktop = steamos_virtual_session::gamescope_arguments(help + " --steam", 1920, 1080, 60, false, {}, error);
+  EXPECT_EQ(std::ranges::find(desktop, "--steam"), desktop.end());
+}
+
+/** @brief Switching compositor focus policy invalidates the retained session key. */
+TEST(SteamOSVirtualSessionCore, DoesNotReuseCompositorWithDifferentSteamFocusPolicy) {
+  steamos_virtual_session::retained_session_key_t retained;
+  auto requested = retained;
+  EXPECT_TRUE(steamos_virtual_session::retained_session_compatible(retained, requested));
+  requested.steam_ui = true;
+  EXPECT_FALSE(steamos_virtual_session::retained_session_compatible(retained, requested));
+  retained.steam_ui = true;
+  EXPECT_TRUE(steamos_virtual_session::retained_session_compatible(retained, requested));
+}

@@ -121,6 +121,7 @@ namespace steamos_virtual_session {
       int capture_height {0};  ///< Active negotiated PipeWire producer height.
       content_rectangle_t content_rectangle;  ///< Visible producer content in encoded output coordinates.
       bool hdr {false};  ///< Whether the retained owned display was created for HDR.
+      bool steam_ui {false};  ///< Whether Gamescope publishes Steam focus and overlay state.
       std::string pci_bdf;  ///< PCI BDF of the AMD dGPU selected for Gamescope, capture, and encoding.
       std::string render_node;  ///< AMD dGPU render node shared by Gamescope, capture, and encoders.
       std::string game_gpu_selector;  ///< Game GPU selector used to create the retained session.
@@ -712,6 +713,7 @@ namespace steamos_virtual_session {
       manager.capture_height = 0;
       manager.content_rectangle = {};
       manager.hdr = false;
+      manager.steam_ui = false;
       manager.pci_bdf.clear();
       manager.render_node.clear();
       manager.game_gpu_selector.clear();
@@ -1765,6 +1767,7 @@ namespace steamos_virtual_session {
       .backend = manager.owned_backend,
       .host_endpoint_generation = manager.host_endpoint_generation,
       .local_presentation_required = manager.presentation == presentation_e::remote_and_local,
+      .steam_ui = manager.steam_ui,
     };
     const retained_session_key_t requested_key {
       .width = request.width,
@@ -1777,6 +1780,7 @@ namespace steamos_virtual_session {
       .backend = requested_backend.value_or(owned_backend_e::headless),
       .host_endpoint_generation = requested_host_generation,
       .local_presentation_required = local_presentation_required,
+      .steam_ui = launch_session.steam_ui,
     };
     const bool retained_owned_session {
       retained_process_candidate &&
@@ -2057,6 +2061,7 @@ namespace steamos_virtual_session {
           manager.pulse_runtime = (*pipewire_runtime / "pulse").string();
           record_geometry();
           manager.hdr = launch_session.enable_hdr;
+          manager.steam_ui = launch_session.steam_ui;
           manager.pci_bdf = gpu->pci_bdf;
           manager.render_node = gpu->render_node;
           manager.game_gpu_selector = config::steamos_virtual_display.game_gpu;
@@ -2126,13 +2131,13 @@ namespace steamos_virtual_session {
     }
     auto launch_backend {*requested_backend};
     auto launch_host_generation {requested_host_generation};
-    auto arguments {gamescope_arguments(help_text, request.width, request.height, request.fps, launch_session.enable_hdr, gpu->gamescope_device, error, launch_backend)};
+    auto arguments {gamescope_arguments(help_text, request.width, request.height, request.fps, launch_session.enable_hdr, gpu->gamescope_device, error, launch_backend, launch_session.steam_ui)};
     bool nested_backend_fallback {};
     if (arguments.empty() && launch_backend == owned_backend_e::wayland_nested && config::steamos_virtual_display.local_presentation == local_presentation_policy_e::auto_select) {
       error.clear();
       launch_backend = owned_backend_e::headless;
       launch_host_generation = 0;
-      arguments = gamescope_arguments(help_text, request.width, request.height, request.fps, launch_session.enable_hdr, gpu->gamescope_device, error, launch_backend);
+      arguments = gamescope_arguments(help_text, request.width, request.height, request.fps, launch_session.enable_hdr, gpu->gamescope_device, error, launch_backend, launch_session.steam_ui);
       nested_backend_fallback = !arguments.empty();
     }
     if (arguments.empty()) {
@@ -2175,6 +2180,7 @@ namespace steamos_virtual_session {
     manager.pulse_runtime = (*pipewire_runtime / "pulse").string();
     record_geometry();
     manager.hdr = launch_session.enable_hdr;
+    manager.steam_ui = launch_session.steam_ui;
     manager.game_gpu_selector = config::steamos_virtual_display.game_gpu;
     manager.capture_gpu_selector = config::steamos_virtual_display.capture_gpu;
     manager.encoder_gpu_selector = config::steamos_virtual_display.encoder_gpu;

@@ -623,7 +623,8 @@ namespace steamos_virtual_session {
            retained.capture_pixel_format == requested.capture_pixel_format &&
            retained.backend == requested.backend &&
            retained.host_endpoint_generation == requested.host_endpoint_generation &&
-           retained.local_presentation_required == requested.local_presentation_required;
+           retained.local_presentation_required == requested.local_presentation_required &&
+           retained.steam_ui == requested.steam_ui;
   }
 
   content_rectangle_t fit_content_rectangle(const int source_width, const int source_height, const int output_width, const int output_height, const int alignment) {
@@ -678,7 +679,7 @@ namespace steamos_virtual_session {
     };
   }
 
-  std::vector<std::string> gamescope_arguments(const std::string &help_text, const int width, const int height, const int fps, const bool enable_hdr, const std::string &gpu_device, std::string &error, const owned_backend_e backend) {
+  std::vector<std::string> gamescope_arguments(const std::string &help_text, const int width, const int height, const int fps, const bool enable_hdr, const std::string &gpu_device, std::string &error, const owned_backend_e backend, const bool steam_ui) {
     const auto has_option {[&help_text](const std::string_view option) {
       return help_text.find(option) != std::string::npos;
     }};
@@ -723,6 +724,14 @@ namespace steamos_virtual_session {
     arguments.emplace_back("--nested-refresh");
     arguments.emplace_back(std::to_string(fps));
     arguments.emplace_back("--expose-wayland");
+    if (steam_ui) {
+      if (!has_option("--steam")) {
+        error = "Installed Gamescope does not advertise Steam overlay integration";
+        return {};
+      }
+      arguments.emplace_back("--steam");
+    }
+
     if (has_option("--scaler")) {
       arguments.emplace_back("--scaler");
       arguments.emplace_back("fit");

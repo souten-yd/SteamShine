@@ -56,6 +56,7 @@ install -m 755 \
   "${root_dir}/scripts/test-steamos-web-http.sh" \
   "${stage}/scripts/"
 install -m 644 "${root_dir}/LICENSE" "${stage}/LICENSE"
+install -Dm644 "${root_dir}/third-party/libvirtualhid/LICENSES/MIT.md" "${stage}/share/licenses/libvirtualhid/MIT.md"
 install -m 644 "${root_dir}/ci/steamos/baselines/steamos-3.8.16-20260716.1.json" "${stage}/STEAMOS_BASELINE.json"
 if [[ -f /usr/share/licenses/miniupnpc/LICENSE ]]; then
   mkdir -p "${stage}/share/licenses/miniupnpc"

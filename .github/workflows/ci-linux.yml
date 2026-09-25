@@ -20,20 +20,26 @@ jobs:
     name: ${{ matrix.name }}
     env:
       APP_ID: dev.lizardbyte.app.Sunshine
+      M_ARCH: ${{ matrix.arch }}
       VERSION: ${{ inputs.release_version }}
     permissions:
       contents: read
-    runs-on: ubuntu-${{ matrix.dist }}
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - name: AppImage
+          - name: AppImage-aarch64
             EXTRA_ARGS: '--appimage-build'
-            dist: 22.04
+            arch: aarch64
+            runner: ubuntu-22.04-arm
+          - name: AppImage-x86_64
+            EXTRA_ARGS: '--appimage-build'
+            arch: x86_64
+            runner: ubuntu-22.04
     steps:
       - name: More space
-        uses: LizardByte/actions/actions/more_space@a46850981292c4bbc0c41715f286ad95adaaaf4a  # v2026.625.20301
+        uses: LizardByte/actions/actions/more_space@39c468549cfb87ccb917e5e5342e18abc926dc48  # v2026.909.30231
         with:
           analyze-space-savings: true
           clean-all: true
@@ -59,7 +65,8 @@ jobs:
             libwayland-dev \
             libx11-xcb-dev \
             libxcb-dri3-dev \
-            libxfixes-dev
+            libxfixes-dev \
+            libxtst-dev
 
       - name: Build latest libva
         env:
@@ -69,7 +76,7 @@ jobs:
           gh release download --archive=tar.gz --repo=intel/libva
           tar xzf libva-*.tar.gz && rm libva-*.tar.gz
           cd libva-*
-          ./autogen.sh --prefix=/usr --libdir=/usr/lib/x86_64-linux-gnu \
+          ./autogen.sh --prefix=/usr --libdir="/usr/lib/${M_ARCH}-linux-gnu" \
             --enable-drm \
             --enable-x11 \
             --enable-glx \
@@ -97,11 +104,16 @@ jobs:
           echo "::remove-matcher owner=gcc::"
 
       - name: Package Linux - AppImage
-        if: matrix.name == 'AppImage'
+        if: startsWith(matrix.name, 'AppImage')
         working-directory: build
         run: |
           # install sunshine to the DESTDIR
           DESTDIR=AppDir ninja install
+          test -f AppDir/usr/share/sunshine/udev/rules.d/60-sunshine.rules
+          grep -Fq 'IMPORT{parent}="HID_*"' \
+            AppDir/usr/share/sunshine/udev/rules.d/60-sunshine.rules
+          grep -Fq 'ENV{HID_PHYS}=="libvirtualhid/uhid/*"' \
+            AppDir/usr/share/sunshine/udev/rules.d/60-sunshine.rules
 
           # custom AppRun file
           cp -f ../packaging/linux/AppImage/AppRun ./AppDir/
@@ -114,17 +126,19 @@ jobs:
 
           # AppImage
           # https://docs.appimage.org/packaging-guide/index.html
-          wget -q "${LINUXDEPLOY_GH}/releases/download/continuous/linuxdeploy-x86_64.AppImage"
-          chmod +x linuxdeploy-x86_64.AppImage
+          url="${LINUXDEPLOY_GH}/releases/download/continuous/linuxdeploy-${M_ARCH}.AppImage"
+          wget --max-redirect=1 -q "$url"  # NOSONAR(githubactions:S6506): GitHub release needs one redirect.
+          chmod +x "linuxdeploy-${M_ARCH}.AppImage"
 
           # https://github.com/linuxdeploy/linuxdeploy-plugin-qt
-          wget -q "${LINUXDEPLOY_GH}-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage"
-          chmod +x linuxdeploy-plugin-qt-x86_64.AppImage
+          url="${LINUXDEPLOY_GH}-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-${M_ARCH}.AppImage"
+          wget --max-redirect=1 -q "$url"  # NOSONAR(githubactions:S6506): GitHub release needs one redirect.
+          chmod +x "linuxdeploy-plugin-qt-${M_ARCH}.AppImage"
           export QMAKE=/usr/lib/qt6/bin/qmake
           export EXTRA_QT_MODULES="svg;"
           "$QMAKE" -query QT_INSTALL_PLUGINS
 
-          ./linuxdeploy-x86_64.AppImage \
+          "./linuxdeploy-${M_ARCH}.AppImage" \
             --appdir ./AppDir \
             --plugin qt \
             --executable ./sunshine \
@@ -132,35 +146,19 @@ jobs:
             --desktop-file "./$DESKTOP_FILE" \
             --output appimage
 
+          # print original name of AppImage file
+          echo "AppImage file: $(ls Sunshine*.AppImage)"
+
           # move
-          mv Sunshine*.AppImage ../artifacts/sunshine.AppImage
+          mv Sunshine*.AppImage "../artifacts/Sunshine_${VERSION}_${M_ARCH}.AppImage"
 
           # permissions
-          chmod +x ../artifacts/sunshine.AppImage
+          chmod +x "../artifacts/Sunshine_${VERSION}_${M_ARCH}.AppImage"
 
       - name: Delete CUDA
         # free up space on the runner
         run: |
           rm -rf ./build/cuda
-
-      - name: Verify AppImage
-        if: matrix.name == 'AppImage'
-        run: |
-          wget https://github.com/TheAssassin/appimagelint/releases/download/continuous/appimagelint-x86_64.AppImage
-          chmod +x appimagelint-x86_64.AppImage
-
-          ./appimagelint-x86_64.AppImage ./artifacts/sunshine.AppImage
-
-      - name: Install test deps
-        run: |
-          sudo apt-get update -y
-          sudo apt-get install -y \
-            x11-xserver-utils \
-            xvfb
-
-          # clean apt cache
-          sudo apt-get clean
-          sudo rm -rf /var/lib/apt/lists/*
 
       - name: Setup python
         id: python
@@ -168,26 +166,61 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
+      - name: Verify AppImage
+        if: startsWith(matrix.name, 'AppImage')
+        run: |
+          # TODO: switch to upstream after
+          # https://github.com/TheAssassin/appimagelint/pull/50 and
+          # https://github.com/TheAssassin/appimagelint/pull/51
+          APPIMAGELINT_REPOSITORY="git+https://github.com/ReenigneArcher/appimagelint.git"
+          APPIMAGELINT_REF="lizardbyte"
+          python -m pip install -e "${APPIMAGELINT_REPOSITORY}@${APPIMAGELINT_REF}#egg=appimagelint"
+          appimagelint --help
+
+          appimagelint "./artifacts/Sunshine_${VERSION}_${M_ARCH}.AppImage"
+
+      - name: Install screenshot dependency
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y imagemagick
+
+          # clean apt cache
+          sudo apt-get clean
+          sudo rm -rf /var/lib/apt/lists/*
+
+      - name: Setup virtual desktop
+        uses: LizardByte/actions/actions/virtual_desktop@39c468549cfb87ccb917e5e5342e18abc926dc48  # v2026.909.30231
+
       - name: Setup uv
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4  # v10.1.0
         with:
           enable-cache: true
 
       - name: Sync Python tools
         run: |
-          uv sync --locked \
-            --python "${PYTHON_VERSION}" \
-            --no-python-downloads --no-install-project
+          uv_sync_args=(
+            --locked
+            --python "${PYTHON_VERSION}"
+            --no-python-downloads
+            --no-install-project
+          )
+          # uv.lock pins external artifacts; reviewed local build hooks are required for gcovr.
+          uv sync "${uv_sync_args[@]}"  # NOSONAR(githubactions:S8541)
 
       - name: Run tests
         id: test
         working-directory: build/tests
-        run: |
-          export DISPLAY=:1
-          Xvfb ${DISPLAY} -screen 0 1024x768x24 &
-          sleep 5  # give Xvfb time to start
+        run: ./test_sunshine --gtest_color=yes --gtest_output=xml:test_results.xml
 
-          ./test_sunshine --gtest_color=yes --gtest_output=xml:test_results.xml
+      - name: Upload system tray screenshots
+        if: >-
+          always() &&
+          (steps.test.outcome == 'success' || steps.test.outcome == 'failure')
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: sunshine-screenshots-${{ matrix.name }}
+          path: build/tests/screenshots
+          if-no-files-found: error
 
       - name: Generate gcov report
         id: test_report

@@ -1026,14 +1026,35 @@ async function renderVirtualDisplayConfig() {
 }
 
 /** @brief Render the Moonlight pairing (Pin) page. */
-function renderPairing() {
+async function renderPairing() {
   shell(`<div class="page-header"><div><h2>Pin pairing</h2><p>Enter the 4-digit PIN shown by your Moonlight client.</p></div></div>
     <form id="pairing" class="section stack" style="max-width:26rem">
+      <label>Pending request<select name="pairing_id" required><option value="">Loading requests…</option></select></label>
+      <button type="button" class="btn-sm" id="refresh-pairings">Refresh requests</button>
       <label>Client name<input name="name" maxlength="128" required></label>
       <label>Four digit PIN<input name="pin" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" minlength="4" required></label>
       <button class="btn-primary">Submit PIN</button>
       <div class="notice"></div>
     </form>`, { authenticated: true, activeId: 'pairing' });
+  /** @brief Refresh pending approvals without losing the selected request. */
+  const loadPairings = async () => {
+    const form = document.querySelector('#pairing');
+    if (!form) return;
+    try {
+      const { pairings = [] } = await json(await api('/pairing/pin'));
+      if (!form.isConnected) return;
+      const select = form.elements.pairing_id;
+      const selected = select.value;
+      select.innerHTML = '<option value="">Select a pending request</option>' + pairings.map((pairing) => `<option value="${escapeHtml(pairing.id)}">${escapeHtml(pairing.name)} — ${escapeHtml(pairing.address)}</option>`).join('');
+      select.value = pairings.some((pairing) => pairing.id === selected) ? selected : pairings.length === 1 ? pairings[0].id : '';
+      form.querySelector('.notice').textContent = pairings.length ? '' : 'Start pairing in Moonlight, then refresh requests.';
+    } catch (error) {
+      form.querySelector('.notice').textContent = error.message;
+    }
+  };
+  document.querySelector('#refresh-pairings').onclick = loadPairings;
+  await loadPairings();
+  if (!document.querySelector('#pairing')) return;
   document.querySelector('#pairing').onsubmit = async (event) => {
     event.preventDefault();
     try { const data = await json(await api('/pairing/pin', { method: 'POST', body: JSON.stringify(Object.fromEntries(new FormData(event.currentTarget))) })); event.currentTarget.querySelector('.notice').textContent = data.message; event.currentTarget.querySelector('.notice').className = 'notice ok'; }

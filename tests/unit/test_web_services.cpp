@@ -31,8 +31,8 @@ namespace {
   class FakePairingClientBackend final: public web::PairingClientBackend {
   public:
     /** @copydoc web::PairingClientBackend::submit_pin */
-    bool submit_pin(const std::string_view pin, const std::string_view client_name) override {
-      if (pin != "1234") {
+    bool submit_pin(const std::string_view pairing_id, const std::string_view pin, const std::string_view client_name) override {
+      if (pairing_id != "0123456789abcdef0123456789abcdef" || pin != "1234") {
         return false;
       }
       clients_.emplace("test-client", nlohmann::json {{"uuid", "test-client"}, {"name", client_name}});
@@ -299,10 +299,15 @@ TEST(WebServicesTest, SharesPairingAndClientState) {
   web::PairingService pairing {backend};
   web::ClientService clients {backend};
 
-  EXPECT_FALSE(pairing.submit_pin("0000", "Moonlight test").success);
+  EXPECT_EQ(pairing.submit_pin("", "1234", "Moonlight test").code, "invalid_pairing_id");
+  EXPECT_EQ(pairing.submit_pin("xyz", "1234", "Moonlight test").code, "invalid_pairing_id");
+  EXPECT_EQ(pairing.submit_pin("0123456789abcdef0123456789abcdef", "123", "Moonlight test").code, "invalid_pin");
+  EXPECT_EQ(pairing.submit_pin("0123456789abcdef0123456789abcdef", "1234", "").code, "invalid_client_name");
+  EXPECT_FALSE(pairing.submit_pin("abcdef0123456789abcdef0123456789", "1234", "Moonlight test").success);
+  EXPECT_FALSE(pairing.submit_pin("0123456789abcdef0123456789abcdef", "0000", "Moonlight test").success);
   EXPECT_TRUE(clients.list().empty());
 
-  EXPECT_TRUE(pairing.submit_pin("1234", "Moonlight test").success);
+  EXPECT_TRUE(pairing.submit_pin("0123456789abcdef0123456789abcdef", "1234", "Moonlight test").success);
   const auto paired_clients = clients.list();
   ASSERT_EQ(paired_clients.size(), 1);
   EXPECT_EQ(paired_clients.at(0).at("name"), "Moonlight test");

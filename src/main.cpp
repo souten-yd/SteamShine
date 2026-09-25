@@ -3,8 +3,10 @@
  * @brief Definitions for the main entry point for Sunshine.
  */
 // standard includes
+#include <cerrno>
 #include <codecvt>
 #include <csignal>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -16,12 +18,24 @@
   #include <unistd.h>
 #endif
 
+// platform includes
 #ifdef __APPLE__
   #include <mach-o/dyld.h>
+#endif
+#ifdef __linux__
+  #include "platform/linux/graphics.h"
+
+  #include <sys/auxv.h>
+  #if defined(SUNSHINE_BUILD_DRM)
+    #include "platform/linux/misc.h"
+  #endif
 #endif
 
 // lib includes
 #include <rs.h>
+#ifdef _WIN32
+  #include <libvirtualhid/license.hpp>
+#endif
 
 // local includes
 #include "build_info.h"
@@ -43,6 +57,11 @@
 #include "system_tray.h"
 #include "upnp.h"
 #include "video.h"
+
+#ifdef __linux__
+  #include "platform/common.h"
+  #include "platform/linux/misc.h"
+#endif
 
 using namespace std::literals;
 
@@ -238,6 +257,14 @@ void mainThreadLoop(const std::shared_ptr<safe::event_t<bool>> &shutdown_event) 
  * @return Process or platform callback exit code.
  */
 int main(int argc, char *argv[]) {
+#ifdef __linux__
+  const bool privileged_execution = getauxval(AT_SECURE) != 0 || platf::has_elevated_privileges(true);
+  if (privileged_execution && !platf::sanitize_process_environment()) {
+    std::cerr << "Failed to sanitize the environment for privileged execution: " << std::strerror(errno) << '\n';
+    return 1;
+  }
+#endif
+
   configure_relative_asset_directory();
 #ifdef __APPLE__
   // Bundle assets are referenced relative to the executable
@@ -255,6 +282,26 @@ int main(int argc, char *argv[]) {
         std::cerr << "Failed to set working directory to executable path: " << ec.message() << '\n';
       }
     }
+  }
+#endif
+#if defined(__linux__)
+  // On Linux, child threads inherit capabilities from the parent at creation time.
+  // We ensure the privileged worker starts while capabilities are still held,
+  // and then immediately strip global privileges from the main thread and future tasks.
+  // Please ensure that these calls remain ordered as early as possible in startup initialization.
+  #if defined(SUNSHINE_BUILD_DRM)
+  platf::kms::ensure_privileged_drm_worker_started();
+  #endif
+  // Check and drop capabilities but use 'false' to retain CAP_SYS_NICE for EGL high priority contexts
+  if (platf::has_elevated_privileges(false)) {
+    platf::drop_elevated_privileges(false);
+  }
+
+  // Next, initialize privileged EGL worker thread
+  egl::ensure_privileged_egl_worker_started();
+  // Finally, check and drop all capabilities via 'true', which includes CAP_SYS_NICE.
+  if (platf::has_elevated_privileges(true)) {
+    platf::drop_elevated_privileges(true);
   }
 #endif
 
@@ -324,6 +371,9 @@ int main(int argc, char *argv[]) {
   if (!steamshine_gpuctl::active_profile_name().empty()) {
     steamshine_gpuctl::reapply_active_profile();
   }
+#endif
+#ifdef _WIN32
+  config::select_all_gamepad_drivers_if_licensed(lvh::get_license_status().license.licensed());
 #endif
 
   // Adding guard here first as it also performs recovery after crash,
@@ -496,7 +546,7 @@ int main(int argc, char *argv[]) {
   reed_solomon_init();
   auto input_deinit_guard = input::init();
 
-  if (input::probe_gamepads()) {
+  if (config::input.controller && input::probe_gamepads()) {
     BOOST_LOG(warning) << "No gamepad input is available"sv;
   }
 
@@ -587,6 +637,8 @@ int main(int argc, char *argv[]) {
   if (start_system_tray) {
     BOOST_LOG(info) << "Starting system tray"sv;
 #ifdef _WIN32
+    system_tray::prepare_tray_virtualhid_license();
+    system_tray::prepare_tray_virtualhid_driver();
     // TODO: Windows has a weird bug where when running as a service and on the first Windows boot,
     // the tray icon would not appear even though Sunshine is running correctly otherwise.
     // Restarting the service would allow the icon to appear normally.

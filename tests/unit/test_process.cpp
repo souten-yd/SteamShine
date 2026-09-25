@@ -2,14 +2,14 @@
  * @file tests/unit/test_process.cpp
  * @brief Test src/process.* functions.
  */
-// test imports
+// test includes
 #include "../tests_common.h"
 
-// standard imports
+// standard includes
 #include <filesystem>
 #include <fstream>
 
-// local imports
+// local includes
 #include <src/process.h>
 
 #if defined(__linux__)
@@ -799,4 +799,23 @@ TEST_F(ProcessPNGTest, ValidateAppImagePath_OldSteamDefault) {
   // Test the special case for old steam image path
   const std::string result = proc::validate_app_image_path("./assets/steam.png");
   EXPECT_EQ(result, SUNSHINE_ASSETS_DIR "/steam.png");
+}
+
+/** @brief Steam launch commands enable overlay focus without changing ordinary applications. */
+TEST(ProcessCommandSelectionTest, SelectsSteamOverlayFromLaunchCommands) {
+  proc::ctx_t app;
+  EXPECT_FALSE(proc::requires_steam_ui(app));
+  app.cmd = "vulkaninfo";
+  EXPECT_FALSE(proc::requires_steam_ui(app));
+  app.cmd = "steam -gamepadui";
+  EXPECT_TRUE(proc::requires_steam_ui(app));
+  app.cmd = "";
+  app.detached = {"setsid steam steam://open/bigpicture"};
+  EXPECT_TRUE(proc::requires_steam_ui(app));
+  app.detached.clear();
+  app.prep_cmds.push_back({"steam steam://rungameid/3357650", "", false});
+  EXPECT_TRUE(proc::requires_steam_ui(app));
+  app.prep_cmds.clear();
+  app.prep_cmds.push_back({"true", "steam steam://close/bigpicture", false});
+  EXPECT_FALSE(proc::requires_steam_ui(app));
 }

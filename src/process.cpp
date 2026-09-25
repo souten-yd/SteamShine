@@ -25,6 +25,7 @@
 #include "config.h"
 #include "crypto.h"
 #include "display_device.h"
+#include "input.h"
 #include "logging.h"
 #include "platform/common.h"
 #include "platform/linux/steam_session.h"
@@ -89,6 +90,18 @@ namespace proc {
     // separate call path and may still attach to stock Gamescope without
     // replacing it.
     return true;
+  }
+
+  bool requires_steam_ui(const ctx_t &application) {
+    if (steam_session::command_references_steam(application.cmd)) {
+      return true;
+    }
+    if (std::ranges::any_of(application.detached, steam_session::command_references_steam)) {
+      return true;
+    }
+    return std::ranges::any_of(application.prep_cmds, [](const cmd_t &command) {
+      return steam_session::command_references_steam(command.do_cmd);
+    });
   }
 
   bool should_prefer_physical_desktop(const ctx_t &application) {
@@ -326,6 +339,7 @@ namespace proc {
     // Add Stream-specific environment variables
     _env["SUNSHINE_APP_ID"] = std::to_string(_app_id);
     _env["SUNSHINE_APP_NAME"] = _app.name;
+    _env["SUNSHINE_CLIENT_NAME"] = launch_session->client_name;
     _env["SUNSHINE_CLIENT_WIDTH"] = std::to_string(launch_session->width);
     _env["SUNSHINE_CLIENT_HEIGHT"] = std::to_string(launch_session->height);
     _env["SUNSHINE_CLIENT_FPS"] = std::to_string(launch_session->fps);
@@ -514,6 +528,7 @@ namespace proc {
   }
 
   void proc_t::terminate() {
+    input::terminate_gamepads();
     std::error_code ec;
     placebo = false;
     terminate_process_group(_process, _process_group, _app.exit_timeout);

@@ -18,6 +18,11 @@ option(SUNSHINE_CONFIGURE_ONLY "Configure special files only, then exit." OFF)
 
 option(SUNSHINE_ENABLE_TRAY "Enable system tray icon." ON)
 
+if(WIN32)
+    option(SUNSHINE_USE_STATIC_QT
+            "Require static Qt libraries and their static third-party dependencies." ON)
+endif()
+
 option(SUNSHINE_SYSTEM_VULKAN_HEADERS "Use system installation of vulkan-headers rather than the submodule." OFF)
 option(SUNSHINE_SYSTEM_WAYLAND_PROTOCOLS "Use system installation of wayland-protocols rather than the submodule." OFF)
 
@@ -49,6 +54,8 @@ elseif(UNIX)  # Linux
             "Enable a Flatpak build." OFF)
     option(SUNSHINE_CONFIGURE_PKGBUILD
             "Configure files required for AUR. Recommended to use with SUNSHINE_CONFIGURE_ONLY" OFF)
+    option(SUNSHINE_CONFIGURE_APKBUILD
+            "Configure files required for an Alpine Linux package. Recommended to use with SUNSHINE_CONFIGURE_ONLY" OFF)
     option(SUNSHINE_CONFIGURE_FLATPAK_MAN
             "Configure manifest file required for Flatpak build. Recommended to use with SUNSHINE_CONFIGURE_ONLY" OFF)
 

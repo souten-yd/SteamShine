@@ -42,6 +42,7 @@ namespace rtsp_stream {
     int height;  ///< Frame or display height in pixels.
     int fps;  ///< Requested video frame rate.
     int gcmap;  ///< Game controller mapping requested by the client.
+    bool steam_ui {false};  ///< Whether an owned compositor must publish Steam focus and overlay state.
     int appid;  ///< Application ID requested for launch or resume.
     int surround_info;  ///< Encoded GameStream surround-sound capability flags.
     std::string surround_params;  ///< Client-provided surround-sound layout parameters.
@@ -49,6 +50,7 @@ namespace rtsp_stream {
     bool hdr_requested;  ///< Original client HDR intent before administrator policy.
     bool enable_hdr;  ///< Whether display preparation should enable HDR after policy.
     bool enable_sops;  ///< Whether sequence output protection is requested.
+    std::string client_name;  ///< Friendly client name from initial pairing.
 
     std::optional<crypto::cipher::gcm_t> rtsp_cipher;  ///< AES-GCM cipher used once encrypted RTSP is negotiated.
     std::string rtsp_url_scheme;  ///< URL scheme selected by the RTSP SETUP flow.
