@@ -123,7 +123,7 @@ namespace proc {
     return virtual_session_owns_steam_lifecycle && steam_session::command_closes_big_picture(undo_command);
   }
 
-  void apply_session_display_environment(boost::process::v1::environment &environment, const std::optional<steamos_virtual_session::session_display_endpoint_t> &endpoint) {
+  void apply_session_display_environment(boost::process::v1::environment &environment, const std::optional<steamos_virtual_session::session_display_endpoint_t> &endpoint, const bool enable_hdr, const std::string_view wsi_layer_directory) {
     if (!endpoint || endpoint->verification != steamos_virtual_session::display_verification_e::verified) {
       return;
     }
@@ -134,6 +134,16 @@ namespace proc {
       environment.erase("WAYLAND_DISPLAY");
     }
     environment["GAMESCOPE_WAYLAND_DISPLAY"] = endpoint->gamescope_wayland_display;
+    if (!endpoint->gamescope_wayland_display.empty()) {
+      environment["ENABLE_GAMESCOPE_WSI"] = "1";
+      environment.erase("DISABLE_GAMESCOPE_WSI");
+      environment["DXVK_HDR"] = enable_hdr ? "1" : "0";
+      if (!wsi_layer_directory.empty()) {
+        const auto previous {environment.find("VK_ADD_IMPLICIT_LAYER_PATH")};
+        const auto suffix {previous == environment.end() ? std::string {} : previous->to_string()};
+        environment["VK_ADD_IMPLICIT_LAYER_PATH"] = std::string {wsi_layer_directory} + (suffix.empty() ? "" : ":" + suffix);
+      }
+    }
     environment["DISPLAY"] = endpoint->x11_display;
     if (!endpoint->xauthority.empty()) {
       environment["XAUTHORITY"] = endpoint->xauthority;
@@ -338,7 +348,15 @@ namespace proc {
     }
     _env["SUNSHINE_CLIENT_AUDIO_SURROUND_PARAMS"] = launch_session->surround_params;
 
-    apply_session_display_environment(_env, steamos_virtual_session::application_environment());
+    const auto wsi_directory {std::filesystem::path {SUNSHINE_ASSETS_DIR} / "vulkan/implicit_layer.d"};
+    std::error_code wsi_error;
+    const bool bundled_wsi {std::filesystem::is_regular_file(wsi_directory / "VkLayer_FROG_gamescope_wsi.x86_64.json", wsi_error)};
+    apply_session_display_environment(
+      _env,
+      steamos_virtual_session::application_environment(),
+      launch_session->enable_hdr,
+      bundled_wsi ? std::filesystem::absolute(wsi_directory).lexically_normal().string() : ""
+    );
 
     if (!_app.output.empty() && _app.output != "null"sv) {
 #ifdef _WIN32

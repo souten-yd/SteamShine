@@ -12,7 +12,124 @@
 // local imports
 #include <src/process.h>
 
+#if defined(__linux__)
+  #include <src/platform/linux/gamescope_wsi_socket.h>
+  #include <sys/socket.h>
+  #include <sys/un.h>
+  #include <unistd.h>
+#endif
+
 namespace fs = std::filesystem;
+
+#if defined(__linux__)
+/**
+ * @brief Own two UNIX sockets for testing Gamescope and nested-compositor identities.
+ */
+class GamescopeWsiSocketTest: public testing::Test {
+protected:
+  fs::path root;  ///< Isolated runtime directory owned by the fixture.
+  std::array<int, 2> sockets {-1, -1};  ///< Socket descriptors retained until teardown.
+
+  /**
+
+   * @brief Create distinct Gamescope and nested-compositor socket endpoints.
+
+   */
+  void SetUp() override {
+    char directory[] = "/tmp/steamshine-wsi-XXXXXX";
+    ASSERT_NE(mkdtemp(directory), nullptr);
+    root = directory;
+    for (size_t index = 0; index < sockets.size(); ++index) {
+      sockets[index] = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+      ASSERT_GE(sockets[index], 0);
+      sockaddr_un address {};
+      address.sun_family = AF_UNIX;
+      const auto path {(root / (index == 0 ? "gamescope-0" : "nested-0")).string()};
+      ASSERT_LT(path.size(), sizeof(address.sun_path));
+      std::memcpy(address.sun_path, path.c_str(), path.size() + 1);
+      ASSERT_EQ(bind(sockets[index], reinterpret_cast<const sockaddr *>(&address), sizeof(address)), 0);
+    }
+    fs::create_symlink(root / "gamescope-0", root / "wayland-0");
+    std::ofstream(root / "regular-file") << "not a socket";
+  }
+
+  /**
+
+   * @brief Close descriptors and remove only this fixture's runtime directory.
+
+   */
+  void TearDown() override {
+    for (const int descriptor : sockets) {
+      if (descriptor >= 0) {
+        close(descriptor);
+      }
+    }
+    if (!root.empty()) {
+      std::error_code error;
+      fs::remove_all(root, error);
+    }
+  }
+};
+
+/**
+
+ * @brief Preserve established unset, empty, and identical socket-name behavior.
+
+ */
+TEST_F(GamescopeWsiSocketTest, PreservesExistingNameRules) {
+  EXPECT_FALSE(gamescope_wsi::is_gamescope_session(nullptr, nullptr, nullptr, false));
+  EXPECT_FALSE(gamescope_wsi::is_gamescope_session("", nullptr, nullptr, false));
+  EXPECT_TRUE(gamescope_wsi::is_gamescope_session("gamescope-0", nullptr, nullptr, false));
+  EXPECT_TRUE(gamescope_wsi::is_gamescope_session("gamescope-0", "", nullptr, false));
+  EXPECT_TRUE(gamescope_wsi::is_gamescope_session("gamescope-0", "gamescope-0", nullptr, false));
+}
+
+/**
+
+ * @brief Accept relative and absolute aliases that identify the same live socket.
+
+ */
+TEST_F(GamescopeWsiSocketTest, AcceptsAliasesOfSameSocket) {
+  EXPECT_TRUE(gamescope_wsi::is_gamescope_session("gamescope-0", "wayland-0", root.c_str(), false));
+  EXPECT_TRUE(gamescope_wsi::is_gamescope_session((root / "gamescope-0").c_str(), "wayland-0", root.c_str(), false));
+  EXPECT_TRUE(gamescope_wsi::is_gamescope_session((root / "gamescope-0").c_str(), (root / "wayland-0").c_str(), nullptr, false));
+}
+
+/**
+
+ * @brief Never mistake another live compositor or inherited connection for Gamescope.
+
+ */
+TEST_F(GamescopeWsiSocketTest, RejectsDifferentCompositorAndInheritedConnection) {
+  EXPECT_FALSE(gamescope_wsi::is_gamescope_session("gamescope-0", "nested-0", root.c_str(), false));
+  EXPECT_FALSE(gamescope_wsi::is_gamescope_session("gamescope-0", "wayland-0", root.c_str(), true));
+  EXPECT_FALSE(gamescope_wsi::is_gamescope_session("gamescope-0", "regular-file", root.c_str(), false));
+}
+
+/**
+
+ * @brief Require a runtime directory for relative names and a valid Gamescope socket.
+
+ */
+TEST_F(GamescopeWsiSocketTest, RejectsUnverifiableGamescopeEndpoint) {
+  EXPECT_FALSE(gamescope_wsi::is_gamescope_session("gamescope-0", "wayland-0", nullptr, false));
+  EXPECT_FALSE(gamescope_wsi::is_gamescope_session("gamescope-0", "wayland-0", "", false));
+  EXPECT_FALSE(gamescope_wsi::is_gamescope_session("absent", "wayland-0", root.c_str(), false));
+  EXPECT_FALSE(gamescope_wsi::is_gamescope_session("regular-file", "wayland-0", root.c_str(), false));
+}
+
+/**
+
+ * @brief Accept pressure-vessel's missing display alias only with a live Gamescope socket.
+
+ */
+TEST_F(GamescopeWsiSocketTest, AcceptsMissingWaylandAliasButRejectsOtherErrors) {
+  EXPECT_TRUE(gamescope_wsi::is_gamescope_session("gamescope-0", "absent", root.c_str(), false));
+  EXPECT_TRUE(gamescope_wsi::is_gamescope_session("gamescope-0", "regular-file/absent", root.c_str(), false));
+  fs::create_symlink("loop", root / "loop");
+  EXPECT_FALSE(gamescope_wsi::is_gamescope_session("gamescope-0", "loop", root.c_str(), false));
+}
+#endif
 
 TEST(ProcessCommandSelectionTest, KeepsConfiguredApplicationCommand) {
   EXPECT_EQ(proc::select_effective_command("game --launch", true, "virtual-desktop"), "game --launch");
@@ -84,12 +201,122 @@ TEST(ProcessDisplayEnvironmentTest, MissingEndpointPreservesPhysicalDesktopEnvir
   boost::process::v1::environment environment;
   environment["DISPLAY"] = ":0";
   environment["WAYLAND_DISPLAY"] = "wayland-0";
+  environment["ENABLE_GAMESCOPE_WSI"] = "0";
+  environment["DISABLE_GAMESCOPE_WSI"] = "1";
+  environment["DXVK_HDR"] = "0";
 
-  proc::apply_session_display_environment(environment, std::nullopt);
+  proc::apply_session_display_environment(environment, std::nullopt, true);
 
   EXPECT_EQ(environment["DISPLAY"].to_string(), ":0");
   EXPECT_EQ(environment["WAYLAND_DISPLAY"].to_string(), "wayland-0");
   EXPECT_TRUE(environment.find("GAMESCOPE_WAYLAND_DISPLAY") == environment.end());
+  EXPECT_EQ(environment["ENABLE_GAMESCOPE_WSI"].to_string(), "0");
+  EXPECT_EQ(environment["DISABLE_GAMESCOPE_WSI"].to_string(), "1");
+  EXPECT_EQ(environment["DXVK_HDR"].to_string(), "0");
+}
+
+/**
+ * @brief Verify owned and attached Gamescope applications receive WSI and session HDR settings.
+ */
+TEST(ProcessDisplayEnvironmentTest, EnablesGamescopeWsiForHdrAndSdrApplications) {
+  using steamos_virtual_session::session_origin_e;
+  for (const auto origin : {session_origin_e::owned_private, session_origin_e::attached_existing}) {
+    for (const bool enable_hdr : {true, false}) {
+      SCOPED_TRACE(enable_hdr);
+      boost::process::v1::environment environment;
+      environment["ENABLE_GAMESCOPE_WSI"] = "0";
+      environment["DISABLE_GAMESCOPE_WSI"] = "1";
+      environment["DXVK_HDR"] = enable_hdr ? "0" : "1";
+      const steamos_virtual_session::session_display_endpoint_t endpoint {
+        .origin = origin,
+        .gamescope_wayland_display = "gamescope-0",
+        .verification = steamos_virtual_session::display_verification_e::verified,
+      };
+
+      proc::apply_session_display_environment(environment, endpoint, enable_hdr);
+
+      EXPECT_EQ(environment["ENABLE_GAMESCOPE_WSI"].to_string(), "1");
+      EXPECT_TRUE(environment.find("DISABLE_GAMESCOPE_WSI") == environment.end());
+      EXPECT_EQ(environment["DXVK_HDR"].to_string(), enable_hdr ? "1" : "0");
+    }
+  }
+}
+
+/**
+ * @brief Verify HDR settings are not invented without a verified Gamescope socket.
+ */
+TEST(ProcessDisplayEnvironmentTest, MissingGamescopeSocketPreservesHdrEnvironment) {
+  boost::process::v1::environment environment;
+  environment["ENABLE_GAMESCOPE_WSI"] = "0";
+  environment["DISABLE_GAMESCOPE_WSI"] = "1";
+  environment["DXVK_HDR"] = "0";
+  const steamos_virtual_session::session_display_endpoint_t endpoint {
+    .verification = steamos_virtual_session::display_verification_e::verified,
+  };
+
+  proc::apply_session_display_environment(environment, endpoint, true);
+
+  EXPECT_EQ(environment["ENABLE_GAMESCOPE_WSI"].to_string(), "0");
+  EXPECT_EQ(environment["DISABLE_GAMESCOPE_WSI"].to_string(), "1");
+  EXPECT_EQ(environment["DXVK_HDR"].to_string(), "0");
+}
+
+/**
+ * @brief Verify the bundled WSI layer preserves Wayland and existing loader additions.
+ */
+TEST(ProcessDisplayEnvironmentTest, PrependsBundledWsiWithoutChangingDisplayChoice) {
+  for (const bool enable_hdr : {true, false}) {
+    for (const std::string_view previous : {"", "/custom/layers:/another/layers"}) {
+      SCOPED_TRACE(previous);
+      boost::process::v1::environment environment;
+      environment["VK_ADD_IMPLICIT_LAYER_PATH"] = std::string {previous};
+      const steamos_virtual_session::session_display_endpoint_t endpoint {
+        .wayland_display = "gamescope-0",
+        .gamescope_wayland_display = "gamescope-0",
+        .verification = steamos_virtual_session::display_verification_e::verified,
+      };
+      proc::apply_session_display_environment(environment, endpoint, enable_hdr, "/artifact/layers");
+      EXPECT_EQ(environment["VK_ADD_IMPLICIT_LAYER_PATH"].to_string(), previous.empty() ? "/artifact/layers" : "/artifact/layers:" + std::string {previous});
+      EXPECT_EQ(environment["WAYLAND_DISPLAY"].to_string(), "gamescope-0");
+      EXPECT_EQ(environment["DXVK_HDR"].to_string(), enable_hdr ? "1" : "0");
+    }
+  }
+}
+
+/**
+ * @brief Verify a bundled manifest directory can initialize an absent loader search path.
+ */
+TEST(ProcessDisplayEnvironmentTest, AddsBundledWsiToEmptyEnvironment) {
+  boost::process::v1::environment environment;
+  const steamos_virtual_session::session_display_endpoint_t endpoint {
+    .gamescope_wayland_display = "gamescope-0",
+    .verification = steamos_virtual_session::display_verification_e::verified,
+  };
+  proc::apply_session_display_environment(environment, endpoint, true, "/artifact/layers");
+  EXPECT_EQ(environment["VK_ADD_IMPLICIT_LAYER_PATH"].to_string(), "/artifact/layers");
+}
+
+/**
+ * @brief Verify bundled layers do not affect physical, rejected, or socket-less endpoints.
+ */
+TEST(ProcessDisplayEnvironmentTest, BundledWsiRequiresVerifiedGamescopeSocket) {
+  boost::process::v1::environment environment;
+  environment["VK_ADD_IMPLICIT_LAYER_PATH"] = "/custom/layers";
+  proc::apply_session_display_environment(environment, std::nullopt, true, "/artifact/layers");
+  EXPECT_EQ(environment["VK_ADD_IMPLICIT_LAYER_PATH"].to_string(), "/custom/layers");
+  for (const auto verification : {steamos_virtual_session::display_verification_e::unavailable, steamos_virtual_session::display_verification_e::rejected, steamos_virtual_session::display_verification_e::verified}) {
+    const steamos_virtual_session::session_display_endpoint_t endpoint {
+      .verification = verification,
+    };
+    proc::apply_session_display_environment(environment, endpoint, true, "/artifact/layers");
+    EXPECT_EQ(environment["VK_ADD_IMPLICIT_LAYER_PATH"].to_string(), "/custom/layers");
+  }
+  const steamos_virtual_session::session_display_endpoint_t endpoint {
+    .gamescope_wayland_display = "gamescope-0",
+    .verification = steamos_virtual_session::display_verification_e::verified,
+  };
+  proc::apply_session_display_environment(environment, endpoint, true);
+  EXPECT_EQ(environment["VK_ADD_IMPLICIT_LAYER_PATH"].to_string(), "/custom/layers");
 }
 
 /**
@@ -114,7 +341,7 @@ TEST(ProcessDisplayEnvironmentTest, AppliesVerifiedDynamicGamescopeEndpoint) {
       .verification = steamos_virtual_session::display_verification_e::verified,
     };
 
-    proc::apply_session_display_environment(environment, endpoint);
+    proc::apply_session_display_environment(environment, endpoint, true);
 
     EXPECT_EQ(environment["DISPLAY"].to_string(), display);
     EXPECT_EQ(environment["XAUTHORITY"].to_string(), endpoint.xauthority);
@@ -122,6 +349,8 @@ TEST(ProcessDisplayEnvironmentTest, AppliesVerifiedDynamicGamescopeEndpoint) {
     EXPECT_EQ(environment["DBUS_SESSION_BUS_ADDRESS"].to_string(), endpoint.dbus_session_bus_address);
     EXPECT_EQ(environment["XDG_SESSION_TYPE"].to_string(), "wayland");
     EXPECT_EQ(environment["XDG_CURRENT_DESKTOP"].to_string(), "gamescope");
+    EXPECT_EQ(environment["ENABLE_GAMESCOPE_WSI"].to_string(), "1");
+    EXPECT_EQ(environment["DXVK_HDR"].to_string(), "1");
   }
 }
 
@@ -147,7 +376,7 @@ TEST(ProcessDisplayEnvironmentTest, RemovesXauthorityForVerifiedAuthlessGamescop
     .verification = steamos_virtual_session::display_verification_e::verified,
   };
 
-  proc::apply_session_display_environment(environment, endpoint);
+  proc::apply_session_display_environment(environment, endpoint, true);
 
   EXPECT_TRUE(environment.find("XAUTHORITY") == environment.end());
   EXPECT_TRUE(environment.find("WAYLAND_DISPLAY") == environment.end());
@@ -163,14 +392,17 @@ TEST(ProcessDisplayEnvironmentTest, RejectedEndpointPreservesPhysicalDesktopEnvi
   boost::process::v1::environment environment;
   environment["DISPLAY"] = ":0";
   steamos_virtual_session::session_display_endpoint_t endpoint {
+    .gamescope_wayland_display = "gamescope-0",
     .x11_display = ":27",
     .verification = steamos_virtual_session::display_verification_e::rejected,
   };
 
-  proc::apply_session_display_environment(environment, endpoint);
+  proc::apply_session_display_environment(environment, endpoint, true);
 
   EXPECT_EQ(environment["DISPLAY"].to_string(), ":0");
   EXPECT_TRUE(environment.find("XAUTHORITY") == environment.end());
+  EXPECT_TRUE(environment.find("ENABLE_GAMESCOPE_WSI") == environment.end());
+  EXPECT_TRUE(environment.find("DXVK_HDR") == environment.end());
 }
 
 /**
@@ -192,7 +424,7 @@ TEST(ProcessDisplayEnvironmentTest, RemovesUnverifiedDbusAddressFromVirtualLaunc
     .verification = steamos_virtual_session::display_verification_e::verified,
   };
 
-  proc::apply_session_display_environment(environment, endpoint);
+  proc::apply_session_display_environment(environment, endpoint, true);
 
   EXPECT_TRUE(environment.find("DBUS_SESSION_BUS_ADDRESS") == environment.end());
 }
@@ -251,6 +483,9 @@ TEST(ProcessCommandSelectionTest, PrefersPhysicalDesktopForCommandlessApplicatio
   EXPECT_FALSE(process_manager.prefers_physical_desktop(43));
 }
 
+/**
+ * @brief Verify virtual display and HDR settings cannot leak into later physical launches.
+ */
 TEST(ProcessEnvironmentTest, RestoresBaselineBetweenLaunches) {
   boost::process::v1::environment baseline;
   baseline["STEAMSHINE_PROCESS_TEST_BASELINE"] = "configured";
@@ -259,6 +494,16 @@ TEST(ProcessEnvironmentTest, RestoresBaselineBetweenLaunches) {
   launch_environment["XDG_RUNTIME_DIR"] = "/owned/runtime";
   launch_environment["WAYLAND_DISPLAY"] = "gamescope-0";
   launch_environment["PIPEWIRE_REMOTE"] = "owned-pipewire";
+  const steamos_virtual_session::session_display_endpoint_t endpoint {
+    .origin = steamos_virtual_session::session_origin_e::owned_private,
+    .xdg_runtime_directory = "/owned/runtime",
+    .wayland_display = "gamescope-0",
+    .gamescope_wayland_display = "gamescope-0",
+    .pipewire_remote = "owned-pipewire",
+    .verification = steamos_virtual_session::display_verification_e::verified,
+  };
+  proc::apply_session_display_environment(launch_environment, endpoint, true);
+  ASSERT_EQ(launch_environment["DXVK_HDR"].to_string(), "1");
 
   proc::reset_launch_environment(launch_environment, baseline);
 
@@ -266,6 +511,8 @@ TEST(ProcessEnvironmentTest, RestoresBaselineBetweenLaunches) {
   EXPECT_TRUE(launch_environment["XDG_RUNTIME_DIR"].empty());
   EXPECT_TRUE(launch_environment["WAYLAND_DISPLAY"].empty());
   EXPECT_TRUE(launch_environment["PIPEWIRE_REMOTE"].empty());
+  EXPECT_TRUE(launch_environment.find("ENABLE_GAMESCOPE_WSI") == launch_environment.end());
+  EXPECT_TRUE(launch_environment.find("DXVK_HDR") == launch_environment.end());
 }
 
 #if defined(__linux__)

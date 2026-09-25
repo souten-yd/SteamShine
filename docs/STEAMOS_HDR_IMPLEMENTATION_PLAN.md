@@ -54,6 +54,49 @@ The implementation must validate every stage:
 11. The client decodes as HDR and the display enters the expected HDR mode.
 12. Disconnect and reconnect remove only SteamShine-owned resources and restore the next session correctly.
 
+### Game HDR discovery
+
+An HDR10 stream does not establish that the game renders HDR. Games running
+through Proton's XWayland path also need the Gamescope WSI Vulkan layer to
+discover HDR surface formats. SteamShine launches Steam separately from the
+Gamescope bootstrap, so Gamescope's child environment is not inherited
+automatically.
+
+`proc::apply_session_display_environment()` enables `ENABLE_GAMESCOPE_WSI=1`
+for a verified Gamescope socket, removes an inherited `DISABLE_GAMESCOPE_WSI`,
+and sets `DXVK_HDR` to `1` for an HDR launch or `0` for SDR. These settings reach
+Steam and its subsequently launched games. Missing or rejected endpoints
+preserve the physical desktop environment, and the launch baseline is restored
+before subsequent sessions so HDR settings cannot leak across displays.
+
+SteamOS artifacts also bundle a 64-bit Gamescope WSI socket-identity backport.
+Steam's pressure-vessel can bind the same socket as both `wayland-0` and
+`/run/pressure-vessel/gamescope-socket`; the Gamescope 3.16.23.4 WSI layer
+compares their names and disables its HDR path when they differ. The backport
+accepts aliases only when their device and inode identify the same UNIX socket,
+while preserving the upstream missing-alias behavior and rejecting other live
+compositors or unverifiable inherited connections.
+
+The packaged manifest is added through `VK_ADD_IMPLICIT_LAYER_PATH` only for
+verified Gamescope endpoints. Existing loader additions remain available.
+`WAYLAND_DISPLAY` is retained: Steam and its games keep their native Wayland or
+XWayland choice. This does not force HDR for unsupported games, provide native
+Wayland HDR protocol support, or automatically classify games by display backend.
+The backport currently covers 64-bit Vulkan clients; 32-bit clients retain the
+system layer and require separate HDR acceptance testing.
+
+`scripts/build-steamos-gamescope-wsi.sh` builds the layer during artifact
+packaging using commit-pinned Gamescope, vkroots, and GLM sources. Run packaging
+inside the image recorded in `ci/steamos/image.lock`; the build requires network
+access on its first run and reuses its source cache thereafter. The socket
+identity helper is shared with the gtests. Package acceptance must check `ldd`
+and ABI versions for the layer as well as the two executables, then test the
+relocatable manifest inside Steam's runtime with `WAYLAND_DISPLAY` preserved.
+
+Hardware acceptance must check the game's HDR setting and the loaded Gamescope
+WSI layer as well as capture and encoder metadata. Existing Steam and game
+processes require a new session to receive a changed launch environment.
+
 ## Sunshine-core changes
 
 The following changes belong in Sunshine-derived capture/encode/protocol code rather than shell-only integration.

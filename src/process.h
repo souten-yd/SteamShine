@@ -142,11 +142,18 @@ namespace proc {
    *
    * A missing endpoint performs no writes, preserving every inherited physical
    * Desktop display variable. Session cookies are never read or copied here.
+   * Verified Gamescope sockets enable the WSI layer for Steam and its games;
+   * DXVK's HDR exposure follows the session request, including SDR launches.
+   * An inherited WSI disable flag cannot override this managed display path.
+   * A bundled WSI layer is prepended to the loader search path without changing
+   * WAYLAND_DISPLAY or the application's choice of XWayland versus Wayland.
    *
    * @param environment Child environment to update.
    * @param endpoint Verified session endpoint, or no value for physical Desktop.
+   * @param enable_hdr Whether the streaming session requested HDR.
+   * @param wsi_layer_directory Optional absolute directory of bundled implicit-layer manifests.
    */
-  void apply_session_display_environment(boost::process::v1::environment &environment, const std::optional<steamos_virtual_session::session_display_endpoint_t> &endpoint);
+  void apply_session_display_environment(boost::process::v1::environment &environment, const std::optional<steamos_virtual_session::session_display_endpoint_t> &endpoint, bool enable_hdr, std::string_view wsi_layer_directory = {});
 
   /**
    * @brief Boost.Process pipe stream used for child-process I/O.
