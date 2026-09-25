@@ -283,6 +283,7 @@ TEST_F(InputGamepadSessionTest, ReusesGamepadsAcrossPauseAndDestroysThemOnTermin
 }
 
 TEST_F(InputGamepadSessionTest, RefreshesSharedVirtualInputAfterLicenseStateChanges) {
+  context().refresh_mouse();
   ASSERT_NE(context().keyboard, nullptr);
   ASSERT_NE(context().mouse, nullptr);
   const auto original_keyboard_id = context().keyboard->device_id();
@@ -297,3 +298,16 @@ TEST_F(InputGamepadSessionTest, RefreshesSharedVirtualInputAfterLicenseStateChan
   EXPECT_NE(context().mouse->device_id(), original_mouse_id);
   EXPECT_EQ(runtime().active_device_count(), active_devices);
 }
+
+#if defined(__linux__) || defined(__FreeBSD__)
+TEST_F(InputGamepadSessionTest, RefreshKeepsUnusedDesktopMouseDeferred) {
+  ASSERT_EQ(context().mouse, nullptr);
+  const auto active_devices = runtime().active_device_count();
+
+  input::refresh_virtual_input();
+
+  EXPECT_EQ(context().mouse, nullptr);
+  EXPECT_FALSE(context().desktop_mouse_initialized);
+  EXPECT_EQ(runtime().active_device_count(), active_devices);
+}
+#endif

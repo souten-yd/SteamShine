@@ -615,11 +615,14 @@ try {
   }
 
   const upstreamCsrf = await authenticatedPage.evaluate(async () => (await fetch('/api/csrf-token')).json().then((value) => value.csrf_token));
-  const credentialChange = await authenticatedPage.evaluate(async (csrf) => (await fetch('/api/password', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
-    body: JSON.stringify({ currentUsername: 'web-e2e', currentPassword: 'web-e2e-password', newUsername: 'web-e2e', newPassword: 'web-e2e-password-2', confirmNewPassword: 'web-e2e-password-2' }),
-  })).status, upstreamCsrf);
+  // Stop PIN-page polling before deliberately invalidating its Basic credentials.
+  // The isolated request context still exercises the real credential-change endpoint.
+  const upstreamRequest = authenticatedPage.context().request;
+  await authenticatedPage.close();
+  const credentialChange = (await upstreamRequest.post(`${baseUrl}/api/password`, {
+    headers: { 'X-CSRF-Token': upstreamCsrf, Origin: baseUrl },
+    data: { currentUsername: 'web-e2e', currentPassword: 'web-e2e-password', newUsername: 'web-e2e', newPassword: 'web-e2e-password-2', confirmNewPassword: 'web-e2e-password-2' },
+  })).status();
   if (credentialChange !== 200) throw new Error(`Credential change returned ${credentialChange}.`);
   securityResults.credential_change_session_status = await steamshinePage.evaluate(async () => (await fetch('/api/steamshine/v1/session')).status);
   if (securityResults.credential_change_session_status !== 401) throw new Error('Credential change did not invalidate the SteamShine session.');

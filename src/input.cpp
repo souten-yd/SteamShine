@@ -2643,7 +2643,14 @@ namespace input {
         reset_keyboard_keys();
         auto &context = platf::virtualhid::get_input_context(platf_input);
         context.refresh_keyboard();
+#if defined(__linux__) || defined(__FreeBSD__)
+        // Refresh existing desktop devices without creating one for an EIS-only session.
+        if (context.desktop_mouse_initialized) {
+          context.refresh_mouse();
+        }
+#else
         context.refresh_mouse();
+#endif
       }
     });
   }

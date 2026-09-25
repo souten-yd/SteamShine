@@ -423,6 +423,7 @@
     "sw_tune_zerolatency": "zerolatency -- good for fast encoding and low-latency streaming (default)",
     "system_tray": "Enable system tray",
     "system_tray_desc": "Show icon in system tray and display desktop notifications",
+    "steamos_display": "SteamOS Virtual Display",
     "steamos_capture_gpu": "SteamOS capture GPU",
     "steamos_capture_gpu_desc": "Capture GPU PCI BDF or render node. It must match the verified game and encoder GPU.",
     "steamos_cleanup_orphan_sessions": "Clean orphan SteamOS sessions",

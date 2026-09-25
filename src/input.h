@@ -231,6 +231,7 @@ namespace input {
    *
    * The work is serialized with streamed input so both backends can switch
    * safely between the Windows HID and SendInput paths.
+   * Linux EIS sessions keep an unused desktop mouse deferred across refreshes.
    */
   void refresh_virtual_input();
 
