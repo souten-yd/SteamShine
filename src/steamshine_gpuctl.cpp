@@ -337,6 +337,7 @@ namespace steamshine_gpuctl {
   namespace {
     /**
      * @brief Parse the stored custom-profile list. Caller must already hold `g_profiles_mutex`.
+     * @return Profiles decoded from the persisted top-level JSON array.
      */
     std::vector<profile_t> custom_profiles_locked() {
       std::vector<profile_t> result;
@@ -344,7 +345,8 @@ namespace steamshine_gpuctl {
         return result;
       }
       try {
-        const auto parsed {nlohmann::json::parse(config::sunshine.steamshine_gpu_profiles)};
+        // List initialization would wrap the parsed array in another JSON array.
+        const nlohmann::json parsed = nlohmann::json::parse(config::sunshine.steamshine_gpu_profiles);
         for (const auto &entry : parsed) {
           result.push_back(entry.get<profile_t>());
         }

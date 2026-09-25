@@ -1,12 +1,14 @@
 /**
  * @file tests/unit/test_steamshine_hwmonitor.cpp
- * @brief Tests for SteamShine Monitor telemetry presentation policy.
+ * @brief Tests for persisted GPU profiles and SteamShine Monitor telemetry presentation.
  */
 
 #include "../tests_common.h"
 
+#include <filesystem>
 #include <limits>
 #include <src/config.h>
+#include <src/file_handler.h>
 #include <src/steamshine_gpuctl.h>
 #include <src/steamshine_hwmonitor.h>
 #include <src/utility.h>
@@ -37,6 +39,85 @@ TEST(SteamshineGpuControlTest, ResolvesSelectedProfile) {
   const auto reapplied {steamshine_gpuctl::reapply_active_profile()};
   EXPECT_TRUE(reapplied.success);
   EXPECT_TRUE(reapplied.error.empty());
+}
+
+/**
+ * @brief Load an existing custom profile without changing its settings or selection.
+ */
+TEST(SteamshineGpuControlTest, LoadsSavedAlternativeProfile) {
+  const auto saved_profiles {config::sunshine.steamshine_gpu_profiles};
+  const auto saved_active {config::sunshine.steamshine_gpu_active_profile};
+  const auto restore {util::fail_guard([&]() {
+    config::sunshine.steamshine_gpu_profiles = saved_profiles;
+    config::sunshine.steamshine_gpu_active_profile = saved_active;
+  })};
+  const std::string stored {R"([{"builtin":false,"cpu_governor":"powersave","cpu_max_freq_mhz":3600.0,"description":"","gpu_clock_offset_mhz":0,"gpu_voltage_offset_mv":0,"name":"Alternative","power_cap_watts":260.0}])"};
+  config::sunshine.steamshine_gpu_profiles = stored;
+  config::sunshine.steamshine_gpu_active_profile = "Alternative";
+
+  const auto profiles {steamshine_gpuctl::custom_profiles()};
+  ASSERT_EQ(profiles.size(), 1);
+  EXPECT_EQ(profiles.front().name, "Alternative");
+  EXPECT_FALSE(profiles.front().builtin);
+  EXPECT_EQ(profiles.front().cpu_governor, "powersave");
+  EXPECT_DOUBLE_EQ(profiles.front().power_cap_watts, 260.0);
+  EXPECT_DOUBLE_EQ(profiles.front().cpu_max_freq_mhz, 3600.0);
+  EXPECT_EQ(profiles.front().gpu_clock_offset_mhz, 0);
+  EXPECT_EQ(profiles.front().gpu_voltage_offset_mv, 0);
+  const auto selected {steamshine_gpuctl::active_profile()};
+  ASSERT_TRUE(selected);
+  EXPECT_EQ(selected->name, "Alternative");
+  EXPECT_EQ(config::sunshine.steamshine_gpu_profiles, stored);
+  EXPECT_EQ(config::sunshine.steamshine_gpu_active_profile, "Alternative");
+}
+
+/**
+ * @brief Preserve existing custom profiles through save, edit, reload, and delete operations.
+ */
+TEST(SteamshineGpuControlTest, PreservesCustomProfilesAcrossEdits) {
+  namespace fs = std::filesystem;
+  const auto saved_profiles {config::sunshine.steamshine_gpu_profiles};
+  const auto saved_config_file {config::sunshine.config_file};
+  const auto temporary_config {fs::temp_directory_path() / "steamshine-gpu-profile-regression.conf"};
+  const auto restore {util::fail_guard([&]() {
+    config::sunshine.steamshine_gpu_profiles = saved_profiles;
+    config::sunshine.config_file = saved_config_file;
+    fs::remove(temporary_config);
+  })};
+  ASSERT_EQ(file_handler::write_file(temporary_config.string().c_str(), "custom_option = preserved\n"), 0);
+  config::sunshine.config_file = temporary_config.string();
+  config::sunshine.steamshine_gpu_profiles = "[]";
+  steamshine_gpuctl::profile_t profile {
+    .name = "Alternative",
+    .power_cap_watts = 260.0,
+    .cpu_governor = "powersave",
+    .cpu_max_freq_mhz = 3600.0,
+  };
+  std::string error;
+  ASSERT_TRUE(steamshine_gpuctl::save_custom_profile(profile, error)) << error;
+  profile.name = "Second profile";
+  ASSERT_TRUE(steamshine_gpuctl::save_custom_profile(profile, error)) << error;
+  auto profiles {steamshine_gpuctl::custom_profiles()};
+  ASSERT_EQ(profiles.size(), 2);
+  EXPECT_EQ(profiles.front().name, "Alternative");
+  EXPECT_EQ(profiles.back().name, "Second profile");
+
+  profile.description = "Edited profile";
+  ASSERT_TRUE(steamshine_gpuctl::save_custom_profile(profile, error)) << error;
+  const auto vars = config::parse_config(file_handler::read_file(temporary_config.string().c_str()));
+  EXPECT_EQ(vars.at("custom_option"), "preserved");
+  config::sunshine.steamshine_gpu_profiles = vars.at("steamshine_gpu_profiles");
+  profiles = steamshine_gpuctl::custom_profiles();
+  ASSERT_EQ(profiles.size(), 2);
+  EXPECT_EQ(profiles.back().description, "Edited profile");
+
+  ASSERT_TRUE(steamshine_gpuctl::delete_custom_profile("Second profile", error)) << error;
+  profiles = steamshine_gpuctl::custom_profiles();
+  ASSERT_EQ(profiles.size(), 1);
+  EXPECT_EQ(profiles.front().name, "Alternative");
+  ASSERT_TRUE(steamshine_gpuctl::delete_custom_profile("Alternative", error)) << error;
+  EXPECT_TRUE(steamshine_gpuctl::custom_profiles().empty());
+  EXPECT_EQ(config::sunshine.steamshine_gpu_profiles, "[]");
 }
 
 /**
