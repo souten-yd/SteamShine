@@ -34,10 +34,29 @@
 #endif
 
 #if defined(__linux__) || defined(__FreeBSD__)
+/** @brief Preserve generic and side-specific modifier aliases in the EIS key map. */
 TEST(GamescopeInputMappingTest, ConvertsSupportedVirtualKeysToLinuxCodes) {
   EXPECT_EQ(platf::keyboard::linux_keycode(0x41), KEY_A);
   EXPECT_EQ(platf::keyboard::linux_keycode(0x10), KEY_LEFTSHIFT);
+  EXPECT_EQ(platf::keyboard::linux_keycode(0xA0), KEY_LEFTSHIFT);
+  EXPECT_EQ(platf::keyboard::linux_keycode(0xA1), KEY_RIGHTSHIFT);
+  EXPECT_EQ(platf::keyboard::linux_keycode(0x11), KEY_LEFTCTRL);
+  EXPECT_EQ(platf::keyboard::linux_keycode(0xA2), KEY_LEFTCTRL);
+  EXPECT_EQ(platf::keyboard::linux_keycode(0xA3), KEY_RIGHTCTRL);
   EXPECT_EQ(platf::keyboard::linux_keycode(0x12), KEY_LEFTALT);
+  EXPECT_EQ(platf::keyboard::linux_keycode(0xA4), KEY_LEFTALT);
+  EXPECT_EQ(platf::keyboard::linux_keycode(0xA5), KEY_RIGHTALT);
+  EXPECT_EQ(platf::keyboard::linux_keycode(0x0C), KEY_CLEAR);
+  EXPECT_EQ(platf::keyboard::linux_keycode(0x13), KEY_PAUSE);
+  EXPECT_EQ(platf::keyboard::linux_keycode(0x15), KEY_KATAKANAHIRAGANA);
+  EXPECT_EQ(platf::keyboard::linux_keycode(0x16), KEY_HANGEUL);
+  EXPECT_EQ(platf::keyboard::linux_keycode(0x17), KEY_HANJA);
+  EXPECT_EQ(platf::keyboard::linux_keycode(0x19), KEY_KATAKANA);
+  EXPECT_EQ(platf::keyboard::linux_keycode(0x29), KEY_SELECT);
+  EXPECT_EQ(platf::keyboard::linux_keycode(0x2A), KEY_PRINT);
+  EXPECT_EQ(platf::keyboard::linux_keycode(0x2F), KEY_HELP);
+  EXPECT_EQ(platf::keyboard::linux_keycode(0x5D), KEY_COMPOSE);
+  EXPECT_EQ(platf::keyboard::linux_keycode(0x5F), KEY_SLEEP);
   EXPECT_EQ(platf::keyboard::linux_keycode(0x6C), KEY_KPCOMMA);
   EXPECT_FALSE(platf::keyboard::linux_keycode(0xFFFF).has_value());
 }

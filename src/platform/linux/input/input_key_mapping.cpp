@@ -5,13 +5,13 @@
 #include "input_key_mapping.h"
 
 #include <linux/input-event-codes.h>
-#include <map>
+#include <utility>
 
 namespace platf::keyboard {
   /**
-   * A map of linux scan code -> Moonlight keyboard code
+   * @brief Linux/Moonlight key pairs, retaining generic and side-specific aliases.
    */
-  static const std::map<short, short> key_mappings = {
+  static constexpr std::pair<short, short> key_mappings[] = {
     {KEY_BACKSPACE, 0x08},
     {KEY_TAB, 0x09},
     {KEY_ENTER, 0x0D},

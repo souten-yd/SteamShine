@@ -45,6 +45,11 @@ IDs and focused-app properties consumed by the Big Picture overlay. Ordinary pro
 keep the existing window-focus behavior. Retained sessions cannot be reused across
 these two modes. HDR and the socket-identity WSI fix are independent of this selection.
 
+The Linux key translation table retains duplicate Linux scan codes for generic and
+side-specific Windows modifier aliases. A map keyed by the Linux code discarded
+left Shift/Ctrl aliases, preventing the default key remapping from reaching Gamescope
+and breaking Shift+Tab. Regression coverage includes both sides of every modifier.
+
 ## Validation and deployment
 
 The integration passes the 53-test standalone SteamOS core suite, 56-test lifecycle
