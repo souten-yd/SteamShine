@@ -20,58 +20,19 @@ env:
   FREEBSD_CLANG_VERSION: 19
 
 jobs:
-  setup-matrix:
-    name: Setup Build Matrix
-    runs-on: ubuntu-latest
-    outputs:
-      matrix: ${{ steps.generate-matrix.outputs.matrix }}
-    permissions: {}
-    steps:
-      - name: Generate Matrix
-        id: generate-matrix
-        shell: bash
-        run: |
-          # Base matrix with amd64 build
-          matrix='{
-            "include": [
-              {
-                "bsd_release": "14.4",
-                "arch": "x86_64",
-                "cmake_processor": "amd64",
-                "runner": "ubuntu-latest"
-              }
-            ]
-          }'
-
-          # Add aarch64 build only if not a pull request event
-          if [[ "${{ github.event_name }}" != "pull_request" ]]; then
-            matrix=$(echo "$matrix" | jq '.include += [{
-              "bsd_release": "14.4",
-              "arch": "aarch64",
-              "cmake_processor": "aarch64",
-              "runner": "ubuntu-latest"
-            }]')
-          fi
-
-          # Use heredoc for multiline JSON output
-          {
-            echo "matrix<<EOF"
-            echo "$matrix"
-            echo "EOF"
-          } >> "${GITHUB_OUTPUT}"
-
-          echo "Generated matrix:"
-          echo "$matrix" | jq .
-
   build_freebsd:
     name: ${{ matrix.cmake_processor }}
-    runs-on: ubuntu-latest
-    needs: setup-matrix
+    runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
     strategy:
       fail-fast: false
-      matrix: ${{ fromJson(needs.setup-matrix.outputs.matrix) }}
+      matrix:
+        include:
+          - bsd_release: '15.1'
+            arch: x86_64
+            cmake_processor: amd64
+            runner: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -87,13 +48,12 @@ jobs:
           echo "PROCESSOR_COUNT: $PROCESSOR_COUNT"
 
       - name: Setup FreeBSD
-        uses: vmactions/freebsd-vm@77ed28d336d03fe19a3f4f7266c1d2c4714dd79d  # v1.5.2
+        uses: vmactions/freebsd-vm@8b0f1a8fc0ea0def307835c258940ca358fe6480  # v1.5.6
         with:
           arch: ${{ matrix.arch }}
           cpu: ${{ steps.processor_count.outputs.PROCESSOR_COUNT }}
           envs: 'BRANCH BUILD_VERSION COMMIT PYTHON_VERSION'
           # TODO: there is no libcap for freebsd... we need graphics/libdrm if we find a way to use libcap
-          # TODO: docs are off because doxygen is too old: https://www.freshports.org/devel/doxygen/ must be >= 1.10
           prepare: |
             set -e
 
@@ -104,16 +64,17 @@ jobs:
               audio/pulseaudio \
               devel/boost-all \
               devel/cmake-core \
+              devel/doxygen \
               devel/evdev-proto \
               devel/git \
               devel/libevdev \
-              devel/libnotify \
               devel/llvm${{ env.FREEBSD_CLANG_VERSION }} \
               devel/ninja \
               devel/pkgconf \
               devel/uv \
               devel/qt6-base \
               ftp/curl \
+              graphics/graphviz \
               graphics/libdrm \
               graphics/qt6-svg \
               graphics/shaderc \
@@ -145,11 +106,23 @@ jobs:
             set -e
             # Keep FreeBSD off Sunshine's default dependency path: lizardbyte-common[c]
             # includes clang-format, which has no FreeBSD wheel and is slow to build.
-            uv sync --locked --only-group glad --python "/usr/local/bin/python${PYTHON_VERSION}" \
-              --no-python-downloads --no-install-project
-            uv sync --project third-party/lizardbyte-common --locked --only-group test-c \
+            set -- \
+              --locked \
+              --only-group glad \
               --python "/usr/local/bin/python${PYTHON_VERSION}" \
-              --no-python-downloads --no-install-project
+              --no-python-downloads \
+              --no-install-project
+            # uv.lock pins external artifacts; the reviewed vendored glad2 build hook is required.
+            uv sync "$@"  # NOSONAR(githubactions:S8541, githubactions:S8544)
+            set -- \
+              --project third-party/lizardbyte-common \
+              --locked \
+              --only-group test-c \
+              --python "/usr/local/bin/python${PYTHON_VERSION}" \
+              --no-python-downloads \
+              --no-install-project
+            # uv.lock pins the source artifact; FreeBSD must build lxml because no wheel is available.
+            uv sync "$@"  # NOSONAR(githubactions:S8541, githubactions:S8544)
 
             # fix git safe.directory issues
             git config --global --add safe.directory "*"
@@ -172,7 +145,7 @@ jobs:
             -B build \
             -G Ninja \
             -S . \
-            -DBUILD_DOCS=OFF \
+            -DBUILD_DOCS=ON \
             -DBUILD_WERROR=OFF \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_PREFIX=/usr/local \

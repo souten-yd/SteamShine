@@ -13,6 +13,7 @@
 #endif
 
 // standard includes
+#include <array>
 #include <cerrno>
 #include <cstring>
 #include <fstream>
@@ -153,6 +154,33 @@ namespace dyn {
 }  // namespace dyn
 
 namespace platf {
+  namespace {
+    constexpr std::array privileged_gui_environment_variables {
+      "GDK_PIXBUF_MODULEDIR",
+      "GDK_PIXBUF_MODULE_FILE",
+      "GIO_EXTRA_MODULES",
+      "GTK3_MODULES",
+      "GTK_EXE_PREFIX",
+      "GTK_IM_MODULE_FILE",
+      "GTK_MODULES",
+      "GTK_PATH",
+      "QML2_IMPORT_PATH",
+      "QML_IMPORT_PATH",
+      "QT_PLUGIN_PATH",
+      "QT_QPA_PLATFORM_PLUGIN_PATH",
+    };
+
+  }  // namespace
+
+  bool sanitize_process_environment() {
+    for (const auto *variable : privileged_gui_environment_variables) {
+      if (unsetenv(variable) != 0) {
+        return false;
+      }
+    }
+    return true;
+  }
+
   /**
    * @brief Owning pointer for `getifaddrs` results.
    */
@@ -523,8 +551,10 @@ namespace platf {
     }
   }
 
-  void set_thread_name(const std::string &name) {
-    pthread_setname_np(pthread_self(), name.c_str());
+  void set_thread_name(std::string_view name) {
+    // Truncate name to fit in Linux/FreeBSD kernel's 16 byte limit
+    std::string tr_name {name.substr(0, 15)};
+    pthread_setname_np(pthread_self(), tr_name.c_str());
   }
 
   /**
@@ -1414,17 +1444,18 @@ namespace platf {
     }
 #endif
 
-    // KMS capture was passed; drop CAP_SYS_ADMIN only.
-    if (has_elevated_privileges(false)) {
-      drop_elevated_privileges(false);
-    }
-
 #ifdef SUNSHINE_BUILD_CUDA
     if (sources[source::NVFBC] && hwdevice_type == mem_type_e::cuda) {
       BOOST_LOG(info) << "Screencasting with NvFBC"sv;
       return nvfbc_display(hwdevice_type, display_name, config);
     }
 #endif
+
+#ifdef SUNSHINE_BUILD_DRM
+    // Drop all DRM worker thread privileges if not needed for this process's lifetime.
+    platf::kms::drop_drm_worker_privileges();
+#endif
+
 #ifdef SUNSHINE_BUILD_WAYLAND
     if (sources[source::WAYLAND]) {
       BOOST_LOG(info) << "Screencasting with Wayland's protocol"sv;

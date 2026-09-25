@@ -365,7 +365,7 @@ namespace portal {
       GDBusProxy *proxy = use_screencast ? screencast_proxy : remote_desktop_proxy;
       const char *session_type = use_screencast ? "ScreenCast" : "RemoteDesktop";
 
-      dbus_response_t response;
+      dbus_response_t response {};
       g_autofree gchar *expected_request_path = nullptr;
       g_autofree gchar *request_token = nullptr;
       create_request_path(conn, &expected_request_path, &request_token);
@@ -438,7 +438,7 @@ namespace portal {
     }
 
     int select_remote_desktop_devices(GMainLoop *loop, const gchar *session_path) {
-      dbus_response_t response;
+      dbus_response_t response {};
       g_autofree gchar *expected_request_path = nullptr;
       g_autofree gchar *request_token = nullptr;
       create_request_path(conn, &expected_request_path, &request_token);
@@ -498,7 +498,7 @@ namespace portal {
     }
 
     int select_screencast_sources(GMainLoop *loop, const gchar *session_path, bool persist) {
-      dbus_response_t response;
+      dbus_response_t response {};
       g_autofree gchar *expected_request_path = nullptr;
       g_autofree gchar *request_token = nullptr;
       create_request_path(conn, &expected_request_path, &request_token);
@@ -564,7 +564,7 @@ namespace portal {
       GDBusProxy *proxy = use_screencast ? screencast_proxy : remote_desktop_proxy;
       const char *session_type = use_screencast ? "ScreenCast" : "RemoteDesktop";
 
-      dbus_response_t response;
+      dbus_response_t response {};
       g_autofree gchar *expected_request_path = nullptr;
       g_autofree gchar *request_token = nullptr;
       create_request_path(conn, &expected_request_path, &request_token);
@@ -659,7 +659,14 @@ namespace portal {
           out_pipewire_object_serial = SPA_ID_INVALID;
         }
 
-        auto stream = pipewire_streaminfo_t {out_pipewire_node, out_pipewire_object_serial, out_width, out_height, out_pos_x, out_pos_y};
+        auto stream = pipewire_streaminfo_t {
+          .pipewire_node = out_pipewire_node,
+          .pipewire_object_serial = out_pipewire_object_serial,
+          .width = out_width,
+          .height = out_height,
+          .pos_x = out_pos_x,
+          .pos_y = out_pos_y,
+        };
 
         // Try to match the stream to a monitor_name by position/resolution and update stream info
         for (const auto &monitor : wl_monitors) {
@@ -936,11 +943,6 @@ namespace platf {
     if (!pipewire::pipewire_display_t::init_pipewire_and_check_hwdevice_type(hwdevice_type)) {
       BOOST_LOG(error) << "[portalgrab] Could not initialize pipewire-based display with the given hw device type."sv;
       return nullptr;
-    }
-
-    // Drop CAP_SYS_ADMIN, CAP_SYS_NICE and set DUMPABLE flag to allow XDG /root access
-    if (has_elevated_privileges(true)) {
-      drop_elevated_privileges(true);
     }
 
     auto portal = std::make_shared<portal::portal_t>();

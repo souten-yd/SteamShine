@@ -59,8 +59,8 @@ namespace web {
     class NvHttpPairingClientBackend final: public PairingClientBackend {
     public:
       /** @copydoc PairingClientBackend::submit_pin */
-      bool submit_pin(const std::string_view pin, const std::string_view client_name) override {
-        return nvhttp::pin(std::string {pin}, std::string {client_name});
+      bool submit_pin(const std::string_view pairing_id, const std::string_view pin, const std::string_view client_name) override {
+        return nvhttp::pin(std::string {pairing_id}, std::string {pin}, std::string {client_name});
       }
 
       /** @copydoc PairingClientBackend::list_clients */
@@ -531,14 +531,17 @@ namespace web {
   PairingService::PairingService(std::shared_ptr<PairingClientBackend> backend):
       backend_ {backend ? std::move(backend) : default_pairing_client_backend()} {}
 
-  service_result_t PairingService::submit_pin(const std::string_view pin, const std::string_view client_name) const {
+  service_result_t PairingService::submit_pin(const std::string_view pairing_id, const std::string_view pin, const std::string_view client_name) const {
+    if (!nvhttp::is_valid_pairing_id(pairing_id)) {
+      return {false, "invalid_pairing_id", "Select a pending pairing request."};
+    }
     if (!is_valid_pin(pin)) {
       return {false, "invalid_pin", "PIN must contain exactly four digits."};
     }
     if (client_name.empty() || client_name.size() > 128) {
       return {false, "invalid_client_name", "Client name must contain between 1 and 128 characters."};
     }
-    if (!backend_->submit_pin(pin, client_name)) {
+    if (!backend_->submit_pin(pairing_id, pin, client_name)) {
       return {false, "pairing_rejected", "Pairing could not be completed."};
     }
     return {true, "paired", "Pairing completed."};

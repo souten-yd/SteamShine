@@ -21,6 +21,7 @@ namespace safe {
    * @brief Capacity behavior for a bounded message queue.
    */
   enum class queue_overflow_e {
+    reject,  ///< Reject new items while the queue is at capacity.
     clear_pending,  ///< Discard all pending values before accepting the newest value.
     block_producer,  ///< Preserve order by waiting until a consumer makes room.
   };
@@ -419,6 +420,14 @@ namespace safe {
     using status_t = util::optional_t<T>;
 
     /**
+     * @brief Behavior when raise() is called with the queue already at its bound.
+     */
+    enum class overflow_policy_e {
+      drop_oldest,  ///< Clear the queue and accept the new item (current default behavior)
+      reject  ///< Refuse the new item, leaving existing queued items intact
+    };
+
+    /**
      * @brief Construct a bounded blocking queue.
      *
      * @param max_elements Maximum number of queued elements.
@@ -430,7 +439,16 @@ namespace safe {
     }
 
     /**
-     * @brief Notify waiters that a new event value is available.
+     * @brief Construct a queue with the upstream nonblocking overflow policy.
+     * @param max_elements Maximum number of queued elements.
+     * @param overflow Clear pending elements or reject a new element at capacity.
+     */
+    queue_t(std::uint32_t max_elements, overflow_policy_e overflow):
+        queue_t(max_elements, overflow == overflow_policy_e::reject ? queue_overflow_e::reject : queue_overflow_e::clear_pending) {
+    }
+
+    /**
+     * @brief Notify waiters that a new event value may be available.
      *
      * @param args Arguments forwarded to the callable or parser.
      * @return True when the value was accepted before queue shutdown.
@@ -443,7 +461,10 @@ namespace safe {
         return false;
       }
 
-      if (_queue.size() == _max_elements) {
+      if (_queue.size() >= _max_elements) {
+        if (_overflow == queue_overflow_e::reject) {
+          return false;
+        }
         if (_overflow == queue_overflow_e::clear_pending) {
           _queue.clear();
         } else {
@@ -457,7 +478,6 @@ namespace safe {
       }
 
       _queue.emplace_back(std::forward<Args>(args)...);
-
       _cv.notify_all();
       return true;
     }

@@ -240,11 +240,17 @@ namespace pipewire {
 
     ~img_descriptor_t() override {
       reset();
-      if (data) {
+      // Only free buffers this image actually owns. The memory-buffer capture
+      // path points img->data at the PipeWire staging vector (front_buffer),
+      // which is owned by pipewire_t -- deleting it here corrupts the heap.
+      if (data && data_owned) {
         delete[] data;
-        data = nullptr;
       }
+      data = nullptr;
+      data_owned = false;
     }
+
+    bool data_owned = false;  ///< Whether img->data is owned by this image and must be freed.
   };
 
   /**
@@ -336,6 +342,34 @@ namespace pipewire {
      */
     bool is_frame_ready() const {
       return stream_data.frame_ready || !stream_data.pending_dma_bufs.empty();
+    }
+
+    /**
+     * @brief Check and log whether the active session will require Sunshine to perform pacing.
+     *
+     * @param requested_framerate The framerate that we requested.
+     * @param requested_delay The delay corresponding to the requested framerate.
+     * @return True when Sunshine pacing is required.
+     */
+    bool is_pacing_required(AVRational requested_framerate, std::chrono::nanoseconds requested_delay) {
+      AVRational negotiated_rate =
+        {
+          static_cast<int32_t>(stream_data.format.info.raw.max_framerate.num),
+          static_cast<int32_t>(stream_data.format.info.raw.max_framerate.denom)
+      };
+      int rate_comparison = av_cmp_q(negotiated_rate, requested_framerate);
+      bool variable_rate = negotiated_rate.num == 0 && negotiated_rate.den == 1;
+      bool pacing_required = variable_rate || rate_comparison > 0;
+
+      if (!variable_rate && rate_comparison < 0) {
+        BOOST_LOG(warning)
+          << "[pipewire] Sunshine frame pacing: disabled (negotiated rate lower than requested rate)"sv;
+      } else {
+        BOOST_LOG(info) << "[pipewire] Sunshine frame pacing: "sv
+                        << (pacing_required ? std::format("enabled ({}ms)", std::chrono::duration<double, std::milli>(requested_delay).count()) : "disabled (event-driven capture)");
+      }
+
+      return pacing_required;
     }
 
     /**
@@ -562,6 +596,8 @@ namespace pipewire {
         fill_img_metadata(img_descriptor, stream_data.current_memory_metadata);
         img->data = stream_data.front_buffer->data();
         img->row_pitch = stream_data.local_stride;
+        img->pixel_pitch = stream_data.format.info.raw.format == SPA_VIDEO_FORMAT_NV12 ? 1 : 4;
+        img_descriptor->data_owned = false;
       }
 
       pw_thread_loop_unlock(loop);
@@ -605,11 +641,15 @@ namespace pipewire {
       std::array<struct spa_rectangle, 3> sizes;
       const auto max_framerate_range {pipewire_capture::max_framerate_range(refresh_numerator, refresh_denominator)};
       const struct spa_fraction variable_framerate {SPA_FRACTION(0, 1)};
-      const std::array<struct spa_fraction, 3> max_framerates {
+      std::array<struct spa_fraction, 3> max_framerates {
         SPA_FRACTION(max_framerate_range.preferred.numerator, max_framerate_range.preferred.denominator),
         SPA_FRACTION(max_framerate_range.minimum.numerator, max_framerate_range.minimum.denominator),
         SPA_FRACTION(max_framerate_range.maximum.numerator, max_framerate_range.maximum.denominator),
       };
+
+      if (!gamescope_requested_size_) {
+        max_framerates = {SPA_FRACTION(refresh_numerator, refresh_denominator), SPA_FRACTION(0, 1), SPA_FRACTION(1000, 1)};
+      }
 
       sizes[0] = SPA_RECTANGLE(width, height);  // Preferred
       sizes[1] = SPA_RECTANGLE(1, 1);
@@ -620,7 +660,8 @@ namespace pipewire {
       spa_pod_builder_add(b, SPA_FORMAT_mediaSubtype, SPA_POD_Id(SPA_MEDIA_SUBTYPE_raw), 0);
       spa_pod_builder_add(b, SPA_FORMAT_VIDEO_format, SPA_POD_Id(format), 0);
       spa_pod_builder_add(b, SPA_FORMAT_VIDEO_size, SPA_POD_CHOICE_RANGE_Rectangle(&sizes[0], &sizes[1], &sizes[2]), 0);
-      spa_pod_builder_add(b, SPA_FORMAT_VIDEO_framerate, SPA_POD_Fraction(&variable_framerate), 0);
+      const auto &preferred_rate = !gamescope_requested_size_ && !negotiate_maxframerate_ ? max_framerates[0] : variable_framerate;
+      spa_pod_builder_add(b, SPA_FORMAT_VIDEO_framerate, SPA_POD_Fraction(&preferred_rate), 0);
       if (gamescope_requested_size_) {
         spa_pod_builder_add(b, SPA_FORMAT_VIDEO_GAMESCOPE_REQUESTED_SIZE, SPA_POD_Rectangle(&*gamescope_requested_size_), 0);
       }
@@ -857,10 +898,11 @@ namespace pipewire {
       BOOST_LOG(info) << "[pipewire] Color primaries: "sv << d->format.info.raw.color_primaries;
       BOOST_LOG(info) << "[pipewire] Transfer function: "sv << d->format.info.raw.transfer_function;
       if (d->format.info.raw.max_framerate.num == 0 && d->format.info.raw.max_framerate.denom == 1) {
-        BOOST_LOG(info) << "[pipewire] Framerate (from compositor): 0/1 (variable rate capture)";
+        BOOST_LOG(info) << "[pipewire] Compositor negotiated frame rate: 0/1 (variable rate capture)"sv;
       } else {
-        BOOST_LOG(info) << "[pipewire] Framerate (from compositor): "sv << d->format.info.raw.framerate.num << "/"sv << d->format.info.raw.framerate.denom;
-        BOOST_LOG(info) << "[pipewire] Framerate (from compositor, max): "sv << d->format.info.raw.max_framerate.num << "/"sv << d->format.info.raw.max_framerate.denom;
+        BOOST_LOG(info) << "[pipewire] Compositor negotiated frame rate: "sv
+                        << d->format.info.raw.framerate.num << "/"sv << d->format.info.raw.framerate.denom
+                        << ", max: "sv << d->format.info.raw.max_framerate.num << "/"sv << d->format.info.raw.max_framerate.denom;
       }
       video::record_pipewire_negotiated_frame_rate(
         d->format.info.raw.framerate.num,
@@ -1020,6 +1062,14 @@ namespace pipewire {
     }
 
     /**
+     * @brief Report whether the verified producer already supplies bounded frame pacing.
+     * @return True for the Gamescope source; desktop capture negotiates its own pacing.
+     */
+    virtual bool source_controls_pacing() const {
+      return false;
+    }
+
+    /**
      * @brief Check whether encoder probing requires a live producer stream.
      *
      * Desktop portal and KWin capture need live negotiation to discover their
@@ -1043,13 +1093,19 @@ namespace pipewire {
     int init(platf::mem_type_e hwdevice_type, const std::string &display_name, const ::video::config_t &config) {
       // calculate frame interval we should capture at
       delay = ::video::capture_frame_interval(config);
-      const AVRational fps = ::video::framerate_to_rational(config);
+      const auto kwin_version = get_running_kwin_version();
+      const bool variable_desktop_rate = !source_controls_pacing() &&
+                                        (kwin_version.size() < 3 || kwin_version[0] == 5 ||
+                                         (kwin_version[0] == 6 && (kwin_version[1] < 7 || (kwin_version[1] == 7 && kwin_version[2] < 80))));
+      const AVRational fps = variable_desktop_rate ? AVRational {0, 1} : ::video::framerate_to_rational(config);
       framerate_numerator = fps.num;
       framerate_denominator = fps.den;
       if (fps.den != 1) {
-        BOOST_LOG(info) << "[pipewire] Requested frame rate [" << fps.num << "/" << fps.den << ", approx. " << av_q2d(fps) << " fps]";
+        BOOST_LOG(info) << "[pipewire] Requested frame rate: "sv << fps.num << "/"sv << fps.den << ", approx. "sv << av_q2d(fps) << " fps"sv;
+      } else if (fps.num == 0 && fps.den == 1) {
+        BOOST_LOG(info) << "[pipewire] Requested variable frame rate (Sunshine pacing required: "sv << std::chrono::duration<double, std::milli>(delay).count() << "ms)"sv;
       } else {
-        BOOST_LOG(info) << "[pipewire] Requested frame rate [" << fps.num << "fps]";
+        BOOST_LOG(info) << "[pipewire] Requested frame rate: "sv << fps.num << "fps"sv;
       }
       mem_type = hwdevice_type;
 
@@ -1215,6 +1271,7 @@ namespace pipewire {
       img->sequence = 0;
       img->serial = std::numeric_limits<decltype(img->serial)>::max();
       img->data = nullptr;
+      img->data_owned = false;
       std::fill_n(img->sd.fds, 4, -1);
 
       return img;
@@ -1248,6 +1305,11 @@ namespace pipewire {
       }
       const auto source_wait {std::max(1ms, std::chrono::duration_cast<std::chrono::milliseconds>(delay))};
 
+      // Check if pacing is required
+      const bool pacing_required = !source_controls_pacing() && pipewire.is_pacing_required(AVRational {static_cast<int>(framerate_numerator), static_cast<int>(framerate_denominator)}, delay);
+
+      auto next_frame = std::chrono::steady_clock::now();
+      sleep_overshoot_logger.reset();
       while (true) {
         // Check if PipeWire signaled a dead stream
         if (shared_state->stream_dead.exchange(false)) {
@@ -1260,10 +1322,11 @@ namespace pipewire {
           return platf::capture_e::reinit;
         }
 
-        // PipeWire already negotiates the requested maximum frame rate with
-        // the producer. Wait directly on its callback instead of adding a
-        // second independently phased capture clock, which can hold a fresh
-        // frame for almost one complete client interval after reconnect.
+        // Gamescope already bounds producer pacing. Desktop capture may need
+        // pacing when a compositor negotiates a variable or excessive rate.
+        if (pacing_required) {
+          platf::handle_pacing(next_frame, delay, sleep_overshoot_logger);
+        }
         std::shared_ptr<platf::img_t> img_out;
         switch (const auto status = snapshot(pull_free_image_cb, img_out, source_wait, *cursor)) {
           case platf::capture_e::reinit:
@@ -1345,7 +1408,20 @@ namespace pipewire {
      * @return Capture status reported to the streaming pipeline.
      */
     int dummy_img(platf::img_t *img) override {
-      // Empty images are recognized as dummies by the zero sequence number
+      // Software encoders convert the dummy image immediately; provide a valid
+      // (black) buffer instead of leaving img->data null, which makes sws fail
+      // with EINVAL. The buffer is new[]-allocated and marked as owned so the
+      // destructor releases it.
+      if (img->data == nullptr) {
+        const auto w = img->width;
+        const auto h = img->height;
+        if (w > 0 && h > 0) {
+          img->data = new uint8_t[static_cast<size_t>(w) * h * 4]();  // NOSONAR(cpp:S5025) - buffer is owned by the image and freed by img_descriptor_t's destructor
+          static_cast<img_descriptor_t *>(img)->data_owned = true;
+          img->row_pitch = w * 4;
+          img->pixel_pitch = 4;
+        }
+      }
       return 0;
     }
 
@@ -1404,6 +1480,89 @@ namespace pipewire {
       }
 
       return false;
+    }
+
+    /**
+     * Fetch the currently running KWin version (if available from its DBUS support information method)
+     *
+     * @return A vector with 3 elements containing KWin's major.minor.micro version or an empty vector if KWin's version could not be determined
+     */
+    static std::vector<int> get_running_kwin_version() {
+#if !GLIB_CHECK_VERSION(2, 74, 0)
+      // Compatibility for Ubuntu 22.04 (Glib 2.72)
+      constexpr auto G_REGEX_DEFAULT = static_cast<GRegexCompileFlags>(0);
+      constexpr auto G_REGEX_MATCH_DEFAULT = static_cast<GRegexMatchFlags>(0);
+#endif
+      auto conn = g_bus_get_sync(G_BUS_TYPE_SESSION, nullptr, nullptr);
+      std::vector<int> result;
+
+      if (!conn) {
+        return result;
+      }
+
+      auto reply = g_dbus_connection_call_sync(
+        conn,
+        "org.kde.KWin",
+        "/KWin",
+        "org.kde.KWin",
+        "supportInformation",
+        nullptr,
+        G_VARIANT_TYPE("(s)"),
+        G_DBUS_CALL_FLAGS_NONE,
+        -1,
+        nullptr,
+        nullptr
+      );
+
+      if (!reply) {
+        g_clear_object(&conn);
+        return result;
+      }
+
+      g_autofree gchar *support_info = nullptr;
+      g_variant_get(reply, "(s)", &support_info);
+
+      if (!support_info) {
+        g_variant_unref(reply);
+        g_clear_object(&conn);
+        return result;
+      }
+
+      auto *regex = g_regex_new(
+        "KWin version: ([0-9]+)\\.([0-9]+)\\.([0-9]+)",
+        G_REGEX_DEFAULT,
+        G_REGEX_MATCH_DEFAULT,
+        nullptr
+      );
+
+      if (!regex) {
+        g_variant_unref(reply);
+        g_clear_object(&conn);
+        return result;
+      }
+
+      GMatchInfo *match_info = nullptr;
+      g_regex_match(regex, support_info, G_REGEX_MATCH_DEFAULT, &match_info);
+
+      if (g_match_info_matches(match_info)) {
+        g_autofree const gchar *major =
+          g_match_info_fetch(match_info, 1);
+        g_autofree const gchar *minor =
+          g_match_info_fetch(match_info, 2);
+        g_autofree const gchar *micro =
+          g_match_info_fetch(match_info, 3);
+
+        result.emplace_back(std::atoi(major));
+        result.emplace_back(std::atoi(minor));
+        result.emplace_back(std::atoi(micro));
+      }
+
+      g_match_info_free(match_info);
+      g_regex_unref(regex);
+      g_variant_unref(reply);
+      g_clear_object(&conn);
+
+      return result;
     }
 
   private:

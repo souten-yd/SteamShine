@@ -206,11 +206,10 @@ jobs:
             third-party/Simple-Web-Server \
             third-party/build-deps \
             third-party/glad \
-            third-party/inputtino \
+            third-party/libvirtualhid \
             third-party/libdisplaydevice \
             third-party/lizardbyte-common \
             third-party/moonlight-common-c \
-            third-party/nv-codec-headers \
             third-party/plasma-wayland-protocols \
             third-party/tray \
             third-party/wayland-protocols \
@@ -317,7 +316,7 @@ jobs:
           set -euo pipefail
           git config --global --add safe.directory "${GITHUB_WORKSPACE}"
           cd "${GITHUB_WORKSPACE}"
-          git submodule update --init --depth 1 -- third-party/Simple-Web-Server third-party/build-deps third-party/glad third-party/inputtino third-party/libdisplaydevice third-party/lizardbyte-common third-party/moonlight-common-c third-party/nv-codec-headers third-party/plasma-wayland-protocols third-party/tray third-party/wayland-protocols third-party/wlr-protocols
+          git submodule update --init --depth 1 -- third-party/Simple-Web-Server third-party/build-deps third-party/glad third-party/libvirtualhid third-party/libdisplaydevice third-party/lizardbyte-common third-party/moonlight-common-c third-party/plasma-wayland-protocols third-party/tray third-party/wayland-protocols third-party/wlr-protocols
           git -C third-party/build-deps submodule update --init --depth 1 -- third-party/FFmpeg/Vulkan-Headers
           git -C third-party/lizardbyte-common submodule update --init --depth 1 -- third-party/googletest
           git -C third-party/moonlight-common-c submodule update --init --recursive --depth 1

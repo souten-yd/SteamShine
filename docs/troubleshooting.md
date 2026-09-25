@@ -131,7 +131,7 @@ resort suggestion.
 ### Hardware Encoders throttle/drop FPS during high GPU load
 Capture methods (`wlgrab`) or encoders (`nvenc`, `vaapi`) that utilize EGL contexts may exhibit FPS drops
 in conjunction with a Sunshine installation that runs in a sandboxed or reduced permissions state
-(Flatpak, AppImage, or when using Portal capture) due to the lack of active CAP_SYS_NICE process permissions
+(Flatpak, AppImage packages) due to the lack of active CAP_SYS_NICE process permissions
 needed to set up high priority EGL contexts.
 
 To check if you are affected by this issue, look out for this message in your Sunshine log:
@@ -142,12 +142,12 @@ Warning: EGL: context priority set to HIGH but CAP_SYS_NICE capability is missin
 > [!IMPORTANT]
 > Switching to Vulkan encoding should resolve the issue for the majority of configurations, but refer to this
 > table for recommended configurations (especially if Vulkan encoding is not supported on your system):
-> | Desktop Environment | Vulkan Supported? | Recommended Sunshine Install Type | Recommended Capture & Encoder Configuration       |
-> |:--------------------|-------------------|-----------------------------------|--------------------------------------------------:|
-> | KDE Plasma          | Yes               | Any                               | `portal` or `kwin` capture with `vulkan` encoding |
-> | KDE Plasma          | No                | Non-Sandboxed                     | `kwin` capture with `vaapi`/`nvenc` encoding      |
-> | GNOME / other       | Yes               | Any                               | `portal` capture with `vulkan` encoding           |
-> | GNOME / other       | No                | Non-Sandboxed                     | `kms` capture with `vaapi`/`nvenc` encoding       |
+> | Desktop Environment | Vulkan Supported? | Recommended Sunshine Install Type | Recommended Capture & Encoder Configuration              |
+> |:--------------------|-------------------|-----------------------------------|---------------------------------------------------------:|
+> | KDE Plasma          | Yes               | Any                               | `portal` or `kwin` capture with `vulkan` encoding        |
+> | KDE Plasma          | No                | Non-Sandboxed                     | `portal` or `kwin` capture with `vaapi`/`nvenc` encoding |
+> | GNOME / other       | Yes               | Any                               | `portal` capture with `vulkan` encoding                  |
+> | GNOME / other       | No                | Non-Sandboxed                     | `portal` capture with `vaapi`/`nvenc` encoding           |
 
 ### Hardware Encoding fails
 Due to legal concerns, Mesa has disabled hardware decoding and encoding by default.
@@ -170,14 +170,44 @@ If you see the above error in the Sunshine logs, compiling *Mesa* manually may b
 > Other build options are listed in the
 > [meson options](https://gitlab.freedesktop.org/mesa/mesa/-/blob/main/meson_options.txt) file.
 
-### Portal token issues
-Portal capture requires you to manually approve Remote Desktop permissions via an on-screen prompt on the host.
-This creates a portal token which is used to automaticaly reauthorize on subsequent reconnects, but under certain
-circumstances (a Sunshine crash, switching to another desktop environment, or if a monitor hotplug event occurs)
-the portal token may become lost or invalid, necessitating manual re-approval of capture permissions.
+### XDG Portal Token Issues
+Portal capture requires you to approve Remote Desktop permissions using an on-screen prompt on the host. Sunshine saves
+the resulting restore token so the desktop portal can reauthorize capture automatically on subsequent starts. The token
+can become invalid after events such as a Sunshine crash, switching desktop environments, changing portal
+implementations, or connecting and disconnecting monitors.
+
+Reset the token when portal capture previously worked but Sunshine no longer shows the permission prompt, or when the
+log shows that a saved token was loaded before the portal returned no streams. For example:
+
+```txt
+Info: [portalgrab] Loaded portal restore token from disk
+Error: [portalgrab] RemoteDesktop Start: no streams in response
+Warning: [portalgrab] Failed to connect to portal. Cannot enumerate displays, returning empty list.
+```
+
+Do not use this reset for a generic encoder failure unless the log also shows that XDG Portal capture failed.
+
+In the Web UI, open **Troubleshooting** and select **Reset XDG Portal Capture**. Sunshine deletes the saved token and
+restarts. Approve the Remote Desktop prompt and select the display to capture when it appears again.
+
+If the Web UI is inaccessible, stop Sunshine and delete the token manually:
+
+@tabs{
+  @tab{Linux / FreeBSD | ```bash
+    rm "${XDG_CONFIG_HOME:-$HOME/.config}/sunshine/portal_token"
+    ```
+  }
+  @tab{Flatpak | ```bash
+    rm "$HOME/.var/app/dev.lizardbyte.app.Sunshine/config/sunshine/portal_token"
+    ```
+  }
+}
+
+Start Sunshine again, then approve the new Remote Desktop request. If Sunshine uses a custom configuration directory,
+delete the `portal_token` file from that directory instead.
 
 Users of the KDE Plasma desktop can bypass this issue either by switching to `kwin` capture or setting the following
-configuration to enable permanent capture autorization for Sunshine via Portal capture:
+configuration to enable permanent capture authorization for Sunshine via Portal capture:
 ```
 flatpak permission-set kde-authorized remote-desktop dev.lizardbyte.app.Sunshine yes
 ```
@@ -187,6 +217,18 @@ flatpak permission-set kde-authorized remote-desktop dev.lizardbyte.app.Sunshine
 ### Input not working
 After installation, the `udev` rules need to be reloaded. Our post-install script tries to do this for you
 automatically, but if it fails, you may need to restart your system.
+
+Sunshine recreates virtual gamepad device nodes for each streaming session. Manual `chmod` or `setfacl`
+changes therefore disappear when the client reconnects. Confirm that the installed Sunshine rule contains the
+parent-property import and `libvirtualhid/uhid/*` match, then reload it and reapply it to existing gamepad nodes:
+
+```bash
+grep -R -E 'IMPORT\{parent\}="HID_\*"|ENV\{HID_PHYS\}=="libvirtualhid/uhid/\*"' \
+  /etc/udev/rules.d /usr/lib/udev/rules.d /lib/udev/rules.d 2>/dev/null
+sudo udevadm control --reload-rules
+sudo udevadm trigger --subsystem-match=hidraw
+sudo udevadm trigger --subsystem-match=input
+```
 
 If the input is still not working, you may need to add your user to the `input` group.
 
@@ -205,7 +247,7 @@ If needed, you can override it manually in your systemd service file or shell en
 When the seat is not `seat0`, Sunshine appends the seat name to its virtual device names, for example:
 
 - Keyboard passthrough (seat1)
-- Sunshine PS5 (virtual) pad (seat1)
+- Sunshine (libvirtualhid) PS5 Controller (seat1)
 
 Sunshine creates two mouse devices: a relative one and an absolute one.
 
@@ -290,12 +332,49 @@ launchctl load -w /Library/LaunchAgents/org.freedesktop.dbus-session.plist
 ## Windows
 
 ### No gamepad detected
-You must install ViGEmBus to use virtual gamepads. You can install this from the troubleshooting tab of the web UI.
+Sunshine supports two virtual gamepad backends on Windows. You can install the
+[Virtual HID Driver](https://github.com/LizardByte/libvirtualhid/releases/latest) separately as an optional paid upgrade
+for a driver-backed Raw Input keyboard and mouse plus full virtual gamepad support. ViGEmBus is a limited alternative
+for Xbox 360 and DualShock 4 support that has reached end of life. If you use the
+[ViGEmBus fallback](https://github.com/nefarius/ViGEmBus/releases/latest), you must use version 1.17 or newer.
 
-Alternatively, you can manually install it from
-[ViGEmBus releases](https://github.com/nefarius/ViGEmBus/releases/latest). You must use version 1.17 or newer.
+When Virtual HID Driver is used, Sunshine requires version `2026.914.1218.10` or newer.
+
+Virtual HID Driver adds Xbox One, Xbox Series, DualSense, Nintendo Switch Pro, and Generic gamepads, plus advanced
+controller features such as motion, touchpads, LEDs, and adaptive triggers when supported. Unlike the discontinued
+ViGEmBus project, Virtual HID Driver is actively developed and supported by the LizardByte team.
+
+An active paid Virtual HID Driver machine license is required before Sunshine can create driver-backed libvirtualhid
+devices, including gamepads and the Raw Input keyboard and mouse. Use the message on the Web UI home page, the startup
+tray notification, or **Get/Manage License** in the **Virtual HID Driver** tray submenu to open the license section on
+the Troubleshooting page. In **Configuration > Input**, select **All Available Drivers**, only **Virtual HID Driver**, or
+only **ViGEmBus**. Sunshine keeps prompting until this setting is saved, but automatically selects **All Available
+Drivers** when it detects an existing active Virtual HID Driver license. Whenever the Virtual HID Driver license is not
+valid, **All Available Drivers** falls back to a compatible ViGEmBus installation for Xbox 360 and DualShock 4 gamepads
+and to SendInput for keyboard and mouse. Selecting only **ViGEmBus** suppresses Virtual HID Driver startup notifications
+and hides its status and license details from the Troubleshooting page.
 
 After installation, it is recommended to restart your computer.
+
+### Games do not detect keyboard input
+With a compatible Virtual HID Driver and active license, Sunshine sends normal key transitions through a real HID
+keyboard so games using Raw Input can receive them. Unicode text input and keys outside the supported HID keyboard
+page continue to use Windows input injection. When the driver-backed keyboard cannot be created because the driver,
+broker, or license is unavailable, libvirtualhid falls back to SendInput.
+
+Check the Virtual HID Driver version and license sections on the Web UI Troubleshooting page. Sunshine recreates the
+shared keyboard and mouse after a successful license activation, validation, or deactivation, so you do not need to
+restart Sunshine merely to switch between the HID and SendInput paths.
+
+### Games do not detect mouse input
+With a compatible Virtual HID Driver and active license, Sunshine sends relative mouse movement, buttons, and scrolling
+through a real HID device so games using Raw Input can receive them. Absolute positioning still uses Windows input
+injection. When the driver-backed mouse cannot be created, libvirtualhid falls back to SendInput; the Windows cursor may
+still move even though a game that listens only for Raw Input receives nothing.
+
+Check the Virtual HID Driver version and license sections on the Web UI Troubleshooting page even when controller input
+is disabled. The same live refresh used by the keyboard path also switches the mouse between HID and SendInput without
+requiring a Sunshine restart.
 
 ### Permission denied
 Since Sunshine runs as a service on Windows, it may not have the same level of access that your regular user account

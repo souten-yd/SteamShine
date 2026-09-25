@@ -10,6 +10,7 @@
 #include <filesystem>
 #include <functional>
 #include <mutex>
+#include <optional>
 #include <string>
 
 // lib includes
@@ -70,7 +71,7 @@ namespace video {
 }  // namespace video
 
 namespace nvenc {
-  class nvenc_base;
+  class nvenc_encoder;
 }
 
 namespace platf {
@@ -124,6 +125,7 @@ namespace platf {
     rumble_triggers,  ///< Rumble triggers
     set_motion_event_state,  ///< Set motion event state
     set_rgb_led,  ///< Set RGB LED
+    set_player_leds,  ///< Set player indicator LEDs
     set_adaptive_triggers,  ///< Set adaptive triggers
   };
 
@@ -198,6 +200,22 @@ namespace platf {
     }
 
     /**
+     * @brief Create player indicator LED state.
+     *
+     * @param id Identifier for the controller, session, display, or resource.
+     * @param solid Four-bit mask of solid player indicators.
+     * @param flashing Four-bit mask of flashing player indicators.
+     * @return Constructed player indicator LED object.
+     */
+    static gamepad_feedback_msg_t make_player_leds(std::uint16_t id, std::uint8_t solid, std::uint8_t flashing) {
+      gamepad_feedback_msg_t msg;
+      msg.type = gamepad_feedback_e::set_player_leds;
+      msg.id = id;
+      msg.data.player_leds = {solid, flashing};
+      return msg;
+    }
+
+    /**
      * @brief Create adaptive triggers.
      *
      * @param id Identifier for the controller, session, display, or resource.
@@ -221,34 +239,38 @@ namespace platf {
 
     union {
       struct {
-        std::uint16_t lowfreq;
-        std::uint16_t highfreq;
-      } rumble;
+        std::uint16_t lowfreq;  ///< Low-frequency rumble motor intensity.
+        std::uint16_t highfreq;  ///< High-frequency rumble motor intensity.
+      } rumble;  ///< Main rumble-motor payload.
 
       struct {
-        std::uint16_t left_trigger;
-        std::uint16_t right_trigger;
-      } rumble_triggers;
+        std::uint16_t left_trigger;  ///< Left-trigger rumble motor intensity.
+        std::uint16_t right_trigger;  ///< Right-trigger rumble motor intensity.
+      } rumble_triggers;  ///< Trigger-rumble payload.
 
       struct {
-        std::uint16_t report_rate;
-        std::uint8_t motion_type;
-      } motion_event_state;
+        std::uint16_t report_rate;  ///< Requested motion-sensor report rate.
+        std::uint8_t motion_type;  ///< Motion-sensor type to configure.
+      } motion_event_state;  ///< Motion-event configuration payload.
 
       struct {
-        std::uint8_t r;
-        std::uint8_t g;
-        std::uint8_t b;
-      } rgb_led;
+        std::uint8_t r;  ///< Red LED channel intensity.
+        std::uint8_t g;  ///< Green LED channel intensity.
+        std::uint8_t b;  ///< Blue LED channel intensity.
+      } rgb_led;  ///< RGB LED payload.
 
       struct {
-        uint16_t controllerNumber;
-        uint8_t event_flags;
-        uint8_t type_left;
-        uint8_t type_right;
-        std::array<uint8_t, 10> left;
-        std::array<uint8_t, 10> right;
-      } adaptive_triggers;
+        std::uint8_t solid;  ///< Bit mask of solid player indicators.
+        std::uint8_t flashing;  ///< Bit mask of flashing player indicators.
+      } player_leds;  ///< Player-indicator LED payload.
+
+      struct {
+        uint8_t event_flags;  ///< Flags describing which adaptive-trigger data is present.
+        uint8_t type_left;  ///< Left adaptive-trigger effect type.
+        uint8_t type_right;  ///< Right adaptive-trigger effect type.
+        std::array<uint8_t, 10> left;  ///< Left adaptive-trigger effect parameters.
+        std::array<uint8_t, 10> right;  ///< Right adaptive-trigger effect parameters.
+      } adaptive_triggers;  ///< Adaptive-trigger effect payload.
     } data;  ///< Controller feedback payload for the selected feedback type.
   };
 
@@ -276,14 +298,14 @@ namespace platf {
     /**
      * @brief Moonlight speaker order for stereo audio.
      */
-    constexpr std::uint8_t map_stereo[] {
+    constexpr std::array<std::uint8_t, 2> map_stereo {
       FRONT_LEFT,
       FRONT_RIGHT
     };
     /**
      * @brief Moonlight speaker order for 5.1 surround audio.
      */
-    constexpr std::uint8_t map_surround51[] {
+    constexpr std::array<std::uint8_t, 6> map_surround51 {
       FRONT_LEFT,
       FRONT_RIGHT,
       FRONT_CENTER,
@@ -294,7 +316,7 @@ namespace platf {
     /**
      * @brief Moonlight speaker order for 7.1 surround audio.
      */
-    constexpr std::uint8_t map_surround71[] {
+    constexpr std::array<std::uint8_t, 8> map_surround71 {
       FRONT_LEFT,
       FRONT_RIGHT,
       FRONT_CENTER,
@@ -388,9 +410,9 @@ namespace platf {
      */
     constexpr caps_t pen_touch = 0x01;  // Pen and touch events
     /**
-     * @brief Capability bit indicating controller touchpad support.
+     * @brief Capability bit indicating controller touchpad and motion support.
      */
-    constexpr caps_t controller_touch = 0x02;  // Controller touch events
+    constexpr caps_t controller_touch = 0x02;  // Controller touch and motion events
   };  // namespace platform_caps
 
   /**
@@ -669,7 +691,7 @@ namespace platf {
      */
     virtual bool init_encoder(const video::config_t &client_config, const video::sunshine_colorspace_t &colorspace) = 0;
 
-    nvenc::nvenc_base *nvenc = nullptr;  ///< NVENC encoder instance owned by the encode device.
+    nvenc::nvenc_encoder *nvenc = nullptr;  ///< NVENC encoder instance owned by the encode device.
   };
 
   /**
@@ -869,16 +891,21 @@ namespace platf {
   };
 
   /**
+   * @brief Platform-specific input backend context.
+   */
+  struct input_raw_t;
+
+  /**
    * @brief Release a platform input backend created by input().
    *
-   * @param p Pointer passed to the deleter or conversion helper.
+   * @param input Platform input backend to release.
    */
-  void freeInput(void *);
+  void freeInput(input_raw_t *input);
 
   /**
    * @brief Owning pointer for a platform input backend.
    */
-  using input_t = util::safe_ptr<void, freeInput>;
+  using input_t = util::safe_ptr<input_raw_t, &freeInput>;
 
   std::filesystem::path appdata();
 
@@ -974,7 +1001,7 @@ namespace platf {
    *
    * @param name Human-readable name to assign.
    */
-  void set_thread_name(const std::string &name);
+  void set_thread_name(std::string_view name);
 
   void enable_mouse_keys();
 
@@ -1133,14 +1160,21 @@ namespace platf {
    */
   input_t input();
   /**
-   * @brief Get the current mouse position on screen
+   * @brief Get the current mouse position for platform input tests.
+   *
    * @param input The input_t instance to use.
-   * @return Screen coordinates of the mouse.
+   * @return Screen coordinates of the mouse, or `std::nullopt` when the platform cannot observe the cursor.
+   *
+   * @note This helper exists only so tests can observe virtual mouse movement. Production input paths should submit
+   * mouse events through `move_mouse()` or `abs_mouse()` instead of reading the host cursor location.
+   *
    * @examples
-   * auto [x, y] = get_mouse_loc(input);
+   * if (auto location = get_mouse_loc(input)) {
+   *   auto [x, y] = *location;
+   * }
    * @examples_end
    */
-  util::point_t get_mouse_loc(input_t &input);
+  std::optional<util::point_t> get_mouse_loc(input_t &input);
   /**
    * @brief Move mouse using the backend coordinate system.
    *
@@ -1197,7 +1231,7 @@ namespace platf {
    * @param utf8 UTF-8 text submitted by the client.
    * @param size Number of bytes or elements requested.
    */
-  void unicode(input_t &input, char *utf8, int size);
+  void unicode(input_t &input, const char *utf8, int size);
 
   /**
    * @brief Per-client input context allocated by a platform backend.
@@ -1276,6 +1310,15 @@ namespace platf {
    * @return 0 on success.
    */
   int alloc_gamepad(input_t &input, const gamepad_id_t &id, const gamepad_arrival_t &metadata, feedback_queue_t feedback_queue);
+  /**
+   * @brief Rebind an existing virtual gamepad to a resumed client session.
+   *
+   * @param input Platform input backend that owns the virtual gamepad.
+   * @param id Global and client-relative identifiers for the resumed controller.
+   * @param feedback_queue Queue used to return gamepad feedback to the resumed client.
+   * @return 0 when the gamepad exists and was rebound; otherwise -1.
+   */
+  int rebind_gamepad(input_t &input, const gamepad_id_t &id, feedback_queue_t feedback_queue);
   /**
    * @brief Release gamepad resources.
    *

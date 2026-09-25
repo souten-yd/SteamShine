@@ -190,8 +190,7 @@ namespace cuda {
 
       auto hwframe_ctx = (AVHWFramesContext *) hw_frames_ctx->data;
 
-      if (hwframe_ctx->sw_format != AV_PIX_FMT_NV12 &&
-          hwframe_ctx->sw_format != AV_PIX_FMT_YUV444P) {
+      if (hwframe_ctx->sw_format != AV_PIX_FMT_NV12 && hwframe_ctx->sw_format != AV_PIX_FMT_YUV444P) {
         BOOST_LOG(error) << "cuda::cuda_t doesn't support any format other than AV_PIX_FMT_NV12 and AV_PIX_FMT_YUV444P"sv;
         return -1;
       }
@@ -383,7 +382,7 @@ namespace cuda {
 
         fs::path dri_path {"/dev/dri"sv};
         auto device_path = dri_path / file;
-        return platf::open_drm_card_fd(device_path);
+        return platf::kms::privileged_open_drm_card_fd(device_path.c_str());
       }
     } catch (const std::filesystem::filesystem_error &err) {
       BOOST_LOG(error) << "Failed to read sysfs: "sv << err.what();
@@ -469,10 +468,7 @@ namespace cuda {
 
       auto hw_frames_ctx = (AVHWFramesContext *) hw_frames_ctx_buf->data;
 
-      if (hw_frames_ctx->sw_format != AV_PIX_FMT_NV12 &&
-          hw_frames_ctx->sw_format != AV_PIX_FMT_YUV444P &&
-          hw_frames_ctx->sw_format != AV_PIX_FMT_P010LE &&
-          hw_frames_ctx->sw_format != AV_PIX_FMT_YUV444P16LE) {
+      if (hw_frames_ctx->sw_format != AV_PIX_FMT_NV12 && hw_frames_ctx->sw_format != AV_PIX_FMT_YUV444P && hw_frames_ctx->sw_format != AV_PIX_FMT_P010LE && hw_frames_ctx->sw_format != AV_PIX_FMT_YUV444P16LE) {
         BOOST_LOG(error) << "cuda::gl_cuda_vram_t doesn't support any format other than AV_PIX_FMT_NV12, AV_PIX_FMT_P010LE, AV_PIX_FMT_YUV444P and AV_PIX_FMT_YUV444P16LE"sv;
         return -1;
       }
@@ -698,7 +694,7 @@ namespace cuda {
 
   namespace nvfbc {
     static PNVFBCCREATEINSTANCE createInstance {};
-    static NVFBC_API_FUNCTION_LIST func {NVFBC_VERSION};
+    static NVFBC_API_FUNCTION_LIST func {.dwVersion = NVFBC_VERSION};
 
     static constexpr inline NVFBC_BOOL nv_bool(bool b) {
       return b ? NVFBC_TRUE : NVFBC_FALSE;
@@ -822,7 +818,7 @@ namespace cuda {
        * @return Created backend object, or null when creation fails.
        */
       static std::optional<handle_t> make() {
-        NVFBC_CREATE_HANDLE_PARAMS params {NVFBC_CREATE_HANDLE_PARAMS_VER};
+        NVFBC_CREATE_HANDLE_PARAMS params {.dwVersion = NVFBC_CREATE_HANDLE_PARAMS_VER};
 
         // Set privateData to allow NvFBC on consumer NVIDIA GPUs.
         // Based on https://github.com/keylase/nvidia-patch/blob/3193b4b1cea91527bf09ea9b8db5aade6a3f3c0a/win/nvfbcwrp/nvfbcwrp_main.cpp#L23-L25 .
@@ -858,7 +854,7 @@ namespace cuda {
        * @return Status status.
        */
       std::optional<NVFBC_GET_STATUS_PARAMS> status() {
-        NVFBC_GET_STATUS_PARAMS params {NVFBC_GET_STATUS_PARAMS_VER};
+        NVFBC_GET_STATUS_PARAMS params {.dwVersion = NVFBC_GET_STATUS_PARAMS_VER};
 
         auto status = func.nvFBCGetStatus(handle, &params);
         if (status) {
@@ -994,7 +990,7 @@ namespace cuda {
 
         delay = ::video::capture_frame_interval(config);
 
-        capture_params = NVFBC_CREATE_CAPTURE_SESSION_PARAMS {NVFBC_CREATE_CAPTURE_SESSION_PARAMS_VER};
+        capture_params = NVFBC_CREATE_CAPTURE_SESSION_PARAMS {.dwVersion = NVFBC_CREATE_CAPTURE_SESSION_PARAMS_VER};
 
         capture_params.eCaptureType = NVFBC_CAPTURE_SHARED_CUDA;
         capture_params.bDisableAutoModesetRecovery = nv_bool(true);
@@ -1046,17 +1042,7 @@ namespace cuda {
         sleep_overshoot_logger.reset();
 
         while (true) {
-          auto now = std::chrono::steady_clock::now();
-          if (next_frame > now) {
-            std::this_thread::sleep_for(next_frame - now);
-            sleep_overshoot_logger.first_point(next_frame);
-            sleep_overshoot_logger.second_point_now_and_log();
-          }
-
-          next_frame += delay;
-          if (next_frame < now) {  // some major slowdown happened; we couldn't keep up
-            next_frame = now + delay;
-          }
+          platf::handle_pacing(next_frame, delay, sleep_overshoot_logger);
 
           std::shared_ptr<platf::img_t> img_out;
           auto status = snapshot(pull_free_image_cb, img_out, 150ms, *cursor);

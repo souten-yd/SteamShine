@@ -514,3 +514,21 @@ namespace {
     EXPECT_EQ(queue.pop(1s), 3);
   }
 }  // namespace
+
+/** @brief Reconnecting a retained client resumes input without replaying stale events. */
+TEST(InputPacketQueue, ResumesAfterStopWithoutRetainingOldPackets) {
+  input::packet_queue_t queue {2};
+  EXPECT_TRUE(queue.push({1, 2}).accepted);
+  queue.stop();
+  EXPECT_EQ(queue.size(), 0U);
+  EXPECT_FALSE(queue.push({3, 4}).accepted);
+  EXPECT_FALSE(queue.worker_finished());
+  queue.resume();
+  const auto resumed = queue.push({5, 6});
+  EXPECT_TRUE(resumed.accepted);
+  EXPECT_TRUE(resumed.schedule_worker);
+  const auto packet = queue.pop();
+  ASSERT_TRUE(packet);
+  EXPECT_EQ(packet->data, (std::vector<std::uint8_t> {5, 6}));
+  EXPECT_FALSE(queue.worker_finished());
+}

@@ -24,15 +24,16 @@ pkg install -y \
   audio/opus \
   audio/pulseaudio \
   devel/cmake \
+  devel/doxygen \
   devel/evdev-proto \
   devel/git \
   devel/libevdev \
-  devel/libnotify \
   devel/llvm19 \
   devel/ninja \
   devel/pkgconf \
   devel/qt6-base \
   ftp/curl \
+  graphics/graphviz \
   graphics/libdrm \
   graphics/qt6-svg \
   graphics/wayland \
@@ -74,7 +75,17 @@ sudo mv /tmp/sunshine build/sunshine
 ```
 
 ##### CUDA Toolkit
-Sunshine requires CUDA Toolkit for NVFBC capture. There are two caveats to CUDA:
+When building Sunshine for a system with an NVIDIA GPU, install the CUDA Toolkit before configuring or compiling
+Sunshine. CUDA support is selected at compile time and is used for NVFBC capture and direct GPU-memory NVENC encoding.
+This applies to every source build, including builds made through the AUR or for third-party repositories such as
+Omarchy. Installing the CUDA Toolkit after Sunshine was compiled does not enable CUDA support; Sunshine must be rebuilt.
+
+> [!NOTE]
+> Users installing a prebuilt package supplied by LizardByte do not need to install the CUDA Toolkit. This includes the
+> Arch Linux package from LizardByte's [pacman-repo](https://github.com/LizardByte/pacman-repo), which is already built
+> with CUDA support.
+
+There are two caveats to CUDA:
 
 1. The version installed depends on the version of GCC.
 2. The version of CUDA you use will determine compatibility with various GPU generations.
@@ -102,6 +113,8 @@ dependencies=(
   "openssl@3"
   "opus"
   "pkg-config"
+  "qtbase"
+  "qtsvg"
 )
 brew install "${dependencies[@]}"
 ```
@@ -130,6 +143,8 @@ dependencies=(
   "ninja"
   "npm9"
   "pkgconfig"
+  "qt6-qtbase"
+  "qt6-qtsvg"
 )
 sudo port install "${dependencies[@]}"
 ```
@@ -167,27 +182,36 @@ dependencies=(
   "mingw-w64-${TOOLCHAIN}-cmake"
   "mingw-w64-${TOOLCHAIN}-cppwinrt"
   "mingw-w64-${TOOLCHAIN}-curl-winssl"
-  "mingw-w64-${TOOLCHAIN}-doxygen"  # Optional, for docs... better to install official Doxygen
+  "mingw-w64-${TOOLCHAIN}-doxygen"  # Optional, for docs
   "mingw-w64-${TOOLCHAIN}-graphviz"  # Optional, for docs
   "mingw-w64-${TOOLCHAIN}-miniupnpc"
   "mingw-w64-${TOOLCHAIN}-onevpl"
   "mingw-w64-${TOOLCHAIN}-openssl"
   "mingw-w64-${TOOLCHAIN}-opus"
   "mingw-w64-${TOOLCHAIN}-toolchain"
+  "mingw-w64-${TOOLCHAIN}-qt6-static"
 )
 if [[ "${MSYSTEM}" == "UCRT64" ]]; then
   dependencies+=(
     "mingw-w64-${TOOLCHAIN}-MinHook"
-    "mingw-w64-${TOOLCHAIN}-nodejs"
     "mingw-w64-${TOOLCHAIN}-nsis"
   )
 fi
 pacman -S "${dependencies[@]}"
 ```
 
+Static Qt is enabled by default on Windows. Sunshine automatically adds the MSYS2 static Qt prefix at
+`${MINGW_PREFIX}/qt6-static` when that package is installed. If an IDE does not inherit `MINGW_PREFIX`, Sunshine
+derives the same prefix from the selected compiler. If static Qt is installed in a custom location, specify it with
+`-DCMAKE_PREFIX_PATH=/path/to/qt6-static`.
+
+To use dynamic Qt instead, configure with `-DSUNSHINE_USE_STATIC_QT=OFF` and ensure the dynamic Qt package is
+available through the normal toolchain prefix.
+
 To create a WiX installer, you also need to install [.NET](https://dotnet.microsoft.com/download).
 
-For ARM64: To build frontend, you also need to install [Node.JS](https://nodejs.org/en/download)
+To build the frontend, install native [Node.js](https://nodejs.org/en/download) for the target architecture. The
+MSYS2 Node.js package is not supported because its shared runtime cannot load the native binding required by Rolldown.
 
 ### Clone
 Ensure [git](https://git-scm.com) is installed on your system, then clone the repository using the following command:

@@ -4,11 +4,15 @@
  */
 #pragma once
 
+// standard includes
 #include <algorithm>
 #include <fstream>
 #include <regex>
-#include <src/logging.h>
 #include <string>
+#include <string_view>
+
+// local includes
+#include <src/logging.h>
 
 namespace log_checker {
 
@@ -61,8 +65,7 @@ namespace log_checker {
 
     for (std::string line; std::getline(input, line);) {
       line = remove_timestamp_prefix(line);
-      if (line.size() >= end_str.size() &&
-          line.compare(line.size() - end_str.size(), end_str.size(), end_str) == 0) {
+      if (line.size() >= end_str.size() && line.compare(line.size() - end_str.size(), end_str.size(), end_str) == 0) {
         return true;
       }
     }

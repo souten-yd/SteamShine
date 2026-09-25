@@ -54,6 +54,38 @@ option(STEAMSHINE_BUILD_WEB_UI "Build the SteamShine Web UI" ON)
 
 if(SUNSHINE_BUILD_UPSTREAM_WEB_UI)
     find_program(NPM npm REQUIRED)
+    if(WIN32)
+        get_filename_component(NPM_DIRECTORY "${NPM}" DIRECTORY)
+        find_program(NPM_NODE_EXECUTABLE NAMES node node.exe HINTS "${NPM_DIRECTORY}" NO_DEFAULT_PATH NO_CACHE REQUIRED)
+        string(CONCAT NPM_NODE_GNU_BINDING_CHECK
+                "process.arch === 'x64' && "
+                "(process.config.variables.shlib_suffix === 'dll.a' || "
+                "process.config.variables.node_target_type === 'shared_library')")
+        execute_process(
+                COMMAND "${NPM_NODE_EXECUTABLE}" -p "${NPM_NODE_GNU_BINDING_CHECK}"
+                OUTPUT_VARIABLE NPM_NODE_USES_GNU_BINDING
+                OUTPUT_STRIP_TRAILING_WHITESPACE)
+
+        if(NPM_NODE_USES_GNU_BINDING STREQUAL "true")
+            find_program(NATIVE_NPM NAMES npm.cmd npm HINTS "$ENV{ProgramFiles}/nodejs" NO_DEFAULT_PATH NO_CACHE)
+            if(NOT NATIVE_NPM)
+                message(FATAL_ERROR
+                        "The MSYS2 Node.js package is incompatible with Rolldown. "
+                        "Install native Windows Node.js or set NPM to its npm.cmd path.")
+            endif()
+
+            set(NPM "${NATIVE_NPM}" CACHE FILEPATH "Path to the npm executable" FORCE)
+            get_filename_component(NPM_DIRECTORY "${NPM}" DIRECTORY)
+            message(STATUS "MSYS2 Node.js is incompatible with Rolldown; using native npm: ${NPM}")
+        endif()
+
+        set(NPM_COMMAND cmd /C)
+        set(NPM_PATH "PATH=${NPM_DIRECTORY};$ENV{PATH}")
+    else()
+        set(NPM_COMMAND)
+        set(NPM_PATH "PATH=$ENV{PATH}")
+    endif()
+
     set(NPM_INSTALL_FLAGS --ignore-scripts)
     if (NPM_OFFLINE)
         list(APPEND NPM_INSTALL_FLAGS --offline)
@@ -67,7 +99,7 @@ if(SUNSHINE_BUILD_UPSTREAM_WEB_UI)
             WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
             COMMENT "Installing upstream Web UI NPM dependencies"
             COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_BINARY_DIR}/web-ui"
-            COMMAND "$<$<BOOL:${WIN32}>:cmd;/C>" "${NPM}" ci ${NPM_INSTALL_FLAGS}
+            COMMAND "${CMAKE_COMMAND}" -E env "${NPM_PATH}" ${NPM_COMMAND} "${NPM}" ci ${NPM_INSTALL_FLAGS}
             COMMAND "${CMAKE_COMMAND}" -E touch "${SUNSHINE_WEB_NPM_STAMP}"
             DEPENDS "${CMAKE_SOURCE_DIR}/package.json" "${CMAKE_SOURCE_DIR}/package-lock.json"
             COMMAND_EXPAND_LISTS
@@ -81,7 +113,7 @@ if(SUNSHINE_BUILD_UPSTREAM_WEB_UI)
             OUTPUT "${SUNSHINE_WEB_MANIFEST}"
             WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
             COMMENT "Building the upstream Sunshine Web UI artifact"
-            COMMAND "${CMAKE_COMMAND}" -E env "SUNSHINE_BUILD_HOMEBREW=${NPM_BUILD_HOMEBREW}" "SUNSHINE_SOURCE_ASSETS_DIR=${NPM_SOURCE_ASSETS_DIR}" "SUNSHINE_ASSETS_DIR=${NPM_ASSETS_DIR}" "$<$<BOOL:${WIN32}>:cmd;/C>" "${NPM}" run build-clean  # cmake-lint: disable=C0301
+            COMMAND "${CMAKE_COMMAND}" -E env "${NPM_PATH}" "SUNSHINE_BUILD_HOMEBREW=${NPM_BUILD_HOMEBREW}" "SUNSHINE_SOURCE_ASSETS_DIR=${NPM_SOURCE_ASSETS_DIR}" "SUNSHINE_ASSETS_DIR=${NPM_ASSETS_DIR}" ${NPM_COMMAND} "${NPM}" run build-clean  # cmake-lint: disable=C0301
             DEPENDS "${SUNSHINE_WEB_NPM_STAMP}" "${CMAKE_SOURCE_DIR}/vite.config.js" ${SUNSHINE_WEB_UI_SOURCES}
             COMMAND_EXPAND_LISTS
             VERBATIM)
@@ -144,6 +176,7 @@ string(APPEND VIGEM_COMPILE_FLAGS "-Wno-misleading-indentation ")
 string(APPEND VIGEM_COMPILE_FLAGS "-Wno-class-memaccess ")
 string(APPEND VIGEM_COMPILE_FLAGS "-Wno-unused-function ")
 string(APPEND VIGEM_COMPILE_FLAGS "-Wno-unused-variable ")
+string(APPEND VIGEM_COMPILE_FLAGS "-Wno-missing-field-initializers ")
 set_source_files_properties("${CMAKE_SOURCE_DIR}/third-party/ViGEmClient/src/ViGEmClient.cpp"
         DIRECTORY "${CMAKE_SOURCE_DIR}" "${TEST_DIR}"
         PROPERTIES

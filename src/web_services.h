@@ -198,11 +198,12 @@ namespace web {
     /**
      * @brief Submit a validated PIN for the active Moonlight pairing request.
      *
+     * @param pairing_id Identifier of the pending request explicitly selected by the user.
      * @param pin Four digit PIN supplied by the browser.
      * @param client_name Friendly client name supplied by the browser.
      * @return Non-secret pairing result.
      */
-    service_result_t submit_pin(std::string_view pin, std::string_view client_name) const;
+    service_result_t submit_pin(std::string_view pairing_id, std::string_view pin, std::string_view client_name) const;
 
   private:
     std::shared_ptr<class PairingClientBackend> backend_;  ///< Shared paired-client backend.
@@ -224,11 +225,12 @@ namespace web {
     /**
      * @brief Submit a PIN for the pending pairing operation.
      *
+     * @param pairing_id Identifier of the pending request explicitly selected by the user.
      * @param pin Four-digit Moonlight PIN.
      * @param client_name Friendly paired-client name.
      * @return True when pairing completed.
      */
-    virtual bool submit_pin(std::string_view pin, std::string_view client_name) = 0;
+    virtual bool submit_pin(std::string_view pairing_id, std::string_view pin, std::string_view client_name) = 0;
 
     /**
      * @brief Return paired clients in Sunshine's existing JSON representation.

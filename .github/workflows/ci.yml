@@ -34,7 +34,7 @@ jobs:
 
       - name: Release Setup
         id: release-setup
-        uses: LizardByte/actions/actions/release_setup@a46850981292c4bbc0c41715f286ad95adaaaf4a  # v2026.625.20301
+        uses: LizardByte/actions/actions/release_setup@39c468549cfb87ccb917e5e5342e18abc926dc48  # v2026.909.30231
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
 
@@ -125,9 +125,19 @@ jobs:
       release_commit: ${{ needs.release-setup.outputs.release_commit }}
       release_version: ${{ needs.release-setup.outputs.release_version }}
 
+  build-alpine:
+    name: Alpine
+    needs: release-setup
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ci-alpine.yml
+    with:
+      release_commit: ${{ needs.release-setup.outputs.release_commit }}
+      release_version: ${{ needs.release-setup.outputs.release_version }}
+
   build-linux-copr:
     name: Linux Copr
-    if: github.event_name != 'push'  # releases are handled directly in ci-copr.yml
+    if: github.event_name != 'push'  # releases are handled directly in ci-release.yml
     needs: release-setup
     permissions:
       contents: write  # needed to update releases
@@ -166,6 +176,12 @@ jobs:
       AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
       AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
 
+  test-powershell:
+    name: PowerShell
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ci-powershell.yml
+
   bundle-analysis:
     name: Bundle Analysis
     needs: release-setup
@@ -185,10 +201,12 @@ jobs:
       - build-freebsd
       - build-linux
       - build-archlinux
+      - build-alpine
       - build-linux-flatpak
       - build-macos
       - build-homebrew
       - build-windows
+      - test-powershell
     permissions:
       contents: read
     runs-on: ubuntu-latest
@@ -198,68 +216,46 @@ jobs:
         include:
           - name: FreeBSD-amd64
             coverage: true
-            pr: true
-          - name: FreeBSD-aarch64
+          - name: Linux-AppImage-aarch64
             coverage: true
-            pr: false
-          - name: Linux-AppImage
+          - name: Linux-AppImage-x86_64
             coverage: true
-            pr: true
           - name: Archlinux
             coverage: true
-            pr: true
+          - name: Alpine-x86_64
+            coverage: true
+          - name: Alpine-aarch64
+            coverage: true
           - name: macOS-arm64
             coverage: true
-            pr: true
           - name: macOS-x86_64
             coverage: true
-            pr: true
-          - name: Homebrew-macos-14
-            coverage: true
-            coverage_file: coverage.lcov
-            pr: true
           - name: Homebrew-macos-15
             coverage: true
             coverage_file: coverage.lcov
-            pr: true
           - name: Homebrew-macos-26
             coverage: true
             coverage_file: coverage.lcov
-            pr: true
           - name: Homebrew-ubuntu-24.04
             coverage: true
-            pr: true
           - name: Windows-AMD64
             coverage: true
-            pr: true
           - name: Windows-ARM64
             coverage: true
-            pr: true
+          - name: PowerShell
+            coverage: true
     steps:
-      - name: Should run
-        id: should_run
-        run: |
-          should_run="false"
-          if [ "${GITHUB_EVENT_NAME}" != "pull_request" ] || [ ${{ matrix.pr }} == "true" ]; then
-            should_run="true"
-          fi
-          echo "SHOULD_RUN=${should_run}" >> "${GITHUB_OUTPUT}"
-
       - name: Checkout
-        if: steps.should_run.outputs.SHOULD_RUN == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Download coverage artifact
-        if: steps.should_run.outputs.SHOULD_RUN == 'true'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
         with:
           name: coverage-${{ matrix.name }}
           path: _coverage
 
       - name: Upload test coverage
-        if: |
-          steps.should_run.outputs.SHOULD_RUN == 'true'  &&
-          matrix.coverage != false
+        if: matrix.coverage != false
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f  # v7.0.0
         with:
           disable_search: true
@@ -271,7 +267,6 @@ jobs:
           verbose: true
 
       - name: Upload test results
-        if: steps.should_run.outputs.SHOULD_RUN == 'true'
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f  # v7.0.0
         with:
           disable_search: true
@@ -290,6 +285,7 @@ jobs:
     needs:
       - release-setup
       - build-archlinux
+      - build-alpine
       - build-docker
       - build-freebsd
       - build-homebrew
@@ -312,7 +308,7 @@ jobs:
         run: ls -l artifacts
 
       - name: Create/Update GitHub Release
-        uses: LizardByte/actions/actions/release_create@a46850981292c4bbc0c41715f286ad95adaaaf4a  # v2026.625.20301
+        uses: LizardByte/actions/actions/release_create@39c468549cfb87ccb917e5e5342e18abc926dc48  # v2026.909.30231
         with:
           allowUpdates: false
           body: ${{ needs.release-setup.outputs.release_body }}

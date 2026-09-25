@@ -1,12 +1,17 @@
-cmake_minimum_required(VERSION 3.20)
+cmake_minimum_required(VERSION 3.24)
 # `CMAKE_CUDA_ARCHITECTURES` requires 3.18
 # `set_source_files_properties` requires 3.18
 # `cmake_path(CONVERT ... TO_NATIVE_PATH_LIST ...)` requires 3.20
+# `third-party/libvirtualhid` requires 3.24
 # todo - set this conditionally
 
 project(Sunshine VERSION 0.0.0
         DESCRIPTION "Self-hosted game stream host for Moonlight"
         HOMEPAGE_URL "https://app.lizardbyte.dev/Sunshine")
+
+# Minimum separately installed Virtual HID Driver version supported by this build.
+set(LIBVIRTUALHID_MINIMUM_VERSION "2026.914.1218.10")
+list(APPEND SUNSHINE_DEFINITIONS LIBVIRTUALHID_MINIMUM_VERSION="${LIBVIRTUALHID_MINIMUM_VERSION}")
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -38,6 +43,10 @@ endif()
 # set the module path, used for includes
 set(CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
 
+# CPM
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/cpm/CPM.cmake)
+CPMUsePackageLock(package-lock.cmake)
+
 # export compile_commands.json
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
@@ -46,6 +55,7 @@ include(${CMAKE_MODULE_PATH}/prep/build_version.cmake)
 
 # cmake build flags
 include(${CMAKE_MODULE_PATH}/prep/options.cmake)
+include(${CMAKE_MODULE_PATH}/prep/static_qt.cmake)
 
 # initial prep
 include(${CMAKE_MODULE_PATH}/prep/init.cmake)
@@ -57,6 +67,11 @@ include(${CMAKE_MODULE_PATH}/prep/special_package_configuration.cmake)
 if(${END_BUILD})
     return()
 endif()
+
+# Build-deps owns the dependency versions shared with its FFmpeg builds.
+# Include its lock only for full builds so manifest-only configurations do not
+# require the build-deps submodule.
+include(${CMAKE_CURRENT_SOURCE_DIR}/third-party/build-deps/package-lock.cmake)
 
 # project constants
 include(${CMAKE_MODULE_PATH}/prep/constants.cmake)

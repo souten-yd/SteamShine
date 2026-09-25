@@ -12,6 +12,8 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <span>
+#include <string_view>
 #include <vector>
 
 // local includes
@@ -94,6 +96,9 @@ namespace input {
      * @brief Stop accepting packets, discard pending input, and wake producers.
      */
     void stop();
+
+    /** @brief Resume accepting packets after the retained client reconnects. */
+    void resume();
 
     /**
      * @brief Return the current number of retained packets.
@@ -188,6 +193,21 @@ namespace input {
   void reset(std::shared_ptr<input_t> &input);
 
   /**
+   * @brief Destroy every retained virtual gamepad session.
+   *
+   * Retained gamepads survive a paused transport connection so they can be reused on resume. Call this when the
+   * streamed application or all streaming sessions are explicitly terminated.
+   */
+  void terminate_gamepads();
+
+  /**
+   * @brief Destroy virtual gamepads retained for one paired client.
+   *
+   * @param session_id Stable paired-client identity used by alloc().
+   */
+  void terminate_gamepads(std::string_view session_id);
+
+  /**
    * @brief Queue a raw input message for platform passthrough.
    */
   void passthrough(std::shared_ptr<input_t> &input, std::vector<std::uint8_t> &&input_data);
@@ -207,12 +227,108 @@ namespace input {
   bool probe_gamepads();
 
   /**
+   * @brief Recreate shared libvirtualhid keyboard and mouse devices after a license-state change.
+   *
+   * The work is serialized with streamed input so both backends can switch
+   * safely between the Windows HID and SendInput paths.
+   */
+  void refresh_virtual_input();
+
+  /**
    * @brief Allocate and initialize platform input state for a stream.
    *
    * @param mail Mailbox used to exchange messages with worker threads.
+   * @param session_id Stable paired-client identity shared by launch and resume connections.
    * @return Shared input state bound to the stream mailbox.
    */
-  std::shared_ptr<input_t> alloc(safe::mail_t mail);
+  std::shared_ptr<input_t> alloc(safe::mail_t mail, std::string session_id);
+
+#ifdef SUNSHINE_TESTS
+  namespace testing {
+    /**
+     * @brief Replace the global platform input backend for a unit test.
+     *
+     * @param input Test-owned platform input backend.
+     */
+    void set_platform_input(platf::input_t input);
+
+    /**
+     * @brief Allocate a gamepad directly in retained input state for a unit test.
+     *
+     * @param input Retained input state.
+     * @param client_index Client-relative controller index.
+     * @param metadata Client-reported controller metadata.
+     * @return Assigned global gamepad slot, or -1 on failure.
+     */
+    int alloc_gamepad(std::shared_ptr<input_t> &input, std::uint8_t client_index, const platf::gamepad_arrival_t &metadata);
+
+    /**
+     * @brief Return the global gamepad slot stored for a test controller.
+     *
+     * @param input Retained input state.
+     * @param client_index Client-relative controller index.
+     * @return Assigned global gamepad slot, or -1 when unallocated.
+     */
+    int gamepad_id(const std::shared_ptr<input_t> &input, std::uint8_t client_index);
+
+    /**
+     * @brief Keyboard event Sunshine emitted toward the platform backend.
+     */
+    struct keyboard_event_t {
+      std::uint16_t key_code;  ///< Platform keycode after the configured keybinding remap.
+      bool release;  ///< Whether the event releases the key.
+      std::uint8_t flags;  ///< Bit flags carried by the client keyboard packet.
+    };
+
+    /**
+     * @brief Redirect keyboard output away from the host operating system.
+     *
+     * Tests must install a sink before emitting keys, otherwise the events are typed into the
+     * machine running the test suite.
+     *
+     * @param sink Recorder invoked in place of platf::keyboard_update, or empty to restore
+     *             delivery to the platform backend.
+     */
+    void set_keyboard_sink(std::function<void(const keyboard_event_t &)> sink);
+
+    /**
+     * @brief Process one client keyboard packet on the calling thread.
+     *
+     * @param input Retained input state.
+     * @param key_code Windows virtual-key code sent by the client.
+     * @param modifiers Client modifier bitmask carried by the packet.
+     * @param flags Bit flags carried by the client keyboard packet.
+     * @param release Whether the packet releases the key.
+     */
+    void send_keyboard_packet(std::shared_ptr<input_t> &input, std::uint16_t key_code, std::uint8_t modifiers, std::uint8_t flags, bool release);
+
+    /**
+     * @brief Forget every key Sunshine tracks as pressed and cancel any pending key repeat.
+     */
+    void reset_keyboard_state();
+
+    /**
+     * @brief Release every key Sunshine tracks as pressed, as a disconnect does.
+     */
+    void release_held_keys();
+
+    /**
+     * @brief Validate raw protocol input bytes for a unit test.
+     *
+     * @param packet Raw packet bytes.
+     * @return True when the packet is safe for typed processing.
+     */
+    bool is_valid_input_packet(std::span<const std::uint8_t> packet);
+
+    /**
+     * @brief Return the number of validated packets waiting in a test input queue.
+     *
+     * @param input Shared stream input state.
+     * @return Number of queued packets, or zero for an empty input pointer.
+     */
+    std::size_t queued_input_packet_count(const std::shared_ptr<input_t> &input);
+  }  // namespace testing
+#endif
 
   /**
    * @brief Touchscreen coordinate bounds used to scale absolute input.
