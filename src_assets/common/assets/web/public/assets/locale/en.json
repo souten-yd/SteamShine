@@ -500,7 +500,6 @@
     "upstream_web_ui_enabled_desc": "Keep the upstream Sunshine Web UI available during migration and recovery.",
     "upstream_web_ui_visible": "Show upstream Sunshine Web UI route",
     "upstream_web_ui_visible_desc": "Expose the upstream Sunshine compatibility route when its Web UI is enabled.",
-    "touchpad_as_ds4": "Emulate a DS4 gamepad if the client gamepad reports a touchpad is present",
     "touchpad_as_ds4": "Emulate a PlayStation-style gamepad if the client gamepad reports a touchpad is present",
     "touchpad_as_ds4_desc": "If disabled, touchpad presence will not be taken into account during gamepad type selection.",
     "upnp": "UPnP",

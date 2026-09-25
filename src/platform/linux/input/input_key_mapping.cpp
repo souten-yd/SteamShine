@@ -3,6 +3,7 @@
  * @brief Translate Moonlight key codes for Gamescope EIS delivery.
  */
 #include "input_key_mapping.h"
+
 #include <linux/input-event-codes.h>
 #include <map>
 

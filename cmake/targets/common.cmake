@@ -114,9 +114,17 @@ if(SUNSHINE_BUILD_UPSTREAM_WEB_UI)
             WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
             COMMENT "Building the upstream Sunshine Web UI artifact"
             COMMAND "${CMAKE_COMMAND}" -E env "${NPM_PATH}" "SUNSHINE_BUILD_HOMEBREW=${NPM_BUILD_HOMEBREW}" "SUNSHINE_SOURCE_ASSETS_DIR=${NPM_SOURCE_ASSETS_DIR}" "SUNSHINE_ASSETS_DIR=${NPM_ASSETS_DIR}" ${NPM_COMMAND} "${NPM}" run build-clean  # cmake-lint: disable=C0301
-            DEPENDS "${SUNSHINE_WEB_NPM_STAMP}" "${CMAKE_SOURCE_DIR}/vite.config.js" ${SUNSHINE_WEB_UI_SOURCES}
+            # Vite empties the output directory, including configure-time tray icons.
+            COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${CMAKE_SOURCE_DIR}/sunshine.svg" "${CMAKE_BINARY_DIR}/assets/web/images/logo-sunshine.svg"
+            DEPENDS "${SUNSHINE_WEB_NPM_STAMP}" "${CMAKE_SOURCE_DIR}/vite.config.js" "${CMAKE_SOURCE_DIR}/sunshine.svg" ${SUNSHINE_WEB_UI_SOURCES}
             COMMAND_EXPAND_LISTS
             VERBATIM)
+    if(WIN32)
+        add_custom_command(
+                OUTPUT "${SUNSHINE_WEB_MANIFEST}" APPEND
+                COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${CMAKE_SOURCE_DIR}/third-party/libvirtualhid/libvirtualhid.svg" "${CMAKE_BINARY_DIR}/assets/web/images/logo-libvirtualhid.svg"
+                DEPENDS "${CMAKE_SOURCE_DIR}/third-party/libvirtualhid/libvirtualhid.svg")
+    endif()
     add_custom_target(web-ui ALL DEPENDS "${SUNSHINE_WEB_MANIFEST}")
 endif()
 

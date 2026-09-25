@@ -114,6 +114,8 @@ namespace {
 
       ASSERT_NE(context_->runtime, nullptr);
       ASSERT_NE(context_->keyboard, nullptr);
+      // Desktop mouse creation is explicit; Gamescope sessions must not create a global mouse.
+      context_->refresh_mouse();
       ASSERT_NE(context_->mouse, nullptr);
       ASSERT_NE(client_->touch, nullptr);
       ASSERT_NE(client_->pen, nullptr);
@@ -873,11 +875,11 @@ TEST_F(VirtualHidDeviceTest, PlatformWrappersForwardToVirtualHidContext) {
   ASSERT_TRUE(platform_input);
   auto &platform_context = platf::virtualhid::get_input_context(platform_input);
   platform_context = platf::virtualhid::input_context_t {lvh::BackendKind::fake};
-  ASSERT_NE(platform_context.mouse, nullptr);
   ASSERT_NE(platform_context.keyboard, nullptr);
 
   const platf::touch_port_t viewport {0, 0, 1280, 720, 1280, 720};
   platf::move_mouse(platform_input, 2, 3);
+  ASSERT_NE(platform_context.mouse, nullptr);
   EXPECT_EQ(platform_context.mouse->last_submitted_event().kind, lvh::MouseEventKind::relative_motion);
   platf::abs_mouse(platform_input, viewport, 40.0F, 50.0F);
   EXPECT_EQ(platform_context.mouse->last_submitted_event().kind, lvh::MouseEventKind::absolute_motion);
@@ -947,3 +949,16 @@ TEST_F(VirtualHidDeviceTest, PlatformWrappersForwardToVirtualHidContext) {
   platf::pen_update(platform_client.get(), viewport, {LI_TOUCH_EVENT_HOVER, LI_TOOL_TYPE_PEN, 0, LI_TILT_UNKNOWN, LI_ROT_UNKNOWN, 0.25F, 0.5F, 0.5F, 0.0F, 0.0F});
   EXPECT_EQ(platform_client_context.pen->last_submitted_tool().tool, lvh::PenToolType::pen);
 }
+
+#if defined(__linux__) || defined(__FreeBSD__)
+/** @brief Linux defers the desktop mouse until an event selects the desktop route. */
+TEST(VirtualHidGamescopeRoutingTest, DefersDesktopMouseUntilDesktopInput) {
+  platf::virtualhid::input_context_t context {lvh::BackendKind::fake};
+  EXPECT_EQ(context.mouse, nullptr);
+  EXPECT_FALSE(context.desktop_mouse_initialized);
+  platf::virtualhid::move_mouse(context, 2, 1);
+  ASSERT_NE(context.mouse, nullptr);
+  EXPECT_TRUE(context.desktop_mouse_initialized);
+  EXPECT_TRUE(context.mouse->is_open());
+}
+#endif
