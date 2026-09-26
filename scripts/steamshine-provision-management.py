@@ -15,6 +15,7 @@ import tempfile
 HELPERS = {
     "steamshine-runtime-helper": "steamshine-runtime-helper.sh",
     "steamshine-decky-helper": "steamshine-decky-helper.sh",
+    "steamshine-storage-helper": "steamshine-storage-helper.py",
 }
 DESTINATION = Path("/var/lib/steamshine/helpers")
 POLICY = Path("/etc/sudoers.d/steamshine-web-management")
@@ -27,8 +28,10 @@ def policy_for(username: str) -> str:
         raise ValueError("A non-root local user is required.")
     runtime = str(DESTINATION / "steamshine-runtime-helper")
     decky = str(DESTINATION / "steamshine-decky-helper")
+    storage = str(DESTINATION / "steamshine-storage-helper")
     operations = [f"{runtime} {action}" for action in ("authorize", "probe-gpu", "apply-profile *")]
     operations += [f"{decky} {action}" for action in ("authorize", "install", "update", "uninstall", "start", "configure-input")]
+    operations += [f"{storage} {action}" for action in ("authorize", "status", "remember", "restore *")]
     return f"Cmnd_Alias STEAMSHINE_WEB_MANAGEMENT = {', '.join(operations)}\nDefaults!STEAMSHINE_WEB_MANAGEMENT !authenticate\n{username} ALL=(root) NOPASSWD: STEAMSHINE_WEB_MANAGEMENT\n"
 
 
@@ -78,6 +81,11 @@ def provision() -> None:
         install_file(DESTINATION / name, payload, 0o755)
     install_file(POLICY, policy.encode(), 0o440)
     install_file(KEEP, (str(POLICY) + "\n").encode(), 0o644)
+    # Saving a recovery copy of mount settings is best effort; failing to read
+    # the current mounts must not block GPU and Decky authorization.
+    remembered = subprocess.run([str(DESTINATION / "steamshine-storage-helper"), "remember"], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env={"PATH": "/usr/bin:/usr/sbin", "SUDO_USER": caller})
+    if remembered.returncode != 0:
+        print("Mount settings were not saved; they can be saved later from the Addons page.")
 
 
 def main() -> int:

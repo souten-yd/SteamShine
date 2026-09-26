@@ -358,6 +358,54 @@ try {
   }
   securityResults.addons_status = deckyStatus.status;
 
+  /** Verify real cache/storage APIs and reject mutations before any host operation. */
+  const storageSecurity = await steamshinePage.evaluate(async () => {
+    const session = await (await fetch('/api/steamshine/v1/session')).json();
+    const headers = { 'Content-Type': 'application/json', 'X-SteamShine-CSRF-Token': session.csrf_token };
+    const results = {};
+    for (const feature of ['steam-cache', 'storage']) {
+      const response = await fetch(`/api/steamshine/v1/addons/${feature}`);
+      results[feature] = { status: response.status, body: await response.json() };
+    }
+    for (const path of ['/system/authorize', '/addons/storage/action', '/addons/steam-cache/configure']) {
+      const response = await fetch(`/api/steamshine/v1${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+      results[`csrf:${path}`] = response.status;
+    }
+    const invalid = await fetch('/api/steamshine/v1/addons/storage/action', { method: 'POST', headers, body: JSON.stringify({ action: 'restore', uuid: '/dev/sda' }) });
+    results.invalid_uuid = invalid.status;
+    const malformed = await fetch('/api/steamshine/v1/system/authorize', { method: 'POST', headers, body: '{"password":"fixture-private-marker",' });
+    results.malformed_password = malformed.status;
+    results.password_reflected = (await malformed.text()).includes('fixture-private-marker');
+    return results;
+  });
+  if (storageSecurity['steam-cache'].status !== 200 || !Array.isArray(storageSecurity['steam-cache'].body.libraries)
+    || storageSecurity.storage.status !== 200 || !Array.isArray(storageSecurity.storage.body.volumes)
+    || Object.entries(storageSecurity).some(([key, value]) => key.startsWith('csrf:') && value !== 400)
+    || storageSecurity.invalid_uuid !== 400 || storageSecurity.malformed_password !== 400 || storageSecurity.password_reflected) {
+    throw new Error(`Storage/authorization API validation failed: ${JSON.stringify(storageSecurity)}`);
+  }
+  securityResults.storage_management = storageSecurity;
+
+  /** Allow focused management validation without exercising unrelated capture hardware. */
+  if (process.env.STEAMSHINE_BROWSER_SCOPE === 'addons') {
+    const serviceLog = await readFile(logFile, 'utf8');
+    if (serviceLog.includes('fixture-private-marker') || serviceLog.includes('web-e2e-password')) {
+      throw new Error('Management API leaked a credential into the service log.');
+    }
+    if (consoleErrors.length || failedRequests.length) {
+      throw new Error(`Management browser errors: ${consoleErrors.join('; ')}; ${failedRequests.join('; ')}`);
+    }
+    await steamshinePage.screenshot({ path: join(reportDirectory, 'addons-api.png'), fullPage: true });
+    await writeFile(join(reportDirectory, 'addons-api-report.json'), JSON.stringify({
+      scope: 'addons', browser: browserVersion, status: 'passed',
+      gpu_profile_editor: 'passed', responsive_viewports: responsiveViewports,
+      security: securityResults, secrets_absent_from_service_log: true,
+    }, null, 2) + '\n');
+    await cleanup();
+    console.log('PASS: real Addon/cache/storage APIs, GPU editor, CSRF/UUID/secret protection, and responsive UI.');
+    process.exit(0);
+  }
+
   /** Keep destructive and recovery controls discoverable at phone width. */
   await steamshinePage.setViewportSize({ width: 320, height: 700 });
   const diagnosticsMobileResponse = await steamshinePage.goto(`${baseUrl}/steamshine/diagnostics`, { waitUntil: 'domcontentloaded' });

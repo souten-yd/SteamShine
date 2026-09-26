@@ -121,6 +121,49 @@ namespace steamshine_addons {
   nlohmann::json authorize_management(std::string_view password);
 
   /**
+   * @brief Build shell-free arguments for the unprivileged Steam cache helper.
+   * @param helper_path Packaged helper selected by the server.
+   * @param library_id Empty for status, or a 24-character lowercase hexadecimal library identifier.
+   * @return Fixed arguments, or no value when the identifier is invalid.
+   */
+  std::optional<std::vector<std::string>> steam_cache_helper_arguments(std::string_view helper_path, std::string_view library_id = {});
+
+  /**
+   * @brief Inspect Steam library cache locations without changing Steam or stored data.
+   * @return JSON status including disconnected libraries and existing cache links.
+   */
+  nlohmann::json steam_cache_status();
+
+  /**
+   * @brief Configure internal shader storage for one registered library while preserving its original data.
+   * @param library_id Opaque identifier returned by the status endpoint.
+   * @return JSON operation result; active Steam processes and unsafe paths reject the change.
+   */
+  nlohmann::json configure_steam_cache(std::string_view library_id);
+
+  /**
+   * @brief Build fixed storage-helper arguments.
+   * @param action Status, remember, or restore.
+   * @param uuid UUID required only for restore.
+   * @return Arguments or no value for invalid input.
+   */
+  std::optional<std::vector<std::string>> storage_helper_arguments(std::string_view action, std::string_view uuid = {});
+
+  /**
+   * @brief Inspect saved data-volume mounts without mounting disks.
+   * @return Recovery status and helper readiness.
+   */
+  nlohmann::json storage_status();
+
+  /**
+   * @brief Save known mount mappings or restore one registered data volume.
+   * @param action Remember or restore.
+   * @param uuid UUID for restore.
+   * @return Safe recovery result.
+   */
+  nlohmann::json storage_action(std::string_view action, std::string_view uuid = {});
+
+  /**
    * @brief Serialize Decky status to JSON.
    *
    * @param json Destination JSON value.

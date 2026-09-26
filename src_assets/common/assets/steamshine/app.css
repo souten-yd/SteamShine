@@ -1518,3 +1518,5 @@ pre {
     display: none;
   }
 }
+/* Keep storage paths readable on the narrow Addon layout. */
+.storage-path, .cache-library h4 { overflow-wrap: anywhere; min-width: 0; }

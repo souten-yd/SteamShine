@@ -161,6 +161,39 @@ namespace steamshine_addons {
       return {};
     }
 
+    /**
+     * @brief Decode one helper response while preserving failure status.
+     * @param command_result Process result.
+     * @return JSON with a safe error when parsing fails.
+     */
+    nlohmann::json helper_json(const std::pair<int, std::string> &command_result) {
+      auto result = nlohmann::json::parse(command_result.second, nullptr, false);
+      if (!result.is_object()) {
+        return {{"success", false}, {"message", "Management helper did not return a valid response"}};
+      }
+      if (command_result.first != 0) {
+        result["success"] = false;
+      }
+      return result;
+    }
+
+    /**
+     * @brief Execute the cache helper from the same immutable installation as this binary.
+     * @param library_id Empty for read-only status; otherwise a registered library identifier.
+     * @return Parsed JSON or a bounded error without exposing a command execution interface.
+     */
+    nlohmann::json run_steam_cache_helper(const std::string_view library_id) {
+      const auto helper {packaged_script("steamshine-steam-cache.py")};
+      if (helper.empty()) {
+        return {{"success", false}, {"message", "Steam cache management is unavailable; install a current SteamOS package."}};
+      }
+      const auto arguments {steam_cache_helper_arguments(helper.string(), library_id)};
+      if (!arguments) {
+        return {{"success", false}, {"message", "Invalid Steam library identifier"}};
+      }
+      return helper_json(run_command(*arguments));
+    }
+
   }  // namespace
 
   std::optional<decky_action_e> parse_decky_action(const std::string_view value) {
@@ -244,12 +277,39 @@ namespace steamshine_addons {
     return result.success && result.status.service_active;
   }
 
+  std::optional<std::vector<std::string>> steam_cache_helper_arguments(const std::string_view helper_path, const std::string_view library_id) {
+    if (library_id.empty()) {
+      return std::vector<std::string> {"/usr/bin/python3", std::string {helper_path}, "status"};
+    }
+    if (library_id.size() != 24 || !std::all_of(library_id.begin(), library_id.end(), [](const char character) {
+          return (character >= '0' && character <= '9') || (character >= 'a' && character <= 'f');
+        })) {
+      return std::nullopt;
+    }
+    return std::vector<std::string> {"/usr/bin/python3", std::string {helper_path}, "configure", std::string {library_id}};
+  }
+
+  nlohmann::json steam_cache_status() {
+    auto result = run_steam_cache_helper({});
+    if (!result.value("success", true)) {
+      return {{"available", false}, {"libraries", nlohmann::json::array()}, {"message", result.value("message", "Steam cache inspection failed")}};
+    }
+    return result;
+  }
+
+  nlohmann::json configure_steam_cache(const std::string_view library_id) {
+    if (library_id.empty()) {
+      return {{"success", false}, {"message", "A Steam library identifier is required"}};
+    }
+    return run_steam_cache_helper(library_id);
+  }
+
   bool management_ready(const std::string_view name) {
-    if (name != "runtime" && name != "decky") {
+    if (name != "runtime" && name != "decky" && name != "storage") {
       return false;
     }
     const auto stem {"steamshine-"s + std::string {name} + "-helper"};
-    const auto source {packaged_script(stem + ".sh")};
+    const auto source {packaged_script(stem + (name == "storage" ? ".py" : ".sh"))};
     const auto destination {"/var/lib/steamshine/helpers/"s + stem};
     std::ifstream packaged {source, std::ios::binary};
     std::ifstream installed {destination, std::ios::binary};
@@ -260,7 +320,7 @@ namespace steamshine_addons {
   }
 
   nlohmann::json management_status() {
-    return {{"runtime", management_ready("runtime")}, {"decky", management_ready("decky")}, {"authorization_available", !packaged_script("steamshine-provision-management.py").empty()}};
+    return {{"runtime", management_ready("runtime")}, {"decky", management_ready("decky")}, {"storage", management_ready("storage")}, {"authorization_available", !packaged_script("steamshine-provision-management.py").empty()}};
   }
 
   bool management_password_valid(const std::string_view password) {
@@ -280,8 +340,43 @@ namespace steamshine_addons {
       return {{"success", false}, {"message", "Administrator authentication or management setup failed. Check the password and try again."}};
     }
     const auto status = management_status();
-    const bool ready {status.value("runtime", false) && status.value("decky", false)};
+    const bool ready {status.value("runtime", false) && status.value("decky", false) && status.value("storage", false)};
     return {{"success", ready}, {"message", ready ? "Web management is ready." : "Management authorization could not be verified."}, {"helpers", status}};
+  }
+
+  std::optional<std::vector<std::string>> storage_helper_arguments(const std::string_view action, const std::string_view uuid) {
+    if (action != "status" && action != "remember" && action != "restore") {
+      return std::nullopt;
+    }
+    if (action == "restore") {
+      static const std::regex uuid_pattern {"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"};
+      if (!std::regex_match(uuid.begin(), uuid.end(), uuid_pattern)) {
+        return std::nullopt;
+      }
+    } else if (!uuid.empty()) {
+      return std::nullopt;
+    }
+    std::vector<std::string> result {"/usr/bin/sudo", "-n", "/var/lib/steamshine/helpers/steamshine-storage-helper", std::string {action}};
+    if (!uuid.empty()) {
+      result.emplace_back(uuid);
+    }
+    return result;
+  }
+
+  nlohmann::json storage_status() {
+    const bool ready {management_ready("storage")};
+    const auto script {packaged_script("steamshine-storage-helper.py")};
+    auto result = ready ? storage_action("status") : (script.empty() ? nlohmann::json {{"volumes", nlohmann::json::array()}} : helper_json(run_command({"/usr/bin/python3", script.string(), "status"})));
+    result["management_available"] = ready;
+    return result;
+  }
+
+  nlohmann::json storage_action(const std::string_view action, const std::string_view uuid) {
+    const auto arguments {storage_helper_arguments(action, uuid)};
+    if (!arguments) {
+      return {{"success", false}, {"message", "Invalid storage operation or UUID"}};
+    }
+    return helper_json(run_command(*arguments));
   }
 
   void to_json(nlohmann::json &json, const decky_status_t &value) {
