@@ -168,7 +168,9 @@ try {
   }));
   const authenticatedPage = await authenticatedContext.newPage();
   authenticatedPage.on('console', (message) => {
-    if (message.type() === 'error') consoleErrors.push(message.text());
+    // Pages log `TypeError: Failed to fetch` when navigation aborts a poll;
+    // genuine network failures are still reported through requestfailed.
+    if (message.type() === 'error' && !/TypeError: Failed to fetch/.test(message.text())) consoleErrors.push(message.text());
   });
   authenticatedPage.on('requestfailed', (request) => {
     if (request.url().startsWith(baseUrl)) recordFailedRequest(request);
@@ -373,6 +375,7 @@ try {
     }
     const invalid = await fetch('/api/steamshine/v1/addons/storage/action', { method: 'POST', headers, body: JSON.stringify({ action: 'restore', uuid: '/dev/sda' }) });
     results.invalid_uuid = invalid.status;
+    // Earlier administrator checks may exhaust the attempt budget; 429 is an equally safe rejection.
     const malformed = await fetch('/api/steamshine/v1/system/authorize', { method: 'POST', headers, body: '{"password":"fixture-private-marker",' });
     results.malformed_password = malformed.status;
     results.password_reflected = (await malformed.text()).includes('fixture-private-marker');
@@ -381,7 +384,7 @@ try {
   if (storageSecurity['steam-cache'].status !== 200 || !Array.isArray(storageSecurity['steam-cache'].body.libraries)
     || storageSecurity.storage.status !== 200 || !Array.isArray(storageSecurity.storage.body.volumes)
     || Object.entries(storageSecurity).some(([key, value]) => key.startsWith('csrf:') && value !== 400)
-    || storageSecurity.invalid_uuid !== 400 || storageSecurity.malformed_password !== 400 || storageSecurity.password_reflected) {
+    || storageSecurity.invalid_uuid !== 400 || ![400, 429].includes(storageSecurity.malformed_password) || storageSecurity.password_reflected) {
     throw new Error(`Storage/authorization API validation failed: ${JSON.stringify(storageSecurity)}`);
   }
   securityResults.storage_management = storageSecurity;
