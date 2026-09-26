@@ -879,9 +879,14 @@ try {
     throw new Error(`Authenticated quit failed: HTTP ${securityResults.quit_status}, exit ${quitResult.code}, signal ${quitResult.signal}`);
   }
   const serviceLog = await readFile(logFile, 'utf8').catch(() => '');
-  securityResults.secrets_absent_from_service_log = !['web-e2e-password', 'web-e2e-password-2', '1234', 'bad'].some((secret) => serviceLog.includes(secret));
+  const exposedSecrets = ['web-e2e-password', 'web-e2e-password-2', '1234', 'bad'].filter((secret) => serviceLog.includes(secret));
+  securityResults.secrets_absent_from_service_log = exposedSecrets.length === 0;
   if (!securityResults.secrets_absent_from_service_log) {
-    throw new Error('SteamShine service log exposed a browser credential or pairing PIN.');
+    // Report where each match occurred with the value masked, so a coincidental
+    // match can be told apart from a real leak without printing the secret.
+    const locations = exposedSecrets.flatMap((secret) => serviceLog.split('\n').filter((line) => line.includes(secret)).slice(0, 3)
+      .map((line) => line.replaceAll(secret, '<masked>').slice(0, 240)));
+    throw new Error(`SteamShine service log exposed a browser credential or pairing PIN:\n${locations.join('\n')}`);
   }
   await writeFile(join(reportDirectory, 'web-browser-e2e-report.json'), JSON.stringify({
     browser: 'chromium',
