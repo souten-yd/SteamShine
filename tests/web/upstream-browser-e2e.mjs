@@ -396,6 +396,38 @@ try {
   }
   securityResults.storage_management = storageSecurity;
 
+  /** Save, apply, and protect the Home-button combination through the real API. */
+  const homeComboUrl = `${baseUrl}/api/steamshine/v1/input/home-combo`;
+  const homeDefault = await (await steamshineContext.request.get(homeComboUrl)).json();
+  const homeNoCsrf = await steamshineContext.request.post(homeComboUrl, { headers: probeHeaders, data: JSON.stringify({ inputs: ['START'], hold_ms: 1000 }) });
+  const homeInvalid = await steamshineContext.request.post(homeComboUrl, { headers: csrfHeaders, data: JSON.stringify({ inputs: ['START', 'HOME'], hold_ms: 1000 }) });
+  const homeTooLong = await steamshineContext.request.post(homeComboUrl, { headers: csrfHeaders, data: JSON.stringify({ inputs: ['START'], hold_ms: 60000 }) });
+  const homeSaved = await steamshineContext.request.post(homeComboUrl, { headers: csrfHeaders, data: JSON.stringify({ inputs: ['back', 'START'], hold_ms: 3000 }) });
+  const homeSavedBody = await homeSaved.json();
+  const homeConfig = await readFile(configFile, 'utf8');
+  if (homeDefault.enabled !== false || homeDefault.available_inputs?.length !== 16
+    || homeNoCsrf.status() !== 400 || homeInvalid.status() !== 400 || homeTooLong.status() !== 400
+    || homeSaved.status() !== 200 || homeSavedBody.inputs?.join('+') !== 'START+BACK' || homeSavedBody.hold_ms !== 3000
+    || !homeConfig.includes('steamshine_home_combo = START+BACK') || !homeConfig.includes('steamshine_home_combo_hold_ms = 3000')) {
+    throw new Error(`Home combination API validation failed: ${JSON.stringify({ homeDefault, noCsrf: homeNoCsrf.status(), invalid: homeInvalid.status(), tooLong: homeTooLong.status(), saved: homeSavedBody })}`);
+  }
+  securityResults.home_combo = { saved: homeSavedBody.inputs, hold_ms: homeSavedBody.hold_ms };
+  // A stale upstream settings page must not clear the combination.
+  const staleUpstreamSave = await steamshinePage.evaluate(async () => {
+    const upstreamHeaders = { 'Content-Type': 'application/json', Authorization: `Basic ${btoa('web-e2e:web-e2e-password')}` };
+    const config = await (await fetch('/api/config', { headers: upstreamHeaders })).json();
+    delete config.status;
+    config.steamshine_home_combo = 'A';
+    config.steamshine_home_combo_hold_ms = 500;
+    const saved = await fetch('/api/config', { method: 'POST', headers: upstreamHeaders, body: JSON.stringify(config) });
+    await saved.json();
+    return saved.status;
+  });
+  const homeAfterStale = await readFile(configFile, 'utf8');
+  if (staleUpstreamSave !== 200 || !homeAfterStale.includes('steamshine_home_combo = START+BACK') || !homeAfterStale.includes('steamshine_home_combo_hold_ms = 3000')) {
+    throw new Error('Saving upstream settings replaced the Home combination.');
+  }
+
   /** Allow focused management validation without exercising unrelated capture hardware. */
   if (process.env.STEAMSHINE_BROWSER_SCOPE === 'addons') {
     const serviceLog = await readFile(logFile, 'utf8');

@@ -77,6 +77,7 @@
 #include "rtsp.h"
 #include "steamshine_addons.h"
 #include "steamshine_gpuctl.h"
+#include "steamshine_home_combo.h"
 #include "steamshine_hwmonitor.h"
 #include "steamshine_terminal.h"
 #include "stream.h"
@@ -1793,10 +1794,10 @@ namespace confighttp {
       std::stringstream config_stream;
       nlohmann::json output_tree;
       nlohmann::json input_tree = nlohmann::json::parse(ss);
-      // GPU profiles are managed by their own API. A stale upstream settings
-      // page must not replace newly saved profiles with its earlier snapshot.
+      // GPU profiles and the Home combination are managed by their own APIs. A
+      // stale upstream settings page must not replace them with an earlier snapshot.
       const auto persisted = config::parse_config(file_handler::read_file(config::sunshine.config_file.c_str()));
-      for (const auto *key : {"steamshine_gpu_profiles", "steamshine_gpu_active_profile"}) {
+      for (const auto *key : {"steamshine_gpu_profiles", "steamshine_gpu_active_profile", "steamshine_home_combo", "steamshine_home_combo_hold_ms"}) {
         input_tree.erase(key);
         if (const auto entry = persisted.find(key); entry != persisted.end()) {
           input_tree[key] = entry->second;
@@ -2892,6 +2893,85 @@ namespace confighttp {
       return;
     }
     send_steamshine_response(response, result);
+  }
+
+  /**
+   * @brief Serialize a Home-button combination for the Addon page.
+   *
+   * @param combo Combination to describe.
+   * @return JSON with selected inputs, hold time, and accepted values.
+   */
+  nlohmann::json home_combo_json(const steamshine_home_combo::combo_t &combo) {
+    nlohmann::json inputs = nlohmann::json::array();
+    const auto formatted {steamshine_home_combo::format_inputs(combo)};
+    std::size_t start {0};
+    while (!formatted.empty() && start <= formatted.size()) {
+      const auto end {std::min(formatted.find('+', start), formatted.size())};
+      inputs.push_back(formatted.substr(start, end - start));
+      start = end + 1;
+    }
+    return {
+      {"enabled", combo.enabled()},
+      {"inputs", inputs},
+      {"hold_ms", combo.hold.count()},
+      {"available_inputs", steamshine_home_combo::input_names()},
+      {"min_hold_ms", steamshine_home_combo::MIN_HOLD.count()},
+      {"max_hold_ms", steamshine_home_combo::MAX_HOLD.count()},
+      {"max_inputs", steamshine_home_combo::MAX_INPUTS},
+    };
+  }
+
+  /**
+   * @brief Return the gamepad combination that emulates the Home button.
+   *
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   */
+  void steamshine_home_combo_status(const resp_https_t &response, const req_https_t &request) {
+    if (require_steamshine_session(response, request).empty()) {
+      return;
+    }
+    send_steamshine_response(response, home_combo_json(steamshine_home_combo::current()));
+  }
+
+  /**
+   * @brief Save and apply a Home-button combination without restarting the service.
+   *
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   */
+  void steamshine_home_combo_update(const resp_https_t &response, const req_https_t &request) {
+    if (require_steamshine_mutation(response, request).empty()) {
+      return;
+    }
+    nlohmann::json input;
+    if (!read_steamshine_json(response, request, input)) {
+      return;
+    }
+    if (!input.contains("inputs") || !input["inputs"].is_array() || !input.contains("hold_ms") || !input["hold_ms"].is_number_integer()) {
+      bad_request(response, request, "Home button inputs and hold time are required");
+      return;
+    }
+    std::string joined;
+    for (const auto &value : input["inputs"]) {
+      if (!value.is_string()) {
+        bad_request(response, request, "Home button inputs must be names");
+        return;
+      }
+      joined += (joined.empty() ? "" : "+") + value.get<std::string>();
+    }
+    const auto combo {steamshine_home_combo::parse(joined, input["hold_ms"].get<int>())};
+    if (!combo) {
+      bad_request(response, request, "Choose up to four different buttons and a hold time between 0.2 and 10 seconds");
+      return;
+    }
+    std::string error;
+    if (!steamshine_home_combo::set(*combo, error)) {
+      bad_request(response, request, error);
+      return;
+    }
+    BOOST_LOG(info) << "GAMEPAD_HOME_COMBO_CONFIGURED inputs=" << steamshine_home_combo::format_inputs(*combo) << " hold_ms=" << combo->hold.count();
+    send_steamshine_response(response, home_combo_json(*combo));
   }
 
   /**
@@ -4178,6 +4258,8 @@ namespace confighttp {
     server.resource["^/api/steamshine/v1/gpu/profiles/([^/]+)$"]["DELETE"] = steamshine_handler(steamshine_delete_gpu_profile);
     server.resource["^/api/steamshine/v1/gpu/profiles/([^/]+)/activate$"]["POST"] = steamshine_handler(steamshine_activate_gpu_profile);
     server.resource["^/api/steamshine/v1/addons/decky$"]["GET"] = steamshine_handler(steamshine_decky_status);
+    server.resource["^/api/steamshine/v1/input/home-combo$"]["GET"] = steamshine_handler(steamshine_home_combo_status);
+    server.resource["^/api/steamshine/v1/input/home-combo$"]["POST"] = steamshine_handler(steamshine_home_combo_update);
     server.resource["^/api/steamshine/v1/addons/decky/action$"]["POST"] = steamshine_handler(steamshine_decky_action);
     server.resource["^/api/steamshine/v1/system/authorize$"]["POST"] = steamshine_handler(steamshine_authorize_management);
     server.resource["^/api/steamshine/v1/system/management$"]["GET"] = steamshine_handler(steamshine_management_status);

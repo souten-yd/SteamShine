@@ -39,6 +39,7 @@ extern "C" {
 #include "platform/common.h"
 #include "platform/virtualhid_input.h"
 #include "steamos_virtual_session_core.h"
+#include "steamshine_home_combo.h"
 #include "thread_pool.h"
 #include "utility.h"
 
@@ -274,6 +275,7 @@ namespace input {
     gamepad_t():
         gamepad_state {},
         back_timeout_id {},
+        home_combo_timeout_id {},
         id {-1},
         back_button_state {button_state_e::NONE} {
     }
@@ -293,6 +295,10 @@ namespace input {
     platf::gamepad_state_t gamepad_state;  ///< Gamepad state.
 
     thread_pool_util::ThreadPool::task_id_t back_timeout_id;  ///< Back timeout ID.
+
+    thread_pool_util::ThreadPool::task_id_t home_combo_timeout_id;  ///< Pending Home-combination hold timer.
+
+    steamshine_home_combo::tracker_t home_combo;  ///< Home-combination suppression and timer state.
 
     int id;  ///< Global gamepad slot assigned to this client controller.
 
@@ -447,6 +453,11 @@ namespace input {
         task_pool.cancel(gamepad.back_timeout_id);
         gamepad.back_timeout_id = nullptr;
       }
+      if (gamepad.home_combo_timeout_id) {
+        task_pool.cancel(gamepad.home_combo_timeout_id);
+        gamepad.home_combo_timeout_id = nullptr;
+      }
+      gamepad.home_combo = {};
       if (gamepad.id >= 0) {
         ::input::free_gamepad(platf_input, gamepad.id);
         gamepad.id = -1;
@@ -1750,6 +1761,43 @@ namespace input {
       }
     }
 
+    const auto home_combo {steamshine_home_combo::current()};
+    switch (steamshine_home_combo::filter(gamepad.home_combo, home_combo, gamepad_state)) {
+      case steamshine_home_combo::timer_action_e::arm:
+        {
+          auto f = [input, controller = packet->controllerNumber, home_combo]() {
+            auto &gamepad = input->gamepads[controller];
+            gamepad.home_combo_timeout_id = nullptr;
+            if (gamepad.id < 0 || !gamepad.home_combo.timer_armed) {
+              return;
+            }
+            auto &state = gamepad.gamepad_state;
+            // Release the combination for the host first so games never see
+            // the long press, then tap Home.
+            steamshine_home_combo::fire(gamepad.home_combo, home_combo, state);
+            platf::gamepad_update(platf_input, gamepad.id, state);
+            state.buttonFlags |= platf::HOME;
+            platf::gamepad_update(platf_input, gamepad.id, state);
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            state.buttonFlags &= ~platf::HOME;
+            platf::gamepad_update(platf_input, gamepad.id, state);
+            BOOST_LOG(info) << "GAMEPAD_HOME_COMBO controller=" << controller
+                            << " inputs=" << steamshine_home_combo::format_inputs(home_combo)
+                            << " hold_ms=" << home_combo.hold.count();
+          };
+          gamepad.home_combo_timeout_id = task_pool.pushDelayed(std::move(f), home_combo.hold).task_id;
+          break;
+        }
+      case steamshine_home_combo::timer_action_e::cancel:
+        if (gamepad.home_combo_timeout_id) {
+          task_pool.cancel(gamepad.home_combo_timeout_id);
+          gamepad.home_combo_timeout_id = nullptr;
+        }
+        break;
+      case steamshine_home_combo::timer_action_e::none:
+        break;
+    }
+
     const auto hold_release {detect_gamepad_hold_release(gamepad.gamepad_state, gamepad_state)};
     if (hold_release.any() && gamepad_hold_diagnostics_enabled()) {
       BOOST_LOG(info) << "GAMEPAD_HOLD_RELEASE controller=" << packet->controllerNumber
@@ -2525,6 +2573,11 @@ namespace input {
         task_pool.cancel(gamepad.back_timeout_id);
         gamepad.back_timeout_id = nullptr;
       }
+      if (gamepad.home_combo_timeout_id) {
+        task_pool.cancel(gamepad.home_combo_timeout_id);
+        gamepad.home_combo_timeout_id = nullptr;
+      }
+      gamepad.home_combo = {};
       if (gamepad.id >= 0) {
         platf::gamepad_update(platf_input, gamepad.id, {});
         platf::gamepad_touch(

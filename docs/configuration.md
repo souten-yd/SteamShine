@@ -312,6 +312,14 @@ supported on the current platform.
 
 <table><tr><td>Description</td><td colspan="2">JSON-encoded custom GPU/CPU performance profiles managed by the SteamShine GPU page.</td></tr><tr><td>Default</td><td colspan="2">Empty</td></tr><tr><td>Example</td><td colspan="2">@code{} steamshine_gpu_profiles = [] @endcode</td></tr></table>
 
+### steamshine_home_combo
+
+<table><tr><td>Description</td><td colspan="2">Gamepad inputs that emulate the Home button when held together, joined with `+`. Accepted names are START, BACK, A, B, X, Y, LB, RB, LT, RT, LS, RS, UP, DOWN, LEFT and RIGHT, up to four. After Home fires, the inputs stay released for the host until the player lets go. Managed by the SteamShine Addons page; empty turns the feature off.</td></tr><tr><td>Default</td><td colspan="2">Empty</td></tr><tr><td>Example</td><td colspan="2">@code{} steamshine_home_combo = START+BACK @endcode</td></tr></table>
+
+### steamshine_home_combo_hold_ms
+
+<table><tr><td>Description</td><td colspan="2">Milliseconds the Home combination must be held before Home is pressed, from 200 to 10000.</td></tr><tr><td>Default</td><td colspan="2">@code{} 1000 @endcode</td></tr><tr><td>Example</td><td colspan="2">@code{} steamshine_home_combo_hold_ms = 3000 @endcode</td></tr></table>
+
 ## Input
 
 ### controller

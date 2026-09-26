@@ -15,6 +15,8 @@ let authorizations = 0;
 let restored = 0;
 let updated = 0;
 let applied = 0;
+let homeCombo = { enabled: false, inputs: [], hold_ms: 1000 };
+const homeComboSaves = [];
 const errors = [];
 const server = createServer(async (request, response) => {
   try {
@@ -39,6 +41,13 @@ try {
     if (request.method() === 'POST') assert.equal(request.headers()['x-steamshine-csrf-token'], 'fixture-csrf');
     if (path === '/setup/status') return reply({ configured: true });
     if (path === '/session') return reply({ username: 'fixture', csrf_token: 'fixture-csrf' });
+    if (path === '/input/home-combo') {
+      if (request.method() === 'POST') {
+        homeComboSaves.push(body);
+        homeCombo = { enabled: body.inputs.length > 0, inputs: body.inputs, hold_ms: body.hold_ms };
+      }
+      return reply({ ...homeCombo, available_inputs: ['START', 'BACK', 'A', 'B', 'X', 'Y', 'LB', 'RB', 'LT', 'RT', 'LS', 'RS', 'UP', 'DOWN', 'LEFT', 'RIGHT'], min_hold_ms: 200, max_hold_ms: 10000, max_inputs: 4 });
+    }
     if (path === '/addons/decky') return reply({ installed: true, version: 'fixture', management_available: authorized });
     if (path === '/addons/steam-cache') return reply({ home_free_bytes: 300 * 1024 ** 3, libraries: [{
       id: libraryId, path: '/run/media/deck/Samsung2TB/SteamLibrary',
@@ -71,6 +80,24 @@ try {
   });
   await page.goto(`${base}/steamshine/addons`);
   await page.getByRole('heading', { name: 'Storage recovery', exact: true }).waitFor();
+  // Home button: choose Start + Back held for three seconds, then turn it off.
+  const homeCard = page.locator('#home-combo');
+  await homeCard.getByRole('button', { name: 'Start', exact: true }).click();
+  await homeCard.getByRole('button', { name: 'Back / Select', exact: true }).click();
+  await homeCard.getByLabel('Hold time (seconds)').fill('3');
+  await homeCard.getByText('Hold Start + Back / Select for 3.0 s to press Home.').waitFor();
+  await homeCard.getByLabel('Hold time (seconds)').fill('20');
+  assert.equal(await homeCard.getByRole('button', { name: 'Save', exact: true }).isDisabled(), true);
+  await homeCard.getByLabel('Hold time (seconds)').fill('3');
+  await homeCard.getByRole('button', { name: 'Save', exact: true }).click();
+  await page.locator('#home-combo [data-combo-input="START"][aria-pressed="true"]').waitFor();
+  assert.deepEqual(homeComboSaves.at(-1), { inputs: ['START', 'BACK'], hold_ms: 3000 });
+  for (const name of ['A', 'B']) await page.locator('#home-combo').getByRole('button', { name, exact: true }).click();
+  assert.equal(await page.locator('#home-combo').getByRole('button', { name: 'X', exact: true }).isDisabled(), true);
+  await page.locator('#home-combo').getByRole('button', { name: 'Turn off', exact: true }).click();
+  await page.locator('#home-combo').getByText('Off. Controllers with a Guide button can still use it.').waitFor();
+  assert.deepEqual(homeComboSaves.at(-1).inputs, []);
+
   await page.getByRole('button', { name: 'Use internal storage' }).click();
   await page.locator('#cache-result').filter({ hasText: '/saved/cache-backup' }).waitFor();
   assert.equal(await page.getByRole('button', { name: 'Use internal storage' }).count(), 0);
@@ -122,7 +149,7 @@ try {
   await page.goto(`${base}/steamshine/addons`);
   await page.getByRole('heading', { name: 'Storage recovery', exact: true }).waitFor();
   await page.screenshot({ path: 'dist/addons-browser/addons-320.png', fullPage: true });
-  console.log('PASS: cache setup, storage restore/cancel, password retry/clearing, Decky reuse, GPU authentication, and 320px layout.');
+  console.log('PASS: Home combination, cache setup, storage restore/cancel, password retry/clearing, Decky reuse, GPU authentication, and 320px layout.');
 } finally {
   await browser.close();
   await new Promise((done) => server.close(done));
