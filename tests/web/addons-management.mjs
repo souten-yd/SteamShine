@@ -15,8 +15,8 @@ let authorizations = 0;
 let restored = 0;
 let updated = 0;
 let applied = 0;
-let homeCombo = { enabled: false, inputs: [], hold_ms: 1000 };
-const homeComboSaves = [];
+const shortcutState = { home: { enabled: false, inputs: [], hold_ms: 1000 }, quick_access: { enabled: false, inputs: [], hold_ms: 1000 } };
+const shortcutSaves = [];
 const errors = [];
 const server = createServer(async (request, response) => {
   try {
@@ -41,12 +41,12 @@ try {
     if (request.method() === 'POST') assert.equal(request.headers()['x-steamshine-csrf-token'], 'fixture-csrf');
     if (path === '/setup/status') return reply({ configured: true });
     if (path === '/session') return reply({ username: 'fixture', csrf_token: 'fixture-csrf' });
-    if (path === '/input/home-combo') {
+    if (path === '/input/shortcuts') {
       if (request.method() === 'POST') {
-        homeComboSaves.push(body);
-        homeCombo = { enabled: body.inputs.length > 0, inputs: body.inputs, hold_ms: body.hold_ms };
+        shortcutSaves.push(body);
+        shortcutState[body.action] = { enabled: body.inputs.length > 0, inputs: body.inputs, hold_ms: body.hold_ms };
       }
-      return reply({ ...homeCombo, available_inputs: ['START', 'BACK', 'A', 'B', 'X', 'Y', 'LB', 'RB', 'LT', 'RT', 'LS', 'RS', 'UP', 'DOWN', 'LEFT', 'RIGHT'], min_hold_ms: 200, max_hold_ms: 10000, max_inputs: 4 });
+      return reply({ actions: shortcutState, available_inputs: ['START', 'BACK', 'A', 'B', 'X', 'Y', 'LB', 'RB', 'LT', 'RT', 'LS', 'RS', 'UP', 'DOWN', 'LEFT', 'RIGHT'], min_hold_ms: 200, max_hold_ms: 10000, max_inputs: 4 });
     }
     if (path === '/addons/decky') return reply({ installed: true, version: 'fixture', management_available: authorized });
     if (path === '/addons/steam-cache') return reply({ home_free_bytes: 300 * 1024 ** 3, libraries: [{
@@ -80,8 +80,8 @@ try {
   });
   await page.goto(`${base}/steamshine/addons`);
   await page.getByRole('heading', { name: 'Storage recovery', exact: true }).waitFor();
-  // Home button: choose Start + Back held for three seconds, then turn it off.
-  const homeCard = page.locator('#home-combo');
+  // Home: Start + Back for three seconds; Quick Access: Start + Back + A for 1.5 seconds.
+  const homeCard = page.locator('[data-shortcut="home"]');
   await homeCard.getByRole('button', { name: 'Start', exact: true }).click();
   await homeCard.getByRole('button', { name: 'Back / Select', exact: true }).click();
   await homeCard.getByLabel('Hold time (seconds)').fill('3');
@@ -90,13 +90,24 @@ try {
   assert.equal(await homeCard.getByRole('button', { name: 'Save', exact: true }).isDisabled(), true);
   await homeCard.getByLabel('Hold time (seconds)').fill('3');
   await homeCard.getByRole('button', { name: 'Save', exact: true }).click();
-  await page.locator('#home-combo [data-combo-input="START"][aria-pressed="true"]').waitFor();
-  assert.deepEqual(homeComboSaves.at(-1), { inputs: ['START', 'BACK'], hold_ms: 3000 });
-  for (const name of ['A', 'B']) await page.locator('#home-combo').getByRole('button', { name, exact: true }).click();
-  assert.equal(await page.locator('#home-combo').getByRole('button', { name: 'X', exact: true }).isDisabled(), true);
-  await page.locator('#home-combo').getByRole('button', { name: 'Turn off', exact: true }).click();
-  await page.locator('#home-combo').getByText('Off. Controllers with a Guide button can still use it.').waitFor();
-  assert.deepEqual(homeComboSaves.at(-1).inputs, []);
+  await page.locator('[data-shortcut="home"] [data-combo-input="START"][aria-pressed="true"]').waitFor();
+  assert.deepEqual(shortcutSaves.at(-1), { action: 'home', inputs: ['START', 'BACK'], hold_ms: 3000 });
+
+  const quickCard = page.locator('[data-shortcut="quick_access"]');
+  for (const name of ['Start', 'Back / Select', 'A']) await quickCard.getByRole('button', { name, exact: true }).click();
+  await quickCard.getByLabel('Hold time (seconds)').fill('1.5');
+  await quickCard.getByText('Hold Start + Back / Select + A for 1.5 s to open Quick Access (Home + A).').waitFor();
+  await quickCard.getByRole('button', { name: 'Save', exact: true }).click();
+  await page.locator('[data-shortcut="quick_access"] [data-combo-input="A"][aria-pressed="true"]').waitFor();
+  assert.deepEqual(shortcutSaves.at(-1), { action: 'quick_access', inputs: ['START', 'BACK', 'A'], hold_ms: 1500 });
+  assert.equal(await page.locator('[data-shortcut="home"] [data-combo-input="START"]').getAttribute('aria-pressed'), 'true');
+
+  await page.locator('[data-shortcut="quick_access"]').getByRole('button', { name: 'B', exact: true }).click();
+  assert.equal(await page.locator('[data-shortcut="quick_access"]').getByRole('button', { name: 'X', exact: true }).isDisabled(), true);
+  await page.locator('[data-shortcut="home"]').getByRole('button', { name: 'Turn off', exact: true }).click();
+  await page.locator('[data-shortcut="home"]').getByText('Off.', { exact: true }).waitFor();
+  assert.deepEqual(shortcutSaves.at(-1), { action: 'home', inputs: [], hold_ms: 3000 });
+  assert.equal(shortcutState.quick_access.enabled, true);
 
   await page.getByRole('button', { name: 'Use internal storage' }).click();
   await page.locator('#cache-result').filter({ hasText: '/saved/cache-backup' }).waitFor();
@@ -149,7 +160,7 @@ try {
   await page.goto(`${base}/steamshine/addons`);
   await page.getByRole('heading', { name: 'Storage recovery', exact: true }).waitFor();
   await page.screenshot({ path: 'dist/addons-browser/addons-320.png', fullPage: true });
-  console.log('PASS: Home combination, cache setup, storage restore/cancel, password retry/clearing, Decky reuse, GPU authentication, and 320px layout.');
+  console.log('PASS: Home and Quick Access shortcuts, cache setup, storage restore/cancel, password retry/clearing, Decky reuse, GPU authentication, and 320px layout.');
 } finally {
   await browser.close();
   await new Promise((done) => server.close(done));

@@ -2021,6 +2021,8 @@ namespace config {
     string_f(vars, "steamshine_gpu_profiles", sunshine.steamshine_gpu_profiles);
     string_f(vars, "steamshine_home_combo", sunshine.steamshine_home_combo);
     int_f(vars, "steamshine_home_combo_hold_ms", sunshine.steamshine_home_combo_hold_ms);
+    string_f(vars, "steamshine_quick_access_combo", sunshine.steamshine_quick_access_combo);
+    int_f(vars, "steamshine_quick_access_combo_hold_ms", sunshine.steamshine_quick_access_combo_hold_ms);
     if (!sunshine.steamshine_web_ui_enabled && !sunshine.upstream_web_ui_enabled) {
       BOOST_LOG(warning) << "Both Web UIs were disabled; retaining the upstream Sunshine Web UI for recovery"sv;
       sunshine.upstream_web_ui_enabled = true;

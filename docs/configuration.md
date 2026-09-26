@@ -314,11 +314,19 @@ supported on the current platform.
 
 ### steamshine_home_combo
 
-<table><tr><td>Description</td><td colspan="2">Gamepad inputs that emulate the Home button when held together, joined with `+`. Accepted names are START, BACK, A, B, X, Y, LB, RB, LT, RT, LS, RS, UP, DOWN, LEFT and RIGHT, up to four. After Home fires, the inputs stay released for the host until the player lets go. Managed by the SteamShine Addons page; empty turns the feature off.</td></tr><tr><td>Default</td><td colspan="2">Empty</td></tr><tr><td>Example</td><td colspan="2">@code{} steamshine_home_combo = START+BACK @endcode</td></tr></table>
+<table><tr><td>Description</td><td colspan="2">Gamepad inputs that emulate the Home button when held together, joined with `+`. Accepted names are START, BACK, A, B, X, Y, LB, RB, LT, RT, LS, RS, UP, DOWN, LEFT and RIGHT, up to four. After Home fires, the inputs stay released for the host until the player lets go. Managed by the Controller shortcuts card on the SteamShine Addons page; empty turns the feature off.</td></tr><tr><td>Default</td><td colspan="2">Empty</td></tr><tr><td>Example</td><td colspan="2">@code{} steamshine_home_combo = START+BACK @endcode</td></tr></table>
 
 ### steamshine_home_combo_hold_ms
 
 <table><tr><td>Description</td><td colspan="2">Milliseconds the Home combination must be held before Home is pressed, from 200 to 10000.</td></tr><tr><td>Default</td><td colspan="2">@code{} 1000 @endcode</td></tr><tr><td>Example</td><td colspan="2">@code{} steamshine_home_combo_hold_ms = 3000 @endcode</td></tr></table>
+
+### steamshine_quick_access_combo
+
+<table><tr><td>Description</td><td colspan="2">Gamepad inputs that open Steam's Quick Access menu (Home + A), where Decky Loader plugins live, when held together. Uses the same names and limits as steamshine_home_combo and must differ from it; when one combination contains all inputs of the other, holding the larger set runs only the larger one. Managed by the SteamShine Addons page; empty turns the feature off.</td></tr><tr><td>Default</td><td colspan="2">Empty</td></tr><tr><td>Example</td><td colspan="2">@code{} steamshine_quick_access_combo = START+BACK+A @endcode</td></tr></table>
+
+### steamshine_quick_access_combo_hold_ms
+
+<table><tr><td>Description</td><td colspan="2">Milliseconds the Quick Access combination must be held, from 200 to 10000.</td></tr><tr><td>Default</td><td colspan="2">@code{} 1000 @endcode</td></tr><tr><td>Example</td><td colspan="2">@code{} steamshine_quick_access_combo_hold_ms = 1500 @endcode</td></tr></table>
 
 ## Input
 

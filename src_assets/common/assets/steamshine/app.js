@@ -932,74 +932,87 @@ function storageRecoveryCard(storage) {
   return `<div class="section stack addons-card"><h3>Storage recovery</h3><p>Save data-volume mount settings so they can be recovered after an OS update. Recovery matches the filesystem UUID and checks an unmounted filesystem without modifying it before restoring the saved path.</p><p class="field-hint">Automatic recovery supports previously registered ext4 data volumes. It does not format disks, repair filesystem errors, or overwrite files at a mount location.</p>${storage.message ? `<p class="notice">${escapeHtml(storage.message)}</p>` : ''}${rows || '<div class="empty">No saved data-volume mounts found.</div>'}<div class="btn-row"><button class="btn-primary" id="save-mount-settings" ${(storage.volumes || []).length ? '' : 'disabled'}>Save mount settings</button><span class="field-hint">${storage.saved_settings ? 'A recovery copy is saved.' : 'Save a recovery copy for future updates.'}</span></div></div>`;
 }
 
-/** @brief Human-readable labels for Home-combination inputs. */
-const HOME_COMBO_LABELS = {
+/** @brief Human-readable labels for controller-shortcut inputs. */
+const SHORTCUT_INPUT_LABELS = {
   START: 'Start', BACK: 'Back / Select', A: 'A', B: 'B', X: 'X', Y: 'Y', LB: 'LB', RB: 'RB', LT: 'LT', RT: 'RT',
   LS: 'L3 (left stick)', RS: 'R3 (right stick)', UP: 'D-pad ↑', DOWN: 'D-pad ↓', LEFT: 'D-pad ←', RIGHT: 'D-pad →',
 };
 
-/** @brief Describe a Home combination in one sentence. */
-function homeComboSummary(inputs, holdMs) {
-  if (!inputs.length) return 'Off. Controllers with a Guide button can still use it.';
-  return `Hold ${inputs.map((name) => HOME_COMBO_LABELS[name] || name).join(' + ')} for ${(holdMs / 1000).toFixed(1)} s to press Home.`;
+/** @brief Controller-shortcut actions in display order. */
+const SHORTCUT_ACTIONS = [
+  { id: 'home', title: 'Home button', result: 'press Home', hint: 'Opens the Steam menu.' },
+  { id: 'quick_access', title: 'Quick Access menu', result: 'open Quick Access (Home + A)', hint: 'Opens Steam’s Quick Access menu, where Decky Loader plugins live.' },
+];
+
+/** @brief Describe one controller shortcut in one sentence. */
+function shortcutSummary(action, inputs, holdMs) {
+  if (!inputs.length) return 'Off.';
+  return `Hold ${inputs.map((name) => SHORTCUT_INPUT_LABELS[name] || name).join(' + ')} for ${(holdMs / 1000).toFixed(1)} s to ${action.result}.`;
 }
 
-/** @brief Render the gamepad Home-button emulation settings. */
-function homeComboCard(combo) {
-  if (combo.message) return `<div class="section stack addons-card"><h3>Home button</h3><p class="notice">${escapeHtml(combo.message)}</p></div>`;
-  const selected = new Set(combo.inputs || []);
-  const chips = (combo.available_inputs || []).map((name) => `<button type="button" class="combo-chip" data-combo-input="${escapeHtml(name)}" aria-pressed="${selected.has(name)}">${escapeHtml(HOME_COMBO_LABELS[name] || name)}</button>`).join('');
-  return `<div class="section stack addons-card" id="home-combo"><h3>Home button</h3>
-    <p>Touch controls in mobile Moonlight have no Home button. Choose buttons to hold together; when held for the set time, SteamShine presses Home once and releases those buttons for the game.</p>
-    <div class="combo-chips" role="group" aria-label="Buttons to hold">${chips}</div>
-    <label>Hold time (seconds)<input type="number" id="home-combo-hold" min="${combo.min_hold_ms / 1000}" max="${combo.max_hold_ms / 1000}" step="0.1" value="${(combo.hold_ms / 1000).toFixed(1)}"></label>
-    <p class="field-hint" id="home-combo-summary" role="status">${escapeHtml(homeComboSummary(combo.inputs || [], combo.hold_ms))}</p>
-    <div class="btn-row"><button type="button" class="btn-primary" id="home-combo-save">Save</button><button type="button" class="btn-ghost" id="home-combo-off" ${combo.enabled ? '' : 'disabled'}>Turn off</button></div>
-    <p class="field-hint">Up to ${combo.max_inputs} buttons. Applies immediately to connected controllers; no restart is needed.</p></div>`;
+/** @brief Render the controller-shortcut settings for Home and Quick Access. */
+function shortcutsCard(shortcuts) {
+  if (shortcuts.message) return `<div class="section stack addons-card"><h3>Controller shortcuts</h3><p class="notice">${escapeHtml(shortcuts.message)}</p></div>`;
+  const sections = SHORTCUT_ACTIONS.map((action) => {
+    const current = shortcuts.actions?.[action.id] || { enabled: false, inputs: [], hold_ms: 1000 };
+    const selected = new Set(current.inputs);
+    const chips = (shortcuts.available_inputs || []).map((name) => `<button type="button" class="combo-chip" data-combo-input="${escapeHtml(name)}" aria-pressed="${selected.has(name)}">${escapeHtml(SHORTCUT_INPUT_LABELS[name] || name)}</button>`).join('');
+    return `<div class="section stack shortcut-action" data-shortcut="${action.id}"><h4>${escapeHtml(action.title)}</h4><p class="field-hint">${escapeHtml(action.hint)}</p>
+      <div class="combo-chips" role="group" aria-label="${escapeHtml(action.title)} buttons">${chips}</div>
+      <label>Hold time (seconds)<input type="number" data-shortcut-hold min="${shortcuts.min_hold_ms / 1000}" max="${shortcuts.max_hold_ms / 1000}" step="0.1" value="${(current.hold_ms / 1000).toFixed(1)}"></label>
+      <p class="field-hint" data-shortcut-summary role="status">${escapeHtml(shortcutSummary(action, current.inputs, current.hold_ms))}</p>
+      <div class="btn-row"><button type="button" class="btn-primary" data-shortcut-save>Save</button><button type="button" class="btn-ghost" data-shortcut-off ${current.enabled ? '' : 'disabled'}>Turn off</button></div></div>`;
+  }).join('');
+  return `<div class="section stack addons-card" id="controller-shortcuts"><h3>Controller shortcuts</h3>
+    <p>Touch controls in mobile Moonlight have no Home button. Choose buttons to hold together; when held for the set time, SteamShine sends the Steam button action and releases those buttons for the game.</p>
+    ${sections}
+    <p class="field-hint">Up to ${shortcuts.max_inputs} buttons each. If one shortcut’s buttons include all of the other’s, holding the larger set runs only the larger one. Changes apply immediately; no restart is needed.</p></div>`;
 }
 
-/** @brief Wire chip selection, validation, and saving for the Home-button card. */
-function wireHomeCombo(combo) {
-  const card = document.querySelector('#home-combo');
-  if (!card) return;
-  const hold = card.querySelector('#home-combo-hold');
-  const summary = card.querySelector('#home-combo-summary');
-  const chosen = () => Array.from(card.querySelectorAll('[data-combo-input][aria-pressed="true"]')).map((chip) => chip.dataset.comboInput);
-  const holdMs = () => Math.round(Number(hold.value) * 1000);
-  const refresh = () => {
-    const inputs = chosen();
-    card.querySelectorAll('[data-combo-input]').forEach((chip) => {
-      chip.disabled = chip.getAttribute('aria-pressed') !== 'true' && inputs.length >= combo.max_inputs;
-    });
-    const valid = Number.isFinite(holdMs()) && holdMs() >= combo.min_hold_ms && holdMs() <= combo.max_hold_ms;
-    summary.textContent = valid ? homeComboSummary(inputs, holdMs()) : `Enter a hold time between ${combo.min_hold_ms / 1000} and ${combo.max_hold_ms / 1000} seconds.`;
-    card.querySelector('#home-combo-save').disabled = !valid;
-  };
-  card.querySelectorAll('[data-combo-input]').forEach((chip) => chip.addEventListener('click', () => {
-    chip.setAttribute('aria-pressed', String(chip.getAttribute('aria-pressed') !== 'true'));
+/** @brief Wire chip selection, validation, and saving for each controller shortcut. */
+function wireShortcuts(shortcuts) {
+  document.querySelectorAll('#controller-shortcuts [data-shortcut]').forEach((section) => {
+    const action = SHORTCUT_ACTIONS.find((item) => item.id === section.dataset.shortcut);
+    const hold = section.querySelector('[data-shortcut-hold]');
+    const summary = section.querySelector('[data-shortcut-summary]');
+    const chosen = () => Array.from(section.querySelectorAll('[data-combo-input][aria-pressed="true"]')).map((chip) => chip.dataset.comboInput);
+    const holdMs = () => Math.round(Number(hold.value) * 1000);
+    const refresh = () => {
+      const inputs = chosen();
+      section.querySelectorAll('[data-combo-input]').forEach((chip) => {
+        chip.disabled = chip.getAttribute('aria-pressed') !== 'true' && inputs.length >= shortcuts.max_inputs;
+      });
+      const valid = Number.isFinite(holdMs()) && holdMs() >= shortcuts.min_hold_ms && holdMs() <= shortcuts.max_hold_ms;
+      summary.textContent = valid ? shortcutSummary(action, inputs, holdMs()) : `Enter a hold time between ${shortcuts.min_hold_ms / 1000} and ${shortcuts.max_hold_ms / 1000} seconds.`;
+      section.querySelector('[data-shortcut-save]').disabled = !valid;
+    };
+    section.querySelectorAll('[data-combo-input]').forEach((chip) => chip.addEventListener('click', () => {
+      chip.setAttribute('aria-pressed', String(chip.getAttribute('aria-pressed') !== 'true'));
+      refresh();
+    }));
+    hold.addEventListener('input', refresh);
+    const save = async (inputs) => {
+      section.querySelectorAll('button').forEach((button) => { button.disabled = true; });
+      try {
+        const saved = await json(await api('/input/shortcuts', { method: 'POST', body: JSON.stringify({ action: action.id, inputs, hold_ms: holdMs() }) }));
+        const result = saved.actions[action.id];
+        toast(result.enabled ? shortcutSummary(action, result.inputs, result.hold_ms) : `${action.title} shortcut is off.`, 'ok');
+      } catch (error) { toast(error.message, 'error'); }
+      await renderAddons();
+    };
+    section.querySelector('[data-shortcut-save]').onclick = () => save(chosen());
+    section.querySelector('[data-shortcut-off]').onclick = () => save([]);
     refresh();
-  }));
-  hold.addEventListener('input', refresh);
-  const save = async (inputs) => {
-    card.querySelectorAll('button').forEach((button) => { button.disabled = true; });
-    try {
-      const saved = await json(await api('/input/home-combo', { method: 'POST', body: JSON.stringify({ inputs, hold_ms: holdMs() }) }));
-      toast(saved.enabled ? homeComboSummary(saved.inputs, saved.hold_ms) : 'Home button emulation is off.', 'ok');
-    } catch (error) { toast(error.message, 'error'); }
-    await renderAddons();
-  };
-  card.querySelector('#home-combo-save').onclick = () => save(chosen());
-  card.querySelector('#home-combo-off').onclick = () => save([]);
-  refresh();
+  });
 }
 
 /** @brief Render Decky management, Steam cache settings, and saved storage recovery. */
 async function renderAddons() {
-  const [status, cache, storage, homeCombo] = await Promise.all([
+  const [status, cache, storage, shortcuts] = await Promise.all([
     api('/addons/decky').then(json),
     api('/addons/steam-cache').then(json).catch((error) => ({ message: error.message })),
     api('/addons/storage').then(json).catch((error) => ({ message: error.message })),
-    api('/input/home-combo').then(json).catch((error) => ({ message: error.message })),
+    api('/input/shortcuts').then(json).catch((error) => ({ message: error.message })),
   ]);
   const installedLabel = status.installed ? (status.version || 'Installed') : 'Not installed';
   const serviceLabel = status.service_active ? 'Active' : (status.service_enabled ? 'Inactive (enabled)' : 'Inactive');
@@ -1019,13 +1032,13 @@ async function renderAddons() {
       </div><div class="btn-row">${controls}</div></div>
       ${managementNotice}
       <div class="field-hint">Install and update follow the official <a href="https://github.com/SteamDeckHomebrew/decky-installer" target="_blank" rel="noopener">SteamDeckHomebrew/decky-installer</a> stable-release scripts. Uninstall preserves plugin data, matching the official normal uninstall.</div>
-      ${homeComboCard(homeCombo)}
+      ${shortcutsCard(shortcuts)}
       ${steamCacheCard(cache)}
       ${storageRecoveryCard(storage)}
     </div>`, { authenticated: true, activeId: 'addons' });
 
   document.querySelector('#refresh-addons').onclick = () => renderAddons();
-  wireHomeCombo(homeCombo);
+  wireShortcuts(shortcuts);
   document.querySelectorAll('[data-cache-library]').forEach((button) => button.addEventListener('click', async () => {
     button.disabled = true;
     button.textContent = 'Copying cache…';

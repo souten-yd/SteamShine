@@ -396,36 +396,44 @@ try {
   }
   securityResults.storage_management = storageSecurity;
 
-  /** Save, apply, and protect the Home-button combination through the real API. */
-  const homeComboUrl = `${baseUrl}/api/steamshine/v1/input/home-combo`;
-  const homeDefault = await (await steamshineContext.request.get(homeComboUrl)).json();
-  const homeNoCsrf = await steamshineContext.request.post(homeComboUrl, { headers: probeHeaders, data: JSON.stringify({ inputs: ['START'], hold_ms: 1000 }) });
-  const homeInvalid = await steamshineContext.request.post(homeComboUrl, { headers: csrfHeaders, data: JSON.stringify({ inputs: ['START', 'HOME'], hold_ms: 1000 }) });
-  const homeTooLong = await steamshineContext.request.post(homeComboUrl, { headers: csrfHeaders, data: JSON.stringify({ inputs: ['START'], hold_ms: 60000 }) });
-  const homeSaved = await steamshineContext.request.post(homeComboUrl, { headers: csrfHeaders, data: JSON.stringify({ inputs: ['back', 'START'], hold_ms: 3000 }) });
-  const homeSavedBody = await homeSaved.json();
+  /** Save, apply, and protect the controller shortcuts through the real API. */
+  const shortcutsUrl = `${baseUrl}/api/steamshine/v1/input/shortcuts`;
+  const shortcutsDefault = await (await steamshineContext.request.get(shortcutsUrl)).json();
+  const postShortcut = (headers, body) => steamshineContext.request.post(shortcutsUrl, { headers, data: JSON.stringify(body) });
+  const shortcutNoCsrf = await postShortcut(probeHeaders, { action: 'home', inputs: ['START'], hold_ms: 1000 });
+  const shortcutInvalid = await postShortcut(csrfHeaders, { action: 'home', inputs: ['START', 'HOME'], hold_ms: 1000 });
+  const shortcutTooLong = await postShortcut(csrfHeaders, { action: 'home', inputs: ['START'], hold_ms: 60000 });
+  const shortcutUnknown = await postShortcut(csrfHeaders, { action: 'power', inputs: ['START'], hold_ms: 1000 });
+  const homeSaved = await postShortcut(csrfHeaders, { action: 'home', inputs: ['back', 'START'], hold_ms: 3000 });
+  const quickSaved = await postShortcut(csrfHeaders, { action: 'quick_access', inputs: ['START', 'BACK', 'A'], hold_ms: 1500 });
+  const quickDuplicate = await postShortcut(csrfHeaders, { action: 'quick_access', inputs: ['BACK', 'START'], hold_ms: 500 });
+  const quickSavedBody = await quickSaved.json();
   const homeConfig = await readFile(configFile, 'utf8');
-  if (homeDefault.enabled !== false || homeDefault.available_inputs?.length !== 16
-    || homeNoCsrf.status() !== 400 || homeInvalid.status() !== 400 || homeTooLong.status() !== 400
-    || homeSaved.status() !== 200 || homeSavedBody.inputs?.join('+') !== 'START+BACK' || homeSavedBody.hold_ms !== 3000
-    || !homeConfig.includes('steamshine_home_combo = START+BACK') || !homeConfig.includes('steamshine_home_combo_hold_ms = 3000')) {
-    throw new Error(`Home combination API validation failed: ${JSON.stringify({ homeDefault, noCsrf: homeNoCsrf.status(), invalid: homeInvalid.status(), tooLong: homeTooLong.status(), saved: homeSavedBody })}`);
+  if (shortcutsDefault.actions?.home?.enabled !== false || shortcutsDefault.actions?.quick_access?.enabled !== false || shortcutsDefault.available_inputs?.length !== 16
+    || shortcutNoCsrf.status() !== 400 || shortcutInvalid.status() !== 400 || shortcutTooLong.status() !== 400 || shortcutUnknown.status() !== 400
+    || homeSaved.status() !== 200 || quickSaved.status() !== 200 || quickDuplicate.status() !== 400
+    || quickSavedBody.actions.home.inputs.join('+') !== 'START+BACK' || quickSavedBody.actions.quick_access.inputs.join('+') !== 'START+BACK+A'
+    || !homeConfig.includes('steamshine_home_combo = START+BACK\n') || !homeConfig.includes('steamshine_home_combo_hold_ms = 3000')
+    || !homeConfig.includes('steamshine_quick_access_combo = START+BACK+A') || !homeConfig.includes('steamshine_quick_access_combo_hold_ms = 1500')) {
+    throw new Error(`Controller shortcut API validation failed: ${JSON.stringify({ shortcutsDefault, saved: quickSavedBody, duplicate: quickDuplicate.status() })}`);
   }
-  securityResults.home_combo = { saved: homeSavedBody.inputs, hold_ms: homeSavedBody.hold_ms };
-  // A stale upstream settings page must not clear the combination.
+  securityResults.controller_shortcuts = quickSavedBody.actions;
+  // A stale upstream settings page must not clear the shortcuts.
   const staleUpstreamSave = await steamshinePage.evaluate(async () => {
     const upstreamHeaders = { 'Content-Type': 'application/json', Authorization: `Basic ${btoa('web-e2e:web-e2e-password')}` };
     const config = await (await fetch('/api/config', { headers: upstreamHeaders })).json();
     delete config.status;
     config.steamshine_home_combo = 'A';
     config.steamshine_home_combo_hold_ms = 500;
+    config.steamshine_quick_access_combo = '';
     const saved = await fetch('/api/config', { method: 'POST', headers: upstreamHeaders, body: JSON.stringify(config) });
     await saved.json();
     return saved.status;
   });
   const homeAfterStale = await readFile(configFile, 'utf8');
-  if (staleUpstreamSave !== 200 || !homeAfterStale.includes('steamshine_home_combo = START+BACK') || !homeAfterStale.includes('steamshine_home_combo_hold_ms = 3000')) {
-    throw new Error('Saving upstream settings replaced the Home combination.');
+  if (staleUpstreamSave !== 200 || !homeAfterStale.includes('steamshine_home_combo = START+BACK\n') || !homeAfterStale.includes('steamshine_home_combo_hold_ms = 3000')
+    || !homeAfterStale.includes('steamshine_quick_access_combo = START+BACK+A')) {
+    throw new Error('Saving upstream settings replaced the controller shortcuts.');
   }
 
   /** Allow focused management validation without exercising unrelated capture hardware. */

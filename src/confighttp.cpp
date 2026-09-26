@@ -76,8 +76,8 @@
 #include "process.h"
 #include "rtsp.h"
 #include "steamshine_addons.h"
+#include "steamshine_gamepad_shortcuts.h"
 #include "steamshine_gpuctl.h"
-#include "steamshine_home_combo.h"
 #include "steamshine_hwmonitor.h"
 #include "steamshine_terminal.h"
 #include "stream.h"
@@ -1794,10 +1794,10 @@ namespace confighttp {
       std::stringstream config_stream;
       nlohmann::json output_tree;
       nlohmann::json input_tree = nlohmann::json::parse(ss);
-      // GPU profiles and the Home combination are managed by their own APIs. A
+      // GPU profiles and controller shortcuts are managed by their own APIs. A
       // stale upstream settings page must not replace them with an earlier snapshot.
       const auto persisted = config::parse_config(file_handler::read_file(config::sunshine.config_file.c_str()));
-      for (const auto *key : {"steamshine_gpu_profiles", "steamshine_gpu_active_profile", "steamshine_home_combo", "steamshine_home_combo_hold_ms"}) {
+      for (const auto *key : {"steamshine_gpu_profiles", "steamshine_gpu_active_profile", "steamshine_home_combo", "steamshine_home_combo_hold_ms", "steamshine_quick_access_combo", "steamshine_quick_access_combo_hold_ms"}) {
         input_tree.erase(key);
         if (const auto entry = persisted.find(key); entry != persisted.end()) {
           input_tree[key] = entry->second;
@@ -2896,51 +2896,63 @@ namespace confighttp {
   }
 
   /**
-   * @brief Serialize a Home-button combination for the Addon page.
+   * @brief Serialize one controller shortcut for the Addon page.
    *
    * @param combo Combination to describe.
-   * @return JSON with selected inputs, hold time, and accepted values.
+   * @return JSON with the selected inputs and hold time.
    */
-  nlohmann::json home_combo_json(const steamshine_home_combo::combo_t &combo) {
+  nlohmann::json gamepad_shortcut_json(const steamshine_gamepad_shortcuts::combo_t &combo) {
     nlohmann::json inputs = nlohmann::json::array();
-    const auto formatted {steamshine_home_combo::format_inputs(combo)};
+    const auto formatted {steamshine_gamepad_shortcuts::format_inputs(combo)};
     std::size_t start {0};
     while (!formatted.empty() && start <= formatted.size()) {
       const auto end {std::min(formatted.find('+', start), formatted.size())};
       inputs.push_back(formatted.substr(start, end - start));
       start = end + 1;
     }
+    return {{"enabled", combo.enabled()}, {"inputs", inputs}, {"hold_ms", combo.hold.count()}};
+  }
+
+  /**
+   * @brief Serialize every controller shortcut and the accepted values.
+   *
+   * @param shortcuts Combinations to describe.
+   * @return JSON keyed by action name.
+   */
+  nlohmann::json gamepad_shortcuts_json(const steamshine_gamepad_shortcuts::shortcuts_t &shortcuts) {
+    nlohmann::json actions = nlohmann::json::object();
+    for (std::size_t index {0}; index < steamshine_gamepad_shortcuts::ACTION_COUNT; ++index) {
+      actions[std::string {steamshine_gamepad_shortcuts::action_name(static_cast<steamshine_gamepad_shortcuts::action_e>(index))}] = gamepad_shortcut_json(shortcuts[index]);
+    }
     return {
-      {"enabled", combo.enabled()},
-      {"inputs", inputs},
-      {"hold_ms", combo.hold.count()},
-      {"available_inputs", steamshine_home_combo::input_names()},
-      {"min_hold_ms", steamshine_home_combo::MIN_HOLD.count()},
-      {"max_hold_ms", steamshine_home_combo::MAX_HOLD.count()},
-      {"max_inputs", steamshine_home_combo::MAX_INPUTS},
+      {"actions", actions},
+      {"available_inputs", steamshine_gamepad_shortcuts::input_names()},
+      {"min_hold_ms", steamshine_gamepad_shortcuts::MIN_HOLD.count()},
+      {"max_hold_ms", steamshine_gamepad_shortcuts::MAX_HOLD.count()},
+      {"max_inputs", steamshine_gamepad_shortcuts::MAX_INPUTS},
     };
   }
 
   /**
-   * @brief Return the gamepad combination that emulates the Home button.
+   * @brief Return the controller shortcuts that emulate Home and Quick Access.
    *
    * @param response The HTTP response object.
    * @param request The HTTP request object.
    */
-  void steamshine_home_combo_status(const resp_https_t &response, const req_https_t &request) {
+  void steamshine_gamepad_shortcuts_status(const resp_https_t &response, const req_https_t &request) {
     if (require_steamshine_session(response, request).empty()) {
       return;
     }
-    send_steamshine_response(response, home_combo_json(steamshine_home_combo::current()));
+    send_steamshine_response(response, gamepad_shortcuts_json(steamshine_gamepad_shortcuts::current()));
   }
 
   /**
-   * @brief Save and apply a Home-button combination without restarting the service.
+   * @brief Save and apply one controller shortcut without restarting the service.
    *
    * @param response The HTTP response object.
    * @param request The HTTP request object.
    */
-  void steamshine_home_combo_update(const resp_https_t &response, const req_https_t &request) {
+  void steamshine_gamepad_shortcut_update(const resp_https_t &response, const req_https_t &request) {
     if (require_steamshine_mutation(response, request).empty()) {
       return;
     }
@@ -2948,30 +2960,32 @@ namespace confighttp {
     if (!read_steamshine_json(response, request, input)) {
       return;
     }
-    if (!input.contains("inputs") || !input["inputs"].is_array() || !input.contains("hold_ms") || !input["hold_ms"].is_number_integer()) {
-      bad_request(response, request, "Home button inputs and hold time are required");
+    const auto action {input.contains("action") && input["action"].is_string() ? steamshine_gamepad_shortcuts::parse_action(input["action"].get<std::string>()) : std::nullopt};
+    if (!action || !input.contains("inputs") || !input["inputs"].is_array() || !input.contains("hold_ms") || !input["hold_ms"].is_number_integer()) {
+      bad_request(response, request, "A shortcut action, inputs, and hold time are required");
       return;
     }
     std::string joined;
     for (const auto &value : input["inputs"]) {
       if (!value.is_string()) {
-        bad_request(response, request, "Home button inputs must be names");
+        bad_request(response, request, "Shortcut inputs must be names");
         return;
       }
       joined += (joined.empty() ? "" : "+") + value.get<std::string>();
     }
-    const auto combo {steamshine_home_combo::parse(joined, input["hold_ms"].get<int>())};
+    const auto combo {steamshine_gamepad_shortcuts::parse(joined, input["hold_ms"].get<int>())};
     if (!combo) {
       bad_request(response, request, "Choose up to four different buttons and a hold time between 0.2 and 10 seconds");
       return;
     }
     std::string error;
-    if (!steamshine_home_combo::set(*combo, error)) {
+    if (!steamshine_gamepad_shortcuts::set(*action, *combo, error)) {
       bad_request(response, request, error);
       return;
     }
-    BOOST_LOG(info) << "GAMEPAD_HOME_COMBO_CONFIGURED inputs=" << steamshine_home_combo::format_inputs(*combo) << " hold_ms=" << combo->hold.count();
-    send_steamshine_response(response, home_combo_json(*combo));
+    BOOST_LOG(info) << "GAMEPAD_SHORTCUT_CONFIGURED action=" << steamshine_gamepad_shortcuts::action_name(*action)
+                    << " inputs=" << steamshine_gamepad_shortcuts::format_inputs(*combo) << " hold_ms=" << combo->hold.count();
+    send_steamshine_response(response, gamepad_shortcuts_json(steamshine_gamepad_shortcuts::current()));
   }
 
   /**
@@ -4258,8 +4272,8 @@ namespace confighttp {
     server.resource["^/api/steamshine/v1/gpu/profiles/([^/]+)$"]["DELETE"] = steamshine_handler(steamshine_delete_gpu_profile);
     server.resource["^/api/steamshine/v1/gpu/profiles/([^/]+)/activate$"]["POST"] = steamshine_handler(steamshine_activate_gpu_profile);
     server.resource["^/api/steamshine/v1/addons/decky$"]["GET"] = steamshine_handler(steamshine_decky_status);
-    server.resource["^/api/steamshine/v1/input/home-combo$"]["GET"] = steamshine_handler(steamshine_home_combo_status);
-    server.resource["^/api/steamshine/v1/input/home-combo$"]["POST"] = steamshine_handler(steamshine_home_combo_update);
+    server.resource["^/api/steamshine/v1/input/shortcuts$"]["GET"] = steamshine_handler(steamshine_gamepad_shortcuts_status);
+    server.resource["^/api/steamshine/v1/input/shortcuts$"]["POST"] = steamshine_handler(steamshine_gamepad_shortcut_update);
     server.resource["^/api/steamshine/v1/addons/decky/action$"]["POST"] = steamshine_handler(steamshine_decky_action);
     server.resource["^/api/steamshine/v1/system/authorize$"]["POST"] = steamshine_handler(steamshine_authorize_management);
     server.resource["^/api/steamshine/v1/system/management$"]["GET"] = steamshine_handler(steamshine_management_status);
