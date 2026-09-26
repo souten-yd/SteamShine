@@ -188,7 +188,7 @@ install_runtime_helper() {
     if cmp -s -- "${source}" "${helper}"; then
       return 0
     elif "${NON_INTERACTIVE}"; then
-      say 'The root-owned runtime helper is older than this release; run repair interactively to refresh it.'
+      say 'The runtime helper needs refreshing; use administrator authorization on the Web GPU or Addons page.'
       return 0
     fi
     sudo -v || { say 'Runtime helper update authorization was not granted; the older helper remains installed.'; return 0; }
@@ -196,7 +196,7 @@ install_runtime_helper() {
     :
   else
     if "${NON_INTERACTIVE}"; then
-      say 'GPU profile writes remain unavailable; run SteamShine repair interactively once to authorize its fixed runtime helper.'
+      say 'Authorize GPU profile writes with the administrator password popup on the Web GPU page.'
       return 0
     fi
     sudo -v || { say 'Runtime capability helper authorization was not granted; GPU profile writes remain unavailable.'; return 0; }
@@ -238,7 +238,7 @@ install_decky_helper() {
     return 0
   else
     if "${NON_INTERACTIVE}"; then
-      say 'Decky Addon management remains read-only; run SteamShine repair interactively once to authorize its fixed helper.'
+      say 'Authorize Decky management with the administrator password popup on the Web Addons page.'
       return 0
     fi
     sudo -v || { say 'Decky Addon helper authorization was not granted; status remains read-only.'; return 0; }

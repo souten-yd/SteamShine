@@ -32,9 +32,12 @@ A normal SteamOS install also provisions a root-owned, fixed-operation runtime h
 scoped sudoers entry. SteamShine itself remains unprivileged. The helper accepts only bounded numeric
 profile values, rediscovers the AMD GPU and CPU sysfs paths itself, checks every value against the
 driver's per-policy ranges, waits for asynchronous CPU-policy read-back convergence, and writes only
-its fixed allow-list. `--no-service` skips this host integration. GPU
-profile activation reads the live power cap back from the driver, reports a failed application as an
-error, and reapplies the selected profile whenever the service starts. The one-time interactive
+its fixed allow-list. A capability probe and profile application temporarily resume a runtime-suspended
+AMD GPU, keep it active only for the bounded operation, and restore its previous runtime-power policy
+on every exit path. `--no-service` skips this host integration. GPU profile activation reads the live
+power cap back from the driver, reports a failed application as an error, and reapplies the selected
+profile whenever the service starts. Direct unprivileged writes are intentionally not attempted because
+the kernel exposes these system-wide hardware controls as root-owned sysfs attributes. The one-time interactive
 authorization is not repeated after reboot; a command-specific sudoers default keeps only this
 validated helper non-interactive even when a later distribution rule restores password authentication.
 

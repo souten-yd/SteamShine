@@ -45,6 +45,8 @@ install -m 755 \
   "${root_dir}/scripts/diagnose-steamos-virtual-display.sh" \
   "${root_dir}/scripts/configure-steamos-client-display.py" \
   "${root_dir}/scripts/migrate-steamos-apps.py" \
+  "${root_dir}/scripts/steamshine-steam-cache.py" \
+  "${root_dir}/scripts/steamshine-storage-helper.py" \
   "${root_dir}/scripts/steamshine-gamescope-session-guard.sh" \
   "${root_dir}/scripts/steamshine-decky-helper.sh" \
   "${root_dir}/scripts/steamshine-runtime-helper.sh" \

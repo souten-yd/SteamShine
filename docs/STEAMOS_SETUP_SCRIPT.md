@@ -29,8 +29,11 @@ startup entirely, and it does not provision the privileged runtime or Decky help
 Normal installation and repair provision a separate root-owned runtime helper. It validates bounded
 profile values against driver-reported limits and writes only fixed AMD GPU/CPU sysfs attributes,
 allowing GPU power profiles to survive artifact updates without making the service privileged. The
-selected GPU profile is verified against live sysfs on activation and is reapplied after every service
-start. Interactive authorization is required only when the helper is first installed or replaced; its
+helper temporarily resumes a runtime-suspended GPU for capability inspection or application and restores
+the prior runtime-power policy before it exits. The selected GPU profile is verified against live sysfs
+on activation and is reapplied after every service start. Direct writes from the unprivileged service are
+not available because these system-wide controls are root-owned. Interactive authorization is required
+only when the helper is first installed or replaced; its
 command-specific sudoers default prevents a later broad SteamOS rule from restoring password prompts
 for this helper. Repair tests that policy while explicitly ignoring any temporary sudo timestamp, so
 a recently entered password cannot be mistaken for persistent non-interactive authorization.

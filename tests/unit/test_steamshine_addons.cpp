@@ -6,6 +6,7 @@
 #include "../tests_common.h"
 
 #include <src/steamshine_addons.h>
+#include <src/steamshine_gpuctl.h>
 
 /**
  * @brief Verify the Addon API cannot turn arbitrary text into a command.
@@ -99,4 +100,48 @@ TEST(SteamshineAddonsTest, ValidatesTransientAdministratorPassword) {
   EXPECT_FALSE(steamshine_addons::management_password_valid(std::string("a\0b", 3)));
   EXPECT_FALSE(steamshine_addons::management_ready("arbitrary"));
   EXPECT_FALSE(steamshine_addons::authorize_management("").value("success", true));
+}
+
+/**
+ * @brief Cache setup accepts opaque library IDs and cannot become an arbitrary command.
+ */
+TEST(SteamshineAddonsTest, RestrictsSteamCacheHelperArguments) {
+  const std::string helper {"/package/scripts/steamshine-steam-cache.py"};
+  ASSERT_TRUE(steamshine_addons::steam_cache_helper_arguments(helper));
+  EXPECT_EQ(steamshine_addons::steam_cache_helper_arguments(helper)->back(), "status");
+  const auto valid {steamshine_addons::steam_cache_helper_arguments(helper, "0123456789abcdef01234567")};
+  ASSERT_TRUE(valid);
+  EXPECT_EQ(*valid, (std::vector<std::string> {"/usr/bin/python3", helper, "configure", "0123456789abcdef01234567"}));
+  EXPECT_FALSE(steamshine_addons::steam_cache_helper_arguments(helper, "../../home"));
+  EXPECT_FALSE(steamshine_addons::steam_cache_helper_arguments(helper, "0123456789abcdef0123456;"));
+  EXPECT_FALSE(steamshine_addons::configure_steam_cache("").at("success"));
+}
+
+/**
+ * @brief Storage recovery permits only fixed operations and exact UUIDs.
+ */
+TEST(SteamshineAddonsTest, RestrictsStorageHelperArguments) {
+  EXPECT_TRUE(steamshine_addons::storage_helper_arguments("status"));
+  EXPECT_TRUE(steamshine_addons::storage_helper_arguments("remember"));
+  const auto restore {steamshine_addons::storage_helper_arguments("restore", "19d3483c-a24c-4c26-a7fc-e5d622399d1d")};
+  ASSERT_TRUE(restore);
+  EXPECT_EQ(restore->size(), 5);
+  EXPECT_FALSE(steamshine_addons::storage_helper_arguments("restore", "/dev/sda"));
+  EXPECT_FALSE(steamshine_addons::storage_helper_arguments("status", "extra"));
+  EXPECT_FALSE(steamshine_addons::storage_helper_arguments("format"));
+  EXPECT_FALSE(steamshine_addons::storage_action("format").at("success"));
+  EXPECT_FALSE(steamshine_addons::management_ready("arbitrary-helper"));
+}
+
+/**
+ * @brief Management JSON remains an object even when packaged helpers are unavailable.
+ */
+TEST(SteamshineAddonsTest, ReturnsObjectResponsesWithoutInstalledHelpers) {
+  const auto cache = steamshine_addons::steam_cache_status();
+  ASSERT_TRUE(cache.is_object());
+  EXPECT_TRUE(cache.at("libraries").is_array());
+  const auto storage = steamshine_addons::storage_status();
+  ASSERT_TRUE(storage.is_object());
+  EXPECT_TRUE(storage.at("volumes").is_array());
+  EXPECT_FALSE(steamshine_addons::authorize_management("").at("success"));
 }

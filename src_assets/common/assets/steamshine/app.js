@@ -76,7 +76,7 @@ function authorizeManagement() {
   administratorDialog = new Promise((resolve) => {
     const backdrop = document.createElement('div');
     backdrop.className = 'modal-backdrop';
-    backdrop.innerHTML = `<div class="modal" role="dialog" aria-modal="true" aria-labelledby="administrator-title"><h3 id="administrator-title">Administrator authentication</h3><p>Enter this host's administrator password to enable GPU profile controls. The password is used for this request only and is not saved.</p><form id="administrator-form" class="stack" autocomplete="off"><label>Administrator password<input name="administrator_password" type="password" autocomplete="off" maxlength="1024" required></label><div class="notice" role="status"></div><div class="btn-row"><button type="button" class="btn-ghost" data-admin-cancel>Cancel</button><button type="submit" class="btn-primary">Authorize</button></div></form></div>`;
+    backdrop.innerHTML = `<div class="modal" role="dialog" aria-modal="true" aria-labelledby="administrator-title"><h3 id="administrator-title">Administrator authentication</h3><p>Enter this host's administrator password to enable Decky management, GPU profiles, and storage recovery. The password is used for this request only and is not saved.</p><form id="administrator-form" class="stack" autocomplete="off"><label>Administrator password<input name="administrator_password" type="password" autocomplete="off" maxlength="1024" required></label><div class="notice" role="status"></div><div class="btn-row"><button type="button" class="btn-ghost" data-admin-cancel>Cancel</button><button type="submit" class="btn-primary">Authorize</button></div></form></div>`;
     document.body.appendChild(backdrop);
     const form = backdrop.querySelector('form');
     const field = form.elements.administrator_password;
@@ -906,19 +906,49 @@ async function renderGpu() {
   document.querySelector('#add-profile')?.addEventListener('click', () => openProfileForm(caps, null));
 }
 
-/** @brief Render fixed-scope Decky Loader installation and lifecycle controls. */
+/** @brief Render existing cache locations and safe configuration controls for registered libraries. */
+function steamCacheCard(cache) {
+  const rows = (cache.libraries || []).map((library) => {
+    const shader = library.shadercache;
+    const labels = { internal: 'Internal storage', library: 'Game library', unavailable: 'Unavailable library', broken_link: 'Unavailable link', custom_link: 'Custom location', invalid: 'Needs attention' };
+    return `<div class="section cache-library"><h4>${escapeHtml(library.path)}</h4><div class="rows">
+      <div class="row"><span class="k">Shader cache</span><span class="v"><span class="badge ${shader.configured ? 'badge-ok' : 'badge-warn'}">${escapeHtml(labels[shader.state] || shader.state)}</span></span></div>
+      <div class="row"><span class="k">Cache location</span><span class="v storage-path">${escapeHtml(shader.target)}</span></div>
+      <div class="row"><span class="k">Proton data</span><span class="v storage-path">${escapeHtml(library.compatdata.target)}</span></div>
+      </div><p class="field-hint">${escapeHtml(shader.reason)}</p>
+      ${shader.configured ? '' : `<button class="btn-primary btn-sm" data-cache-library="${escapeHtml(library.id)}" ${shader.can_configure ? '' : 'disabled'}>Use internal storage</button>`}</div>`;
+  }).join('');
+  return `<div class="section stack addons-card"><h3>Steam shader cache</h3><p>Check where each library stores its cache. Internal storage free: ${formatBytes(cache.home_free_bytes || 0)}.</p><p class="field-hint">Changing the location requires Steam and games to be closed. Existing shader data is copied and the original is retained as a backup. Proton data, including saves, is left unchanged.</p>${cache.message ? `<p class="notice">${escapeHtml(cache.message)}</p>` : ''}${rows || '<div class="empty">No Steam libraries found.</div>'}<div id="cache-result" class="notice" role="status"></div></div>`;
+}
+
+/** @brief Render saved mount mappings without offering formatting or arbitrary mount paths. */
+function storageRecoveryCard(storage) {
+  const rows = (storage.volumes || []).map((volume) => `<div class="section storage-volume"><h4>${escapeHtml(volume.label || volume.uuid)} · ${formatBytes(volume.size_bytes || 0)}</h4><div class="rows">
+    <div class="row"><span class="k">State</span><span class="v"><span class="badge ${volume.mounted && volume.persistent ? 'badge-ok' : 'badge-warn'}">${volume.mounted ? (volume.persistent ? 'Mounted · automatic mount enabled' : 'Mounted · settings need saving') : (volume.connected ? 'Not mounted' : 'Disconnected')}</span></span></div>
+    <div class="row"><span class="k">Saved mount path</span><span class="v storage-path">${escapeHtml(volume.target)}</span></div>
+    <div class="row"><span class="k">Filesystem UUID</span><span class="v storage-path">${escapeHtml(volume.uuid)}</span></div>
+    <div class="row"><span class="k">Settings source</span><span class="v storage-path">${escapeHtml(volume.origin)}</span></div>
+    </div><p class="field-hint">${escapeHtml(volume.reason)}</p>${volume.mounted && volume.persistent ? '' : `<button class="btn-primary btn-sm" data-restore-volume="${escapeHtml(volume.uuid)}" ${volume.can_restore ? '' : 'disabled'}>Restore saved mount</button>`}</div>`).join('');
+  return `<div class="section stack addons-card"><h3>Storage recovery</h3><p>Save data-volume mount settings so they can be recovered after an OS update. Recovery matches the filesystem UUID and checks an unmounted filesystem without modifying it before restoring the saved path.</p><p class="field-hint">Automatic recovery supports previously registered ext4 data volumes. It does not format disks, repair filesystem errors, or overwrite files at a mount location.</p>${storage.message ? `<p class="notice">${escapeHtml(storage.message)}</p>` : ''}${rows || '<div class="empty">No saved data-volume mounts found.</div>'}<div class="btn-row"><button class="btn-primary" id="save-mount-settings" ${(storage.volumes || []).length ? '' : 'disabled'}>Save mount settings</button><span class="field-hint">${storage.saved_settings ? 'A recovery copy is saved.' : 'Save a recovery copy for future updates.'}</span></div></div>`;
+}
+
+/** @brief Render Decky management, Steam cache settings, and saved storage recovery. */
 async function renderAddons() {
-  const status = await json(await api('/addons/decky'));
+  const [status, cache, storage] = await Promise.all([
+    api('/addons/decky').then(json),
+    api('/addons/steam-cache').then(json).catch((error) => ({ message: error.message })),
+    api('/addons/storage').then(json).catch((error) => ({ message: error.message })),
+  ]);
   const installedLabel = status.installed ? (status.version || 'Installed') : 'Not installed';
   const serviceLabel = status.service_active ? 'Active' : (status.service_enabled ? 'Inactive (enabled)' : 'Inactive');
   const managementNotice = status.management_available
-    ? '<div class="callout info">Operations use SteamShine’s root-owned helper, which permits only Decky stable install, update, uninstall, and owned-session start.</div>'
-    : '<div class="callout warn">Privileged Decky management is not provisioned. Run the SteamShine installer or repair once with sudo authorization; status detection remains read-only.</div>';
-  const managementDisabled = status.management_available ? '' : 'disabled';
+    ? '<div class="callout info">Decky management is ready.</div>'
+    : '<div class="callout warn">Choose an operation to authenticate with this host’s administrator password. Management can be enabled here without running repair in a terminal.</div>';
+  const managementDisabled = '';
   const controls = status.installed
     ? `<button type="button" class="btn-primary" data-decky-action="update" ${managementDisabled}>Update / repair stable</button><button type="button" class="btn-danger" data-decky-action="uninstall" ${managementDisabled}>Uninstall loader</button>`
     : `<button type="button" class="btn-primary" data-decky-action="install" ${managementDisabled}>Install stable</button>`;
-  shell(`<div class="page-header"><div><h2>Addons</h2><p>Install and maintain host integrations used with Steam Game Mode.</p></div></div>
+  shell(`<div class="page-header"><div><h2>Addons</h2><p>Manage integrations, cache storage, and disk recovery.</p></div><button id="refresh-addons" class="btn-ghost">Refresh</button></div>
     <div class="stack">
       <div class="section"><h3>Decky Loader</h3><div class="rows">
         <div class="row"><span class="k">Installation</span><span class="v">${escapeHtml(installedLabel)}</span></div>
@@ -927,7 +957,35 @@ async function renderAddons() {
       </div><div class="btn-row">${controls}</div></div>
       ${managementNotice}
       <div class="field-hint">Install and update follow the official <a href="https://github.com/SteamDeckHomebrew/decky-installer" target="_blank" rel="noopener">SteamDeckHomebrew/decky-installer</a> stable-release scripts. Uninstall preserves plugin data, matching the official normal uninstall.</div>
+      ${steamCacheCard(cache)}
+      ${storageRecoveryCard(storage)}
     </div>`, { authenticated: true, activeId: 'addons' });
+
+  document.querySelector('#refresh-addons').onclick = () => renderAddons();
+  document.querySelectorAll('[data-cache-library]').forEach((button) => button.addEventListener('click', async () => {
+    button.disabled = true;
+    button.textContent = 'Copying cache…';
+    try {
+      const result = await json(await api('/addons/steam-cache/configure', { method: 'POST', body: JSON.stringify({ library_id: button.dataset.cacheLibrary }) }));
+      await renderAddons();
+      document.querySelector('#cache-result').textContent = result.message + (result.backup_path ? ` Backup: ${result.backup_path}` : '');
+    } catch (error) { toast(error.message, 'error'); await renderAddons(); }
+  }));
+  const storageAction = async (payload) => {
+    document.querySelectorAll('[data-restore-volume],#save-mount-settings').forEach((button) => { button.disabled = true; });
+    try {
+      const result = await json(await managedApi('/addons/storage/action', { method: 'POST', body: JSON.stringify(payload) }));
+      toast(result.message, 'ok');
+    } catch (error) { toast(error.message, 'error'); }
+    await renderAddons();
+  };
+  document.querySelector('#save-mount-settings').onclick = () => storageAction({ action: 'remember' });
+  document.querySelectorAll('[data-restore-volume]').forEach((button) => button.addEventListener('click', async () => {
+    const volume = storage.volumes.find((item) => item.uuid === button.dataset.restoreVolume);
+    if (!await confirmDialog({ title: 'Restore saved mount', message: `Restore ${volume.label || volume.uuid} at ${volume.target}? A filesystem check will run without repairs. Existing files will be preserved.`, confirmLabel: 'Restore mount', danger: false })) return;
+    button.textContent = 'Checking and restoring…';
+    await storageAction({ action: 'restore', uuid: volume.uuid });
+  }));
 
   document.querySelectorAll('[data-decky-action]').forEach((button) => button.addEventListener('click', async () => {
     const action = button.dataset.deckyAction;
@@ -942,7 +1000,7 @@ async function renderAddons() {
     })) return;
     document.querySelectorAll('[data-decky-action]').forEach((control) => { control.disabled = true; });
     try {
-      const result = await json(await api('/addons/decky/action', { method: 'POST', body: JSON.stringify({ action }) }));
+      const result = await json(await managedApi('/addons/decky/action', { method: 'POST', body: JSON.stringify({ action }) }));
       toast(result.message || 'Decky Loader operation completed.', 'ok');
       await renderAddons();
     } catch (error) {

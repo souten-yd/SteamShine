@@ -189,7 +189,13 @@ if "${root_dir}/scripts/steamshine-runtime-helper.sh" authorize >/dev/null 2>&1;
 fi
 grep -Fq 'steamshine-runtime-helper.sh' "${root_dir}/scripts/package-steamos-artifact.sh"
 python3 "${root_dir}/tests/integration/test_steamshine_management.py"
+(cd "${root_dir}" && python3 -m unittest tests.integration.test_steamshine_storage_cache)
+grep -Fq 'steamshine-storage-helper.py' "${root_dir}/scripts/package-steamos-artifact.sh"
+grep -Fq 'steamshine-steam-cache.py' "${root_dir}/scripts/package-steamos-artifact.sh"
 grep -Fq 'Defaults!STEAMSHINE_RUNTIME !authenticate' "${root_dir}/steamshine.sh"
+grep -Fq "\${helper} probe-gpu" "${root_dir}/steamshine.sh"
+grep -Fq 'power/runtime_status' "${root_dir}/scripts/steamshine-runtime-helper.sh"
+grep -Fq 'power/control' "${root_dir}/scripts/steamshine-runtime-helper.sh"
 grep -Fq "sudo -n -k \"\${helper}\" authorize" "${root_dir}/steamshine.sh"
 grep -Fq 'Environment=XDG_RUNTIME_DIR=%t' "${root_dir}/packaging/linux/steamshine.service.in"
 grep -Fq 'ExecStart=%h/.local/bin/steamshine %h/.config/steamshine/sunshine.conf' "${root_dir}/packaging/linux/steamshine.service.in"

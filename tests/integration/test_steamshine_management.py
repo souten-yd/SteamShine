@@ -22,7 +22,9 @@ class ManagementTests(unittest.TestCase):
         self.assertIn("probe-gpu", policy)
         self.assertIn("apply-profile *", policy)
         self.assertNotIn("/usr/bin/python3", policy)
-        self.assertNotIn("storage", policy)
+        storage = "/var/lib/steamshine/helpers/steamshine-storage-helper"
+        granted = {item.strip() for item in policy.splitlines()[0].split("=", 1)[1].split(",")}
+        self.assertEqual({item for item in granted if item.startswith(storage)}, {f"{storage} {action}" for action in ("authorize", "status", "remember", "restore *")})
         for caller in ("root", "", "deck ALL", "deck\nALL", "a/b"):
             with self.assertRaises(ValueError):
                 management.policy_for(caller)

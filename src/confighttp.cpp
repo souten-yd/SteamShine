@@ -2926,9 +2926,94 @@ namespace confighttp {
       bad_request(response, request, "Unsupported Decky Loader action");
       return;
     }
+    if (!require_steamshine_management(response, "decky")) {
+      return;
+    }
     const auto result {steamshine_addons::perform_decky_action(*action)};
     if (!result.success) {
       bad_request(response, request, result.message);
+      return;
+    }
+    send_steamshine_response(response, result);
+  }
+
+  /**
+   * @brief Inspect saved data-volume mounts.
+   * @param response HTTP response.
+   * @param request Authenticated request.
+   */
+  void steamshine_storage_status(const resp_https_t &response, const req_https_t &request) {
+    if (!require_steamshine_session(response, request).empty()) {
+      send_steamshine_response(response, steamshine_addons::storage_status());
+    }
+  }
+
+  /**
+   * @brief Save mount settings or recover a registered volume after administrator authorization.
+   * @param response HTTP response.
+   * @param request Session- and CSRF-protected request.
+   */
+  void steamshine_storage_action(const resp_https_t &response, const req_https_t &request) {
+    if (require_steamshine_mutation(response, request).empty()) {
+      return;
+    }
+    nlohmann::json input;
+    if (!read_steamshine_json(response, request, input)) {
+      return;
+    }
+    if (!input.contains("action") || !input["action"].is_string() || (input.contains("uuid") && !input["uuid"].is_string())) {
+      bad_request(response, request, "Invalid storage action");
+      return;
+    }
+    const auto action {input["action"].get<std::string>()};
+    const auto uuid {input.value("uuid", "")};
+    if ((action != "remember" && action != "restore") || !steamshine_addons::storage_helper_arguments(action, uuid)) {
+      bad_request(response, request, "Invalid storage action or UUID");
+      return;
+    }
+    if (!require_steamshine_management(response, "storage")) {
+      return;
+    }
+    const auto result = steamshine_addons::storage_action(action, uuid);
+    if (!result.value("success", false)) {
+      bad_request(response, request, result.value("message", "Storage recovery failed"));
+      return;
+    }
+    send_steamshine_response(response, result);
+  }
+
+  /**
+   * @brief Inspect Steam shader cache and Proton storage locations for the authenticated Addon page.
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   */
+  void steamshine_steam_cache_status(const resp_https_t &response, const req_https_t &request) {
+    if (require_steamshine_session(response, request).empty()) {
+      return;
+    }
+    send_steamshine_response(response, steamshine_addons::steam_cache_status());
+  }
+
+  /**
+   * @brief Configure internal shader storage for one registered library after session and CSRF checks.
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   */
+  void steamshine_steam_cache_configure(const resp_https_t &response, const req_https_t &request) {
+    if (require_steamshine_mutation(response, request).empty()) {
+      return;
+    }
+    nlohmann::json input;
+    if (!read_steamshine_json(response, request, input)) {
+      return;
+    }
+    if (!input.contains("library_id") || !input["library_id"].is_string()) {
+      bad_request(response, request, "A Steam library identifier is required");
+      return;
+    }
+    const auto result = steamshine_addons::configure_steam_cache(input["library_id"].get<std::string>());
+    if (!result.value("success", false)) {
+      bad_request(response, request, result.value("message", "Steam cache configuration failed"));
       return;
     }
     send_steamshine_response(response, result);
@@ -4096,6 +4181,10 @@ namespace confighttp {
     server.resource["^/api/steamshine/v1/addons/decky/action$"]["POST"] = steamshine_handler(steamshine_decky_action);
     server.resource["^/api/steamshine/v1/system/authorize$"]["POST"] = steamshine_handler(steamshine_authorize_management);
     server.resource["^/api/steamshine/v1/system/management$"]["GET"] = steamshine_handler(steamshine_management_status);
+    server.resource["^/api/steamshine/v1/addons/steam-cache$"]["GET"] = steamshine_handler(steamshine_steam_cache_status);
+    server.resource["^/api/steamshine/v1/addons/steam-cache/configure$"]["POST"] = steamshine_handler(steamshine_steam_cache_configure);
+    server.resource["^/api/steamshine/v1/addons/storage$"]["GET"] = steamshine_handler(steamshine_storage_status);
+    server.resource["^/api/steamshine/v1/addons/storage/action$"]["POST"] = steamshine_handler(steamshine_storage_action);
     server.resource["^/api/steamshine/v1/terminal/status$"]["GET"] = steamshine_handler(steamshine_terminal_status);
     server.resource["^/api/steamshine/v1/terminal/start$"]["POST"] = steamshine_handler(steamshine_terminal_start);
     server.resource["^/api/steamshine/v1/terminal/stop$"]["POST"] = steamshine_handler(steamshine_terminal_stop);

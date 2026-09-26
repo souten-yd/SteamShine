@@ -1518,3 +1518,8 @@ pre {
     display: none;
   }
 }
+/* Keep storage paths readable on the narrow Addon layout. */
+.storage-path, .cache-library h4 { overflow-wrap: anywhere; min-width: 0; }
+/* Keep storage labels whole on phones; long paths wrap in the value column instead. */
+.cache-library .row .k, .storage-volume .row .k { flex-shrink: 0; white-space: nowrap; }
+.addons-card > p { font-size: 0.85rem; color: var(--text-faint); margin: 0; }

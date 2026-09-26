@@ -402,6 +402,7 @@ jobs:
           "${smoke_home}/.local/share/steamshine/current/scripts/test-steamos-web-http.sh" "${smoke_home}/.local/bin/steamshine" dist
           npm ci --ignore-scripts
           STEAMSHINE_BINARY="${smoke_home}/.local/bin/steamshine" STEAMSHINE_BROWSER_REPORT_DIR=dist PLAYWRIGHT_CHROMIUM_EXECUTABLE=/usr/bin/chromium node tests/web/upstream-browser-e2e.mjs
+          PLAYWRIGHT_CHROMIUM_EXECUTABLE=/usr/bin/chromium node tests/web/addons-management.mjs
       - uses: actions/upload-artifact@v4
         with:
           name: steamshine-steamos-x86_64-${{ github.event.pull_request.head.sha || github.sha }}

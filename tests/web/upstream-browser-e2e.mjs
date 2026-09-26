@@ -168,7 +168,9 @@ try {
   }));
   const authenticatedPage = await authenticatedContext.newPage();
   authenticatedPage.on('console', (message) => {
-    if (message.type() === 'error') consoleErrors.push(message.text());
+    // Pages log `TypeError: Failed to fetch` when navigation aborts a poll;
+    // genuine network failures are still reported through requestfailed.
+    if (message.type() === 'error' && !/TypeError: Failed to fetch/.test(message.text())) consoleErrors.push(message.text());
   });
   authenticatedPage.on('requestfailed', (request) => {
     if (request.url().startsWith(baseUrl)) recordFailedRequest(request);
@@ -357,6 +359,62 @@ try {
     throw new Error(`SteamShine Addon status is invalid: ${JSON.stringify(deckyStatus)}`);
   }
   securityResults.addons_status = deckyStatus.status;
+
+  /**
+   * Verify real cache/storage APIs and reject mutations before any host operation.
+   * Rejected probes go through the context API client: the server answers them
+   * before reading the request body, which Chromium reports as an aborted page
+   * request even though the rejection status was delivered.
+   */
+  const storageSecurity = await steamshinePage.evaluate(async () => {
+    const results = {};
+    for (const feature of ['steam-cache', 'storage']) {
+      const response = await fetch(`/api/steamshine/v1/addons/${feature}`);
+      results[feature] = { status: response.status, body: await response.json() };
+    }
+    results.csrf_token = (await (await fetch('/api/steamshine/v1/session')).json()).csrf_token;
+    return results;
+  });
+  const probeHeaders = { Origin: baseUrl, 'Content-Type': 'application/json' };
+  const csrfHeaders = { ...probeHeaders, 'X-SteamShine-CSRF-Token': storageSecurity.csrf_token };
+  delete storageSecurity.csrf_token;
+  for (const path of ['/system/authorize', '/addons/storage/action', '/addons/steam-cache/configure']) {
+    const response = await steamshineContext.request.post(`${baseUrl}/api/steamshine/v1${path}`, { headers: probeHeaders, data: '{}' });
+    storageSecurity[`csrf:${path}`] = response.status();
+  }
+  const invalidUuid = await steamshineContext.request.post(`${baseUrl}/api/steamshine/v1/addons/storage/action`, { headers: csrfHeaders, data: JSON.stringify({ action: 'restore', uuid: '/dev/sda' }) });
+  storageSecurity.invalid_uuid = invalidUuid.status();
+  // Earlier administrator checks may exhaust the attempt budget; 429 is an equally safe rejection.
+  const malformedPassword = await steamshineContext.request.post(`${baseUrl}/api/steamshine/v1/system/authorize`, { headers: csrfHeaders, data: '{"password":"fixture-private-marker",' });
+  storageSecurity.malformed_password = malformedPassword.status();
+  storageSecurity.password_reflected = (await malformedPassword.text()).includes('fixture-private-marker');
+  if (storageSecurity['steam-cache'].status !== 200 || !Array.isArray(storageSecurity['steam-cache'].body.libraries)
+    || storageSecurity.storage.status !== 200 || !Array.isArray(storageSecurity.storage.body.volumes)
+    || Object.entries(storageSecurity).some(([key, value]) => key.startsWith('csrf:') && value !== 400)
+    || storageSecurity.invalid_uuid !== 400 || ![400, 429].includes(storageSecurity.malformed_password) || storageSecurity.password_reflected) {
+    throw new Error(`Storage/authorization API validation failed: ${JSON.stringify(storageSecurity)}`);
+  }
+  securityResults.storage_management = storageSecurity;
+
+  /** Allow focused management validation without exercising unrelated capture hardware. */
+  if (process.env.STEAMSHINE_BROWSER_SCOPE === 'addons') {
+    const serviceLog = await readFile(logFile, 'utf8');
+    if (serviceLog.includes('fixture-private-marker') || serviceLog.includes('web-e2e-password')) {
+      throw new Error('Management API leaked a credential into the service log.');
+    }
+    if (consoleErrors.length || failedRequests.length) {
+      throw new Error(`Management browser errors: ${consoleErrors.join('; ')}; ${failedRequests.join('; ')}`);
+    }
+    await steamshinePage.screenshot({ path: join(reportDirectory, 'addons-api.png'), fullPage: true });
+    await writeFile(join(reportDirectory, 'addons-api-report.json'), JSON.stringify({
+      scope: 'addons', browser: browserVersion, status: 'passed',
+      gpu_profile_editor: 'passed', responsive_viewports: responsiveViewports,
+      security: securityResults, secrets_absent_from_service_log: true,
+    }, null, 2) + '\n');
+    await cleanup();
+    console.log('PASS: real Addon/cache/storage APIs, GPU editor, CSRF/UUID/secret protection, and responsive UI.');
+    process.exit(0);
+  }
 
   /** Keep destructive and recovery controls discoverable at phone width. */
   await steamshinePage.setViewportSize({ width: 320, height: 700 });
@@ -821,9 +879,14 @@ try {
     throw new Error(`Authenticated quit failed: HTTP ${securityResults.quit_status}, exit ${quitResult.code}, signal ${quitResult.signal}`);
   }
   const serviceLog = await readFile(logFile, 'utf8').catch(() => '');
-  securityResults.secrets_absent_from_service_log = !['web-e2e-password', 'web-e2e-password-2', '1234', 'bad'].some((secret) => serviceLog.includes(secret));
+  const exposedSecrets = ['web-e2e-password', 'web-e2e-password-2', '1234', 'bad'].filter((secret) => serviceLog.includes(secret));
+  securityResults.secrets_absent_from_service_log = exposedSecrets.length === 0;
   if (!securityResults.secrets_absent_from_service_log) {
-    throw new Error('SteamShine service log exposed a browser credential or pairing PIN.');
+    // Report where each match occurred with the value masked, so a coincidental
+    // match can be told apart from a real leak without printing the secret.
+    const locations = exposedSecrets.flatMap((secret) => serviceLog.split('\n').filter((line) => line.includes(secret)).slice(0, 3)
+      .map((line) => line.replaceAll(secret, '<masked>').slice(0, 240)));
+    throw new Error(`SteamShine service log exposed a browser credential or pairing PIN:\n${locations.join('\n')}`);
   }
   await writeFile(join(reportDirectory, 'web-browser-e2e-report.json'), JSON.stringify({
     browser: 'chromium',
