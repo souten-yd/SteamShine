@@ -932,12 +932,245 @@ function storageRecoveryCard(storage) {
   return `<div class="section stack addons-card"><h3>Storage recovery</h3><p>Save data-volume mount settings so they can be recovered after an OS update. Recovery matches the filesystem UUID and checks an unmounted filesystem without modifying it before restoring the saved path.</p><p class="field-hint">Automatic recovery supports previously registered ext4 data volumes. It does not format disks, repair filesystem errors, or overwrite files at a mount location.</p>${storage.message ? `<p class="notice">${escapeHtml(storage.message)}</p>` : ''}${rows || '<div class="empty">No saved data-volume mounts found.</div>'}<div class="btn-row"><button class="btn-primary" id="save-mount-settings" ${(storage.volumes || []).length ? '' : 'disabled'}>Save mount settings</button><span class="field-hint">${storage.saved_settings ? 'A recovery copy is saved.' : 'Save a recovery copy for future updates.'}</span></div></div>`;
 }
 
+/** @brief Human-readable labels for controller-shortcut keys. */
+const SHORTCUT_KEY_LABELS = {
+  HOME: 'Home', START: 'Start', BACK: 'Back / Select', A: 'A', B: 'B', X: 'X', Y: 'Y', LB: 'LB', RB: 'RB', LT: 'LT', RT: 'RT',
+  LS: 'L3 (left stick)', RS: 'R3 (right stick)', UP: 'D-pad ↑', DOWN: 'D-pad ↓', LEFT: 'D-pad ←', RIGHT: 'D-pad →',
+};
+
+/** @brief Output presets offered when creating or editing a shortcut. */
+const SHORTCUT_PRESETS = [
+  { label: 'Home', output: ['HOME'] },
+  { label: 'Quick Access (Home + A)', output: ['HOME', 'A'] },
+];
+
+let shortcutsData = null;
+let shortcutDraft = null;
+
+/** @brief Format keys for display. */
+function shortcutKeys(keys) {
+  return keys.map((name) => SHORTCUT_KEY_LABELS[name] || name);
+}
+
+/** @brief Describe one controller shortcut in one sentence. */
+function shortcutSummary(shortcut) {
+  if (!shortcut.inputs.length || !shortcut.output.length) return 'Choose buttons to hold and keys to send.';
+  return `Hold ${shortcutKeys(shortcut.inputs).join(' + ')} for ${(shortcut.hold_ms / 1000).toFixed(1)} s to send ${shortcutKeys(shortcut.output).join(', then ')}.`;
+}
+
+/** @brief Render the shortcut editor for a new or existing shortcut. */
+function shortcutEditorHtml(data, draft) {
+  const held = new Set(draft.inputs);
+  const inputChips = data.available_inputs.map((name) => `<button type="button" class="combo-chip" data-editor-input="${escapeHtml(name)}" aria-pressed="${held.has(name)}">${escapeHtml(SHORTCUT_KEY_LABELS[name] || name)}</button>`).join('');
+  const outputChips = data.available_outputs.map((name) => {
+    const order = draft.output.indexOf(name);
+    return `<button type="button" class="combo-chip" data-editor-output="${escapeHtml(name)}" aria-pressed="${order >= 0}">${order >= 0 ? `<span class="combo-order">${order + 1}</span>` : ''}${escapeHtml(SHORTCUT_KEY_LABELS[name] || name)}</button>`;
+  }).join('');
+  const presets = SHORTCUT_PRESETS.map((preset, index) => `<button type="button" class="btn-ghost btn-sm" data-editor-preset="${index}">${escapeHtml(preset.label)}</button>`).join('');
+  return `<div class="section stack" id="shortcut-editor"><h4>${draft.id ? 'Edit shortcut' : 'New shortcut'}</h4>
+    <label>Name (optional)<input type="text" id="shortcut-name" maxlength="${data.max_name_length}" value="${escapeHtml(draft.name)}" placeholder="${escapeHtml(shortcutKeys(draft.output).join(' + ') || 'Shortcut')}"></label>
+    <div class="stack"><span class="field-label">Buttons to hold</span><div class="combo-chips" role="group" aria-label="Buttons to hold">${inputChips}</div></div>
+    <label>Hold time (seconds)<input type="number" id="shortcut-hold" min="${data.min_hold_ms / 1000}" max="${data.max_hold_ms / 1000}" step="0.1" value="${(draft.hold_ms / 1000).toFixed(1)}"></label>
+    <div class="stack"><span class="field-label">Keys to send</span><div class="btn-row">${presets}</div><div class="combo-chips" role="group" aria-label="Keys to send">${outputChips}</div><p class="field-hint">Keys are pressed in the numbered order and released in reverse.</p></div>
+    <label class="checkbox-row">Enabled<input type="checkbox" id="shortcut-enabled" ${draft.enabled ? 'checked' : ''}></label>
+    <p class="field-hint" id="shortcut-summary" role="status"></p>
+    <div class="btn-row"><button type="button" class="btn-primary" id="shortcut-save">Save shortcut</button><button type="button" class="btn-ghost" id="shortcut-cancel">Cancel</button></div></div>`;
+}
+
+/** @brief Render the controller-shortcut list and, when open, its editor. */
+function shortcutsCard(data) {
+  if (data.message) return `<div class="section stack addons-card" id="controller-shortcuts"><h3>Controller shortcuts</h3><p class="notice">${escapeHtml(data.message)}</p></div>`;
+  const rows = data.shortcuts.map((shortcut) => `<div class="section shortcut-row" data-shortcut-id="${escapeHtml(shortcut.id)}">
+      <div class="shortcut-head"><h4>${escapeHtml(shortcut.name || shortcutKeys(shortcut.output).join(' + '))}</h4>
+        <label class="checkbox-row">Enabled<input type="checkbox" data-shortcut-toggle ${shortcut.enabled ? 'checked' : ''}></label></div>
+      <p class="field-hint">${escapeHtml(shortcutSummary(shortcut))}</p>
+      <div class="btn-row"><button type="button" class="btn-ghost btn-sm" data-shortcut-edit>Edit</button><button type="button" class="btn-danger btn-sm" data-shortcut-delete>Delete</button></div></div>`).join('');
+  const full = data.shortcuts.length >= data.max_shortcuts;
+  return `<div class="section stack addons-card" id="controller-shortcuts"><h3>Controller shortcuts</h3>
+    <p>Touch controls in mobile Moonlight have no Home button. A shortcut sends keys such as Home, or Home + A for Steam’s Quick Access menu where Decky Loader lives, when you hold a button combination. The held buttons are released for the game before the keys are sent.</p>
+    ${rows || '<div class="empty">No shortcuts yet.</div>'}
+    ${shortcutDraft ? shortcutEditorHtml(data, shortcutDraft) : `<div class="btn-row"><button type="button" class="btn-primary" id="shortcut-add" ${full ? 'disabled' : ''}>Add shortcut</button>${full ? `<span class="field-hint">Up to ${data.max_shortcuts} shortcuts.</span>` : ''}</div>`}
+    <p class="field-hint">Up to ${data.max_inputs} buttons and ${data.max_inputs} keys each. If one shortcut’s buttons include all of another’s, holding the larger set runs only the larger one. Changes apply immediately; no restart is needed.</p></div>`;
+}
+
+/** @brief Replace the shortcut card in place and wire its controls. */
+function renderShortcutsCard() {
+  const card = document.querySelector('#controller-shortcuts');
+  if (!card || !shortcutsData) return;
+  card.outerHTML = shortcutsCard(shortcutsData);
+  wireShortcuts();
+}
+
+/** @brief Send one shortcut to the server and refresh the card from its response. */
+async function saveShortcut(shortcut) {
+  const saved = await json(await api('/input/shortcuts', { method: 'POST', body: JSON.stringify(shortcut) }));
+  shortcutsData = saved;
+  return saved.saved;
+}
+
+/** @brief Wire list actions and the editor for the controller-shortcut card. */
+function wireShortcuts() {
+  const card = document.querySelector('#controller-shortcuts');
+  if (!card || shortcutsData?.message) return;
+  const data = shortcutsData;
+  card.querySelector('#shortcut-add')?.addEventListener('click', () => {
+    shortcutDraft = { id: '', name: '', inputs: [], hold_ms: 1000, output: ['HOME'], enabled: true };
+    renderShortcutsCard();
+  });
+  card.querySelectorAll('[data-shortcut-id]').forEach((row) => {
+    const shortcut = data.shortcuts.find((item) => item.id === row.dataset.shortcutId);
+    row.querySelector('[data-shortcut-toggle]').addEventListener('change', async (event) => {
+      event.target.disabled = true;
+      try {
+        await saveShortcut({ ...shortcut, enabled: event.target.checked });
+        toast(event.target.checked ? 'Shortcut enabled.' : 'Shortcut disabled.', 'ok');
+      } catch (error) { toast(error.message, 'error'); }
+      renderShortcutsCard();
+    });
+    row.querySelector('[data-shortcut-edit]').addEventListener('click', () => {
+      shortcutDraft = { ...shortcut, inputs: [...shortcut.inputs], output: [...shortcut.output] };
+      renderShortcutsCard();
+    });
+    row.querySelector('[data-shortcut-delete]').addEventListener('click', async () => {
+      if (!await confirmDialog({ title: 'Delete shortcut', message: `Delete “${shortcut.name || shortcutKeys(shortcut.output).join(' + ')}”?`, confirmLabel: 'Delete' })) return;
+      try {
+        shortcutsData = await json(await api(`/input/shortcuts/${encodeURIComponent(shortcut.id)}`, { method: 'DELETE' }));
+        if (shortcutDraft?.id === shortcut.id) shortcutDraft = null;
+        toast('Shortcut deleted.', 'ok');
+      } catch (error) { toast(error.message, 'error'); }
+      renderShortcutsCard();
+    });
+  });
+
+  const editor = card.querySelector('#shortcut-editor');
+  if (!editor) return;
+  const draft = shortcutDraft;
+  const hold = editor.querySelector('#shortcut-hold');
+  const refresh = () => {
+    draft.name = editor.querySelector('#shortcut-name').value;
+    draft.hold_ms = Math.round(Number(hold.value) * 1000);
+    draft.enabled = editor.querySelector('#shortcut-enabled').checked;
+    editor.querySelectorAll('[data-editor-input]').forEach((chip) => {
+      chip.disabled = chip.getAttribute('aria-pressed') !== 'true' && draft.inputs.length >= data.max_inputs;
+    });
+    editor.querySelectorAll('[data-editor-output]').forEach((chip) => {
+      chip.disabled = chip.getAttribute('aria-pressed') !== 'true' && draft.output.length >= data.max_inputs;
+    });
+    const validHold = Number.isFinite(draft.hold_ms) && draft.hold_ms >= data.min_hold_ms && draft.hold_ms <= data.max_hold_ms;
+    editor.querySelector('#shortcut-summary').textContent = validHold ? shortcutSummary(draft) : `Enter a hold time between ${data.min_hold_ms / 1000} and ${data.max_hold_ms / 1000} seconds.`;
+    editor.querySelector('#shortcut-save').disabled = !validHold || !draft.inputs.length || !draft.output.length;
+  };
+  const redrawEditor = () => {
+    draft.name = editor.querySelector('#shortcut-name').value;
+    draft.hold_ms = Math.round(Number(hold.value) * 1000);
+    draft.enabled = editor.querySelector('#shortcut-enabled').checked;
+    renderShortcutsCard();
+  };
+  editor.querySelectorAll('[data-editor-input]').forEach((chip) => chip.addEventListener('click', () => {
+    const name = chip.dataset.editorInput;
+    draft.inputs = draft.inputs.includes(name) ? draft.inputs.filter((item) => item !== name) : [...draft.inputs, name];
+    chip.setAttribute('aria-pressed', String(draft.inputs.includes(name)));
+    refresh();
+  }));
+  editor.querySelectorAll('[data-editor-output]').forEach((chip) => chip.addEventListener('click', () => {
+    const name = chip.dataset.editorOutput;
+    draft.output = draft.output.includes(name) ? draft.output.filter((item) => item !== name) : [...draft.output, name];
+    redrawEditor();
+  }));
+  editor.querySelectorAll('[data-editor-preset]').forEach((button) => button.addEventListener('click', () => {
+    draft.output = [...SHORTCUT_PRESETS[Number(button.dataset.editorPreset)].output];
+    redrawEditor();
+  }));
+  editor.querySelectorAll('#shortcut-name,#shortcut-hold,#shortcut-enabled').forEach((field) => field.addEventListener('input', refresh));
+  editor.querySelector('#shortcut-cancel').addEventListener('click', () => {
+    shortcutDraft = null;
+    renderShortcutsCard();
+  });
+  editor.querySelector('#shortcut-save').addEventListener('click', async () => {
+    refresh();
+    editor.querySelectorAll('button').forEach((button) => { button.disabled = true; });
+    try {
+      const saved = await saveShortcut({ id: draft.id, name: draft.name.trim(), inputs: draft.inputs, hold_ms: draft.hold_ms, output: draft.output, enabled: draft.enabled });
+      shortcutDraft = null;
+      toast(shortcutSummary(saved), 'ok');
+    } catch (error) { toast(error.message, 'error'); }
+    renderShortcutsCard();
+  });
+  // Canonicalize held inputs so the chip order matches the server's order.
+  draft.inputs = data.available_inputs.filter((name) => draft.inputs.includes(name));
+  refresh();
+}
+
+/** @brief Render the controller turbo settings. */
+function turboCard(turbo) {
+  if (turbo.message) return `<div class="section stack addons-card" id="controller-turbo"><h3>Turbo</h3><p class="notice">${escapeHtml(turbo.message)}</p></div>`;
+  const chips = turbo.available_buttons.map((name) => `<button type="button" class="combo-chip" data-turbo-modifier="${escapeHtml(name)}" aria-pressed="${name === turbo.modifier}">${escapeHtml(SHORTCUT_KEY_LABELS[name] || name)}</button>`).join('');
+  return `<div class="section stack addons-card" id="controller-turbo"><div class="shortcut-head"><h3>Turbo</h3>
+      <label class="checkbox-row">Enable turbo<input type="checkbox" id="turbo-enabled" ${turbo.enabled ? 'checked' : ''}></label></div>
+    <p>Rapid fire for any button. Hold the combination button and press a button to turn its turbo on; from then on, holding that button repeats it. Press the same pair again to turn it off.</p>
+    <div class="stack"><span class="field-label">Combination button</span><div class="combo-chips" role="group" aria-label="Combination button">${chips}</div></div>
+    <label>Presses per second<input type="number" id="turbo-hz" min="${turbo.min_hz}" max="${turbo.max_hz}" step="1" value="${turbo.hz}"></label>
+    <p class="field-hint" id="turbo-summary" role="status"></p>
+    <div class="btn-row"><button type="button" class="btn-primary" id="turbo-save">Save</button></div>
+    <p class="field-hint">The combination button still reaches the game when pressed. Turbo buttons are set per controller and reset when it reconnects.</p></div>`;
+}
+
+/** @brief Wire the enable toggle, combination button, and speed for the turbo card. */
+function wireTurbo(turbo) {
+  const card = document.querySelector('#controller-turbo');
+  if (!card || turbo.message) return;
+  const hz = card.querySelector('#turbo-hz');
+  const toggle = card.querySelector('#turbo-enabled');
+  const read = () => ({
+    enabled: toggle.checked,
+    modifier: card.querySelector('[data-turbo-modifier][aria-pressed="true"]')?.dataset.turboModifier || turbo.modifier,
+    hz: Number(hz.value),
+  });
+  const valid = (settings) => Number.isInteger(settings.hz) && settings.hz >= turbo.min_hz && settings.hz <= turbo.max_hz;
+  const refresh = () => {
+    const settings = read();
+    const label = SHORTCUT_KEY_LABELS[settings.modifier] || settings.modifier;
+    card.querySelector('#turbo-summary').textContent = !valid(settings)
+      ? `Enter ${turbo.min_hz}–${turbo.max_hz} presses per second.`
+      : `${settings.enabled ? 'On' : 'Off'}: hold ${label} and press a button to toggle its turbo at ${settings.hz} presses per second.`;
+    card.querySelector('#turbo-save').disabled = !valid(settings);
+  };
+  const save = async (settings) => {
+    card.querySelectorAll('button,input').forEach((control) => { control.disabled = true; });
+    try {
+      const saved = await json(await api('/input/turbo', { method: 'POST', body: JSON.stringify(settings) }));
+      Object.assign(turbo, saved);
+      toast(saved.enabled ? `Turbo is on (${saved.hz} per second).` : 'Turbo is off.', 'ok');
+    } catch (error) {
+      toggle.checked = turbo.enabled;
+      toast(error.message, 'error');
+    }
+    card.querySelectorAll('button,input').forEach((control) => { control.disabled = false; });
+    refresh();
+  };
+  card.querySelectorAll('[data-turbo-modifier]').forEach((chip) => chip.addEventListener('click', () => {
+    card.querySelectorAll('[data-turbo-modifier]').forEach((other) => other.setAttribute('aria-pressed', String(other === chip)));
+    refresh();
+  }));
+  hz.addEventListener('input', refresh);
+  // The switch applies at once; unsaved button or speed edits are only kept when valid.
+  toggle.addEventListener('change', () => {
+    const settings = read();
+    save(valid(settings) ? settings : { ...settings, modifier: turbo.modifier, hz: turbo.hz });
+  });
+  card.querySelector('#turbo-save').addEventListener('click', () => save(read()));
+  refresh();
+}
+
 /** @brief Render Decky management, Steam cache settings, and saved storage recovery. */
 async function renderAddons() {
-  const [status, cache, storage] = await Promise.all([
+  shortcutDraft = null;
+  const [status, cache, storage, shortcuts, turbo] = await Promise.all([
     api('/addons/decky').then(json),
     api('/addons/steam-cache').then(json).catch((error) => ({ message: error.message })),
     api('/addons/storage').then(json).catch((error) => ({ message: error.message })),
+    api('/input/shortcuts').then(json).catch((error) => ({ message: error.message })),
+    api('/input/turbo').then(json).catch((error) => ({ message: error.message })),
   ]);
   const installedLabel = status.installed ? (status.version || 'Installed') : 'Not installed';
   const serviceLabel = status.service_active ? 'Active' : (status.service_enabled ? 'Inactive (enabled)' : 'Inactive');
@@ -948,7 +1181,7 @@ async function renderAddons() {
   const controls = status.installed
     ? `<button type="button" class="btn-primary" data-decky-action="update" ${managementDisabled}>Update / repair stable</button><button type="button" class="btn-danger" data-decky-action="uninstall" ${managementDisabled}>Uninstall loader</button>`
     : `<button type="button" class="btn-primary" data-decky-action="install" ${managementDisabled}>Install stable</button>`;
-  shell(`<div class="page-header"><div><h2>Addons</h2><p>Manage integrations, cache storage, and disk recovery.</p></div><button id="refresh-addons" class="btn-ghost">Refresh</button></div>
+  shell(`<div class="page-header"><div><h2>Addons</h2><p>Manage integrations, controller shortcuts and turbo, cache storage, and disk recovery.</p></div><button id="refresh-addons" class="btn-ghost">Refresh</button></div>
     <div class="stack">
       <div class="section"><h3>Decky Loader</h3><div class="rows">
         <div class="row"><span class="k">Installation</span><span class="v">${escapeHtml(installedLabel)}</span></div>
@@ -957,11 +1190,16 @@ async function renderAddons() {
       </div><div class="btn-row">${controls}</div></div>
       ${managementNotice}
       <div class="field-hint">Install and update follow the official <a href="https://github.com/SteamDeckHomebrew/decky-installer" target="_blank" rel="noopener">SteamDeckHomebrew/decky-installer</a> stable-release scripts. Uninstall preserves plugin data, matching the official normal uninstall.</div>
+      ${shortcutsCard(shortcuts)}
+      ${turboCard(turbo)}
       ${steamCacheCard(cache)}
       ${storageRecoveryCard(storage)}
     </div>`, { authenticated: true, activeId: 'addons' });
 
   document.querySelector('#refresh-addons').onclick = () => renderAddons();
+  shortcutsData = shortcuts;
+  wireShortcuts();
+  wireTurbo(turbo);
   document.querySelectorAll('[data-cache-library]').forEach((button) => button.addEventListener('click', async () => {
     button.disabled = true;
     button.textContent = 'Copying cache…';

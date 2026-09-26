@@ -15,7 +15,18 @@ let authorizations = 0;
 let restored = 0;
 let updated = 0;
 let applied = 0;
+let shortcutList = [];
+const shortcutSaves = [];
+const shortcutDeletes = [];
+let nextShortcutId = 1;
+let turboState = { enabled: false, modifier: 'START', hz: 10 };
+const turboSaves = [];
 const errors = [];
+/** Return the simulated controller-shortcut API payload. */
+function shortcutPayload() {
+  const inputs = ['START', 'BACK', 'A', 'B', 'X', 'Y', 'LB', 'RB', 'LT', 'RT', 'LS', 'RS', 'UP', 'DOWN', 'LEFT', 'RIGHT'];
+  return { shortcuts: shortcutList, available_inputs: inputs, available_outputs: ['HOME', ...inputs], min_hold_ms: 200, max_hold_ms: 10000, max_inputs: 4, max_shortcuts: 8, max_name_length: 40 };
+}
 const server = createServer(async (request, response) => {
   try {
     const suffix = request.url.slice('/steamshine/'.length);
@@ -39,6 +50,25 @@ try {
     if (request.method() === 'POST') assert.equal(request.headers()['x-steamshine-csrf-token'], 'fixture-csrf');
     if (path === '/setup/status') return reply({ configured: true });
     if (path === '/session') return reply({ username: 'fixture', csrf_token: 'fixture-csrf' });
+    if (path === '/input/turbo') {
+      if (request.method() === 'POST') { turboSaves.push(body); turboState = body; }
+      const buttons = ['START', 'BACK', 'A', 'B', 'X', 'Y', 'LB', 'RB', 'LS', 'RS', 'UP', 'DOWN', 'LEFT', 'RIGHT'];
+      return reply({ ...turboState, available_buttons: buttons, min_hz: 1, max_hz: 30 });
+    }
+    if (path.startsWith('/input/shortcuts')) {
+      if (request.method() === 'POST') {
+        shortcutSaves.push(body);
+        const saved = { ...body, id: body.id || `s${nextShortcutId++}` };
+        shortcutList = body.id ? shortcutList.map((item) => (item.id === body.id ? saved : item)) : [...shortcutList, saved];
+        return reply({ ...shortcutPayload(), saved });
+      }
+      if (request.method() === 'DELETE') {
+        const id = path.split('/').pop();
+        shortcutDeletes.push(id);
+        shortcutList = shortcutList.filter((item) => item.id !== id);
+      }
+      return reply(shortcutPayload());
+    }
     if (path === '/addons/decky') return reply({ installed: true, version: 'fixture', management_available: authorized });
     if (path === '/addons/steam-cache') return reply({ home_free_bytes: 300 * 1024 ** 3, libraries: [{
       id: libraryId, path: '/run/media/deck/Samsung2TB/SteamLibrary',
@@ -71,6 +101,76 @@ try {
   });
   await page.goto(`${base}/steamshine/addons`);
   await page.getByRole('heading', { name: 'Storage recovery', exact: true }).waitFor();
+  // Create Home (Start + Back, 3 s) and Quick Access (Start + Back + A, 1.5 s), then toggle and delete.
+  const shortcutsCard = page.locator('#controller-shortcuts');
+  await shortcutsCard.getByText('No shortcuts yet.').waitFor();
+  await shortcutsCard.getByRole('button', { name: 'Add shortcut', exact: true }).click();
+  const editor = page.locator('#shortcut-editor');
+  const holdGroup = editor.getByRole('group', { name: 'Buttons to hold' });
+  await holdGroup.getByRole('button', { name: 'Start', exact: true }).click();
+  await holdGroup.getByRole('button', { name: 'Back / Select', exact: true }).click();
+  await editor.getByLabel('Hold time (seconds)').fill('3');
+  await editor.getByText('Hold Start + Back / Select for 3.0 s to send Home.').waitFor();
+  await editor.getByLabel('Hold time (seconds)').fill('20');
+  assert.equal(await editor.getByRole('button', { name: 'Save shortcut', exact: true }).isDisabled(), true);
+  await editor.getByLabel('Hold time (seconds)').fill('3');
+  await editor.getByRole('button', { name: 'Save shortcut', exact: true }).click();
+  await page.locator('[data-shortcut-id="s1"]').waitFor();
+  assert.deepEqual(shortcutSaves.at(-1), { id: '', name: '', inputs: ['START', 'BACK'], hold_ms: 3000, output: ['HOME'], enabled: true });
+
+  await page.locator('#controller-shortcuts').getByRole('button', { name: 'Add shortcut', exact: true }).click();
+  const quick = page.locator('#shortcut-editor');
+  await quick.getByLabel('Name (optional)').fill('Decky');
+  for (const name of ['Start', 'Back / Select', 'A']) await quick.getByRole('group', { name: 'Buttons to hold' }).getByRole('button', { name, exact: true }).click();
+  await quick.getByLabel('Hold time (seconds)').fill('1.5');
+  await quick.getByRole('button', { name: 'Quick Access (Home + A)', exact: true }).click();
+  await page.locator('#shortcut-editor').getByText('Hold Start + Back / Select + A for 1.5 s to send Home, then A.').waitFor();
+  const sendGroup = page.locator('#shortcut-editor').getByRole('group', { name: 'Keys to send' });
+  assert.equal(await sendGroup.locator('[aria-pressed="true"]').count(), 2);
+  await page.locator('#shortcut-editor').getByRole('button', { name: 'Save shortcut', exact: true }).click();
+  await page.locator('[data-shortcut-id="s2"]').getByRole('heading', { name: 'Decky', exact: true }).waitFor();
+  assert.deepEqual(shortcutSaves.at(-1), { id: '', name: 'Decky', inputs: ['START', 'BACK', 'A'], hold_ms: 1500, output: ['HOME', 'A'], enabled: true });
+
+  // Edit keeps the identifier and the send order chosen by tapping.
+  await page.locator('[data-shortcut-id="s2"]').getByRole('button', { name: 'Edit', exact: true }).click();
+  const edit = page.locator('#shortcut-editor');
+  await edit.getByRole('group', { name: 'Keys to send' }).getByRole('button', { name: /Home$/ }).click();
+  await page.locator('#shortcut-editor').getByRole('group', { name: 'Keys to send' }).getByRole('button', { name: /Home$/ }).click();
+  await page.locator('#shortcut-editor').getByRole('button', { name: 'Save shortcut', exact: true }).click();
+  await page.locator('[data-shortcut-id="s2"]').getByText('to send A, then Home.', { exact: false }).waitFor();
+  assert.deepEqual(shortcutSaves.at(-1).output, ['A', 'HOME']);
+  assert.equal(shortcutSaves.at(-1).id, 's2');
+
+  await page.locator('[data-shortcut-id="s1"] [data-shortcut-toggle]').uncheck();
+  await page.waitForFunction(() => document.querySelector('[data-shortcut-id="s1"] [data-shortcut-toggle]')?.checked === false && !document.querySelector('[data-shortcut-id="s1"] [data-shortcut-toggle]').disabled);
+  assert.equal(shortcutSaves.at(-1).enabled, false);
+  assert.equal(shortcutSaves.at(-1).id, 's1');
+
+  await page.locator('[data-shortcut-id="s1"]').getByRole('button', { name: 'Delete', exact: true }).click();
+  await page.getByRole('alertdialog').getByRole('button', { name: 'Delete', exact: true }).click();
+  await page.locator('[data-shortcut-id="s1"]').waitFor({ state: 'detached' });
+  assert.deepEqual(shortcutDeletes, ['s1']);
+  assert.equal(shortcutList.length, 1);
+
+  // Turbo: the switch saves at once; the combination button and speed save with Save.
+  const turboCard = page.locator('#controller-turbo');
+  await turboCard.getByText('Off: hold Start and press a button to toggle its turbo at 10 presses per second.').waitFor();
+  await turboCard.getByLabel('Enable turbo').check();
+  await page.waitForFunction(() => !document.querySelector('#turbo-enabled').disabled);
+  assert.deepEqual(turboSaves.at(-1), { enabled: true, modifier: 'START', hz: 10 });
+  await turboCard.getByRole('group', { name: 'Combination button' }).getByRole('button', { name: 'Back / Select', exact: true }).click();
+  assert.equal(await turboCard.locator('[data-turbo-modifier][aria-pressed="true"]').count(), 1);
+  await turboCard.getByLabel('Presses per second').fill('40');
+  assert.equal(await turboCard.getByRole('button', { name: 'Save', exact: true }).isDisabled(), true);
+  await turboCard.getByLabel('Presses per second').fill('12');
+  await turboCard.getByText('On: hold Back / Select and press a button to toggle its turbo at 12 presses per second.').waitFor();
+  await turboCard.getByRole('button', { name: 'Save', exact: true }).click();
+  await page.waitForFunction(() => !document.querySelector('#turbo-save').disabled);
+  assert.deepEqual(turboSaves.at(-1), { enabled: true, modifier: 'BACK', hz: 12 });
+  await turboCard.getByLabel('Enable turbo').uncheck();
+  await page.waitForFunction(() => !document.querySelector('#turbo-enabled').disabled);
+  assert.deepEqual(turboSaves.at(-1), { enabled: false, modifier: 'BACK', hz: 12 });
+
   await page.getByRole('button', { name: 'Use internal storage' }).click();
   await page.locator('#cache-result').filter({ hasText: '/saved/cache-backup' }).waitFor();
   assert.equal(await page.getByRole('button', { name: 'Use internal storage' }).count(), 0);
@@ -122,7 +222,7 @@ try {
   await page.goto(`${base}/steamshine/addons`);
   await page.getByRole('heading', { name: 'Storage recovery', exact: true }).waitFor();
   await page.screenshot({ path: 'dist/addons-browser/addons-320.png', fullPage: true });
-  console.log('PASS: cache setup, storage restore/cancel, password retry/clearing, Decky reuse, GPU authentication, and 320px layout.');
+  console.log('PASS: controller shortcut create/edit/toggle/delete, turbo switch/button/speed, cache setup, storage restore/cancel, password retry/clearing, Decky reuse, GPU authentication, and 320px layout.');
 } finally {
   await browser.close();
   await new Promise((done) => server.close(done));

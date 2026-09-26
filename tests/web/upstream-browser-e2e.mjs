@@ -396,6 +396,68 @@ try {
   }
   securityResults.storage_management = storageSecurity;
 
+  /** Save, apply, and protect the controller shortcuts through the real API. */
+  const shortcutsUrl = `${baseUrl}/api/steamshine/v1/input/shortcuts`;
+  const shortcutsDefault = await (await steamshineContext.request.get(shortcutsUrl)).json();
+  const postShortcut = (headers, body) => steamshineContext.request.post(shortcutsUrl, { headers, data: JSON.stringify(body) });
+  const shortcutNoCsrf = await postShortcut(probeHeaders, { inputs: ['START'], hold_ms: 1000, output: ['HOME'] });
+  const shortcutInvalid = await postShortcut(csrfHeaders, { inputs: ['START', 'HOME'], hold_ms: 1000, output: ['HOME'] });
+  const shortcutTooLong = await postShortcut(csrfHeaders, { inputs: ['START'], hold_ms: 60000, output: ['HOME'] });
+  const shortcutNoOutput = await postShortcut(csrfHeaders, { inputs: ['START'], hold_ms: 1000, output: [] });
+  const homeSaved = await (await postShortcut(csrfHeaders, { name: 'Home', inputs: ['back', 'START'], hold_ms: 3000, output: ['HOME'] })).json();
+  const quickSaved = await postShortcut(csrfHeaders, { name: 'Decky', inputs: ['START', 'BACK', 'A'], hold_ms: 1500, output: ['home', 'A'] });
+  const quickDuplicate = await postShortcut(csrfHeaders, { inputs: ['BACK', 'START'], hold_ms: 500, output: ['A'] });
+  const quickSavedBody = await quickSaved.json();
+  const homeId = homeSaved.saved?.id;
+  const disabled = await postShortcut(csrfHeaders, { ...homeSaved.saved, enabled: false });
+  const deleteNoCsrf = await steamshineContext.request.delete(`${shortcutsUrl}/${homeId}`, { headers: probeHeaders });
+  const deleted = await steamshineContext.request.delete(`${shortcutsUrl}/${homeId}`, { headers: csrfHeaders });
+  const deletedBody = await deleted.json();
+  const shortcutConfig = await readFile(configFile, 'utf8');
+  if (!Array.isArray(shortcutsDefault.shortcuts) || shortcutsDefault.shortcuts.length !== 0 || shortcutsDefault.available_outputs?.[0] !== 'HOME'
+    || shortcutNoCsrf.status() !== 400 || shortcutInvalid.status() !== 400 || shortcutTooLong.status() !== 400 || shortcutNoOutput.status() !== 400
+    || !homeId || quickSaved.status() !== 200 || quickDuplicate.status() !== 400 || disabled.status() !== 200
+    || deleteNoCsrf.status() !== 400 || deleted.status() !== 200 || deletedBody.shortcuts.length !== 1
+    || quickSavedBody.saved.output.join('+') !== 'HOME+A' || quickSavedBody.saved.inputs.join('+') !== 'START+BACK+A'
+    || !shortcutConfig.includes('"output":"HOME+A"') || shortcutConfig.includes(homeId)) {
+    throw new Error(`Controller shortcut API validation failed: ${JSON.stringify({ shortcutsDefault, quick: quickSavedBody, duplicate: quickDuplicate.status(), deleted: deletedBody })}`);
+  }
+  securityResults.controller_shortcuts = deletedBody.shortcuts;
+
+  /** Save and validate turbo settings through the real API. */
+  const turboUrl = `${baseUrl}/api/steamshine/v1/input/turbo`;
+  const turboDefault = await (await steamshineContext.request.get(turboUrl)).json();
+  const postTurbo = (headers, body) => steamshineContext.request.post(turboUrl, { headers, data: JSON.stringify(body) });
+  const turboNoCsrf = await postTurbo(probeHeaders, { enabled: true, modifier: 'START', hz: 10 });
+  const turboTooFast = await postTurbo(csrfHeaders, { enabled: true, modifier: 'START', hz: 99 });
+  const turboTrigger = await postTurbo(csrfHeaders, { enabled: true, modifier: 'LT', hz: 10 });
+  const turboMissing = await postTurbo(csrfHeaders, { enabled: true, hz: 10 });
+  const turboSaved = await postTurbo(csrfHeaders, { enabled: true, modifier: 'back', hz: 12 });
+  const turboSavedBody = await turboSaved.json();
+  const turboConfig = await readFile(configFile, 'utf8');
+  if (turboDefault.enabled !== false || turboDefault.modifier !== 'START' || turboDefault.hz !== 10 || turboDefault.available_buttons?.includes('LT')
+    || turboNoCsrf.status() !== 400 || turboTooFast.status() !== 400 || turboTrigger.status() !== 400 || turboMissing.status() !== 400
+    || turboSaved.status() !== 200 || turboSavedBody.modifier !== 'BACK' || turboSavedBody.hz !== 12
+    || !turboConfig.includes('steamshine_gamepad_turbo = {"enabled":true')) {
+    throw new Error(`Turbo API validation failed: ${JSON.stringify({ turboDefault, saved: turboSavedBody })}`);
+  }
+  securityResults.controller_turbo = { modifier: turboSavedBody.modifier, hz: turboSavedBody.hz };
+  // A stale upstream settings page must not clear the shortcuts.
+  const staleUpstreamSave = await steamshinePage.evaluate(async () => {
+    const upstreamHeaders = { 'Content-Type': 'application/json', Authorization: `Basic ${btoa('web-e2e:web-e2e-password')}` };
+    const config = await (await fetch('/api/config', { headers: upstreamHeaders })).json();
+    delete config.status;
+    config.steamshine_gamepad_shortcuts = '[]';
+    config.steamshine_gamepad_turbo = '';
+    const saved = await fetch('/api/config', { method: 'POST', headers: upstreamHeaders, body: JSON.stringify(config) });
+    await saved.json();
+    return saved.status;
+  });
+  const homeAfterStale = await readFile(configFile, 'utf8');
+  if (staleUpstreamSave !== 200 || !homeAfterStale.includes('"output":"HOME+A"') || !homeAfterStale.includes('steamshine_gamepad_turbo = {"enabled":true')) {
+    throw new Error('Saving upstream settings replaced the controller shortcuts.');
+  }
+
   /** Allow focused management validation without exercising unrelated capture hardware. */
   if (process.env.STEAMSHINE_BROWSER_SCOPE === 'addons') {
     const serviceLog = await readFile(logFile, 'utf8');

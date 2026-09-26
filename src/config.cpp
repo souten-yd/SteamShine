@@ -2019,6 +2019,8 @@ namespace config {
     bool_f(vars, "upstream_web_ui_visible", sunshine.upstream_web_ui_visible);
     string_f(vars, "steamshine_gpu_active_profile", sunshine.steamshine_gpu_active_profile);
     string_f(vars, "steamshine_gpu_profiles", sunshine.steamshine_gpu_profiles);
+    string_f(vars, "steamshine_gamepad_shortcuts", sunshine.steamshine_gamepad_shortcuts);
+    string_f(vars, "steamshine_gamepad_turbo", sunshine.steamshine_gamepad_turbo);
     if (!sunshine.steamshine_web_ui_enabled && !sunshine.upstream_web_ui_enabled) {
       BOOST_LOG(warning) << "Both Web UIs were disabled; retaining the upstream Sunshine Web UI for recovery"sv;
       sunshine.upstream_web_ui_enabled = true;

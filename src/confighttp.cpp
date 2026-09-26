@@ -76,6 +76,8 @@
 #include "process.h"
 #include "rtsp.h"
 #include "steamshine_addons.h"
+#include "steamshine_gamepad_shortcuts.h"
+#include "steamshine_gamepad_turbo.h"
 #include "steamshine_gpuctl.h"
 #include "steamshine_hwmonitor.h"
 #include "steamshine_terminal.h"
@@ -1793,10 +1795,10 @@ namespace confighttp {
       std::stringstream config_stream;
       nlohmann::json output_tree;
       nlohmann::json input_tree = nlohmann::json::parse(ss);
-      // GPU profiles are managed by their own API. A stale upstream settings
-      // page must not replace newly saved profiles with its earlier snapshot.
+      // GPU profiles and controller shortcuts are managed by their own APIs. A
+      // stale upstream settings page must not replace them with an earlier snapshot.
       const auto persisted = config::parse_config(file_handler::read_file(config::sunshine.config_file.c_str()));
-      for (const auto *key : {"steamshine_gpu_profiles", "steamshine_gpu_active_profile"}) {
+      for (const auto *key : {"steamshine_gpu_profiles", "steamshine_gpu_active_profile", "steamshine_gamepad_shortcuts", "steamshine_gamepad_turbo"}) {
         input_tree.erase(key);
         if (const auto entry = persisted.find(key); entry != persisted.end()) {
           input_tree[key] = entry->second;
@@ -2892,6 +2894,223 @@ namespace confighttp {
       return;
     }
     send_steamshine_response(response, result);
+  }
+
+  /**
+   * @brief Split a `+`-separated key list into a JSON array.
+   *
+   * @param text Key list such as `HOME+A`.
+   * @return Array of key names; empty for empty text.
+   */
+  nlohmann::json shortcut_key_array(const std::string &text) {
+    nlohmann::json keys = nlohmann::json::array();
+    std::size_t start {0};
+    while (!text.empty() && start <= text.size()) {
+      const auto end {std::min(text.find('+', start), text.size())};
+      keys.push_back(text.substr(start, end - start));
+      start = end + 1;
+    }
+    return keys;
+  }
+
+  /**
+   * @brief Serialize one controller shortcut for the Addon page.
+   *
+   * @param shortcut Shortcut to describe.
+   * @return JSON with identifier, name, held inputs, hold time, output keys, and state.
+   */
+  nlohmann::json gamepad_shortcut_json(const steamshine_gamepad_shortcuts::shortcut_t &shortcut) {
+    return {
+      {"id", shortcut.id},
+      {"name", shortcut.name},
+      {"inputs", shortcut_key_array(steamshine_gamepad_shortcuts::format_inputs(shortcut.trigger))},
+      {"hold_ms", shortcut.trigger.hold.count()},
+      {"output", shortcut_key_array(steamshine_gamepad_shortcuts::format_output(shortcut.output))},
+      {"enabled", shortcut.enabled},
+    };
+  }
+
+  /**
+   * @brief Serialize every controller shortcut and the accepted values.
+   *
+   * @return JSON with the shortcut list and editor limits.
+   */
+  nlohmann::json gamepad_shortcuts_json() {
+    nlohmann::json list = nlohmann::json::array();
+    for (const auto &shortcut : steamshine_gamepad_shortcuts::current()) {
+      list.push_back(gamepad_shortcut_json(shortcut));
+    }
+    return {
+      {"shortcuts", list},
+      {"available_inputs", steamshine_gamepad_shortcuts::input_names()},
+      {"available_outputs", steamshine_gamepad_shortcuts::output_names()},
+      {"min_hold_ms", steamshine_gamepad_shortcuts::MIN_HOLD.count()},
+      {"max_hold_ms", steamshine_gamepad_shortcuts::MAX_HOLD.count()},
+      {"max_inputs", steamshine_gamepad_shortcuts::MAX_INPUTS},
+      {"max_shortcuts", steamshine_gamepad_shortcuts::MAX_SHORTCUTS},
+      {"max_name_length", steamshine_gamepad_shortcuts::MAX_NAME_LENGTH},
+    };
+  }
+
+  /**
+   * @brief Join a JSON array of names with `+`.
+   *
+   * @param value JSON value expected to be an array of strings.
+   * @param joined Joined names on success.
+   * @return True when every element is a string.
+   */
+  bool join_shortcut_keys(const nlohmann::json &value, std::string &joined) {
+    if (!value.is_array()) {
+      return false;
+    }
+    joined.clear();
+    for (const auto &entry : value) {
+      if (!entry.is_string()) {
+        return false;
+      }
+      joined += (joined.empty() ? "" : "+") + entry.get<std::string>();
+    }
+    return true;
+  }
+
+  /**
+   * @brief Return the configured controller shortcuts.
+   *
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   */
+  void steamshine_gamepad_shortcuts_status(const resp_https_t &response, const req_https_t &request) {
+    if (require_steamshine_session(response, request).empty()) {
+      return;
+    }
+    send_steamshine_response(response, gamepad_shortcuts_json());
+  }
+
+  /**
+   * @brief Create or update one controller shortcut and apply it without restarting.
+   *
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   */
+  void steamshine_gamepad_shortcut_save(const resp_https_t &response, const req_https_t &request) {
+    if (require_steamshine_mutation(response, request).empty()) {
+      return;
+    }
+    nlohmann::json input;
+    if (!read_steamshine_json(response, request, input)) {
+      return;
+    }
+    std::string inputs;
+    std::string output;
+    const nlohmann::json id = input.value("id", nlohmann::json(""));
+    const nlohmann::json name = input.value("name", nlohmann::json(""));
+    const nlohmann::json enabled = input.value("enabled", nlohmann::json(true));
+    if (!id.is_string() || !name.is_string() || !enabled.is_boolean() || !input.contains("inputs") || !join_shortcut_keys(input["inputs"], inputs) || !input.contains("output") || !join_shortcut_keys(input["output"], output) || !input.contains("hold_ms") || !input["hold_ms"].is_number_integer()) {
+      bad_request(response, request, "Shortcut buttons, hold time, and keys to send are required");
+      return;
+    }
+    const auto trigger {steamshine_gamepad_shortcuts::parse(inputs, input["hold_ms"].get<int>())};
+    if (!trigger || !trigger->enabled()) {
+      bad_request(response, request, "Choose up to four different buttons to hold and a hold time between 0.2 and 10 seconds");
+      return;
+    }
+    const auto keys {steamshine_gamepad_shortcuts::parse_output(output)};
+    if (!keys) {
+      bad_request(response, request, "Choose up to four different keys to send");
+      return;
+    }
+    std::string error;
+    const auto saved {steamshine_gamepad_shortcuts::upsert({id.get<std::string>(), name.get<std::string>(), *trigger, *keys, enabled.get<bool>()}, error)};
+    if (!saved) {
+      bad_request(response, request, error);
+      return;
+    }
+    BOOST_LOG(info) << "GAMEPAD_SHORTCUT_SAVED id=" << saved->id << " inputs=" << steamshine_gamepad_shortcuts::format_inputs(saved->trigger)
+                    << " output=" << steamshine_gamepad_shortcuts::format_output(saved->output) << " enabled=" << (saved->enabled ? "true" : "false");
+    auto result = gamepad_shortcuts_json();
+    result["saved"] = gamepad_shortcut_json(*saved);
+    send_steamshine_response(response, result);
+  }
+
+  /**
+   * @brief Delete one controller shortcut and apply the change without restarting.
+   *
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   */
+  void steamshine_gamepad_shortcut_delete(const resp_https_t &response, const req_https_t &request) {
+    if (require_steamshine_mutation(response, request).empty()) {
+      return;
+    }
+    std::string error;
+    const std::string id {request->path_match[1]};
+    if (!steamshine_gamepad_shortcuts::remove(id, error)) {
+      bad_request(response, request, error);
+      return;
+    }
+    BOOST_LOG(info) << "GAMEPAD_SHORTCUT_DELETED id=" << id;
+    send_steamshine_response(response, gamepad_shortcuts_json());
+  }
+
+  /**
+   * @brief Serialize turbo settings and the accepted values for the Addon page.
+   *
+   * @param settings Settings to describe.
+   * @return JSON with the enabled flag, combination button, frequency, and limits.
+   */
+  nlohmann::json gamepad_turbo_json(const steamshine_gamepad_turbo::settings_t &settings) {
+    return {
+      {"enabled", settings.enabled},
+      {"modifier", settings.modifier},
+      {"hz", settings.hz},
+      {"available_buttons", steamshine_gamepad_turbo::button_names()},
+      {"min_hz", steamshine_gamepad_turbo::MIN_HZ},
+      {"max_hz", steamshine_gamepad_turbo::MAX_HZ},
+    };
+  }
+
+  /**
+   * @brief Return the controller turbo settings.
+   *
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   */
+  void steamshine_gamepad_turbo_status(const resp_https_t &response, const req_https_t &request) {
+    if (require_steamshine_session(response, request).empty()) {
+      return;
+    }
+    send_steamshine_response(response, gamepad_turbo_json(steamshine_gamepad_turbo::current()));
+  }
+
+  /**
+   * @brief Save and apply controller turbo settings without restarting.
+   *
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   */
+  void steamshine_gamepad_turbo_save(const resp_https_t &response, const req_https_t &request) {
+    if (require_steamshine_mutation(response, request).empty()) {
+      return;
+    }
+    nlohmann::json input;
+    if (!read_steamshine_json(response, request, input)) {
+      return;
+    }
+    if (!input.contains("enabled") || !input["enabled"].is_boolean() || !input.contains("modifier") || !input["modifier"].is_string() || !input.contains("hz") || !input["hz"].is_number_integer()) {
+      bad_request(response, request, "Turbo settings need an enabled flag, a combination button, and a speed");
+      return;
+    }
+    steamshine_gamepad_turbo::settings_t settings;
+    settings.enabled = input["enabled"].get<bool>();
+    settings.modifier = input["modifier"].get<std::string>();
+    settings.hz = input["hz"].get<int>();
+    std::string error;
+    if (!steamshine_gamepad_turbo::set(settings, error)) {
+      bad_request(response, request, error);
+      return;
+    }
+    BOOST_LOG(info) << "GAMEPAD_TURBO_CONFIGURED enabled=" << (settings.enabled ? "true" : "false") << " modifier=" << settings.modifier << " hz=" << settings.hz;
+    send_steamshine_response(response, gamepad_turbo_json(steamshine_gamepad_turbo::current()));
   }
 
   /**
@@ -4178,6 +4397,11 @@ namespace confighttp {
     server.resource["^/api/steamshine/v1/gpu/profiles/([^/]+)$"]["DELETE"] = steamshine_handler(steamshine_delete_gpu_profile);
     server.resource["^/api/steamshine/v1/gpu/profiles/([^/]+)/activate$"]["POST"] = steamshine_handler(steamshine_activate_gpu_profile);
     server.resource["^/api/steamshine/v1/addons/decky$"]["GET"] = steamshine_handler(steamshine_decky_status);
+    server.resource["^/api/steamshine/v1/input/shortcuts$"]["GET"] = steamshine_handler(steamshine_gamepad_shortcuts_status);
+    server.resource["^/api/steamshine/v1/input/shortcuts$"]["POST"] = steamshine_handler(steamshine_gamepad_shortcut_save);
+    server.resource["^/api/steamshine/v1/input/shortcuts/([a-z0-9]{1,32})$"]["DELETE"] = steamshine_handler(steamshine_gamepad_shortcut_delete);
+    server.resource["^/api/steamshine/v1/input/turbo$"]["GET"] = steamshine_handler(steamshine_gamepad_turbo_status);
+    server.resource["^/api/steamshine/v1/input/turbo$"]["POST"] = steamshine_handler(steamshine_gamepad_turbo_save);
     server.resource["^/api/steamshine/v1/addons/decky/action$"]["POST"] = steamshine_handler(steamshine_decky_action);
     server.resource["^/api/steamshine/v1/system/authorize$"]["POST"] = steamshine_handler(steamshine_authorize_management);
     server.resource["^/api/steamshine/v1/system/management$"]["GET"] = steamshine_handler(steamshine_management_status);

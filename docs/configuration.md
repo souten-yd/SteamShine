@@ -312,6 +312,14 @@ supported on the current platform.
 
 <table><tr><td>Description</td><td colspan="2">JSON-encoded custom GPU/CPU performance profiles managed by the SteamShine GPU page.</td></tr><tr><td>Default</td><td colspan="2">Empty</td></tr><tr><td>Example</td><td colspan="2">@code{} steamshine_gpu_profiles = [] @endcode</td></tr></table>
 
+### steamshine_gamepad_shortcuts
+
+<table><tr><td>Description</td><td colspan="2">JSON-encoded controller shortcuts managed by the Controller shortcuts card on the SteamShine Addons page. Each shortcut holds up to four inputs (START, BACK, A, B, X, Y, LB, RB, LT, RT, LS, RS, UP, DOWN, LEFT, RIGHT) for 200 to 10000 milliseconds and then sends up to four keys, which may also include HOME, pressed in order and released in reverse. For example, HOME opens the Steam menu and HOME+A opens Steam's Quick Access menu, where Decky Loader lives. Shortcuts can be disabled without deleting them; two enabled shortcuts cannot hold the same inputs, and when one contains every input of another, holding the larger set runs only the larger one.</td></tr><tr><td>Default</td><td colspan="2">Empty</td></tr><tr><td>Example</td><td colspan="2">@code{} steamshine_gamepad_shortcuts = [{"id":"s1","name":"Decky","inputs":"START+BACK","hold_ms":1500,"output":"HOME+A","enabled":true}] @endcode</td></tr></table>
+
+### steamshine_gamepad_turbo
+
+<table><tr><td>Description</td><td colspan="2">JSON-encoded controller turbo settings managed by the Turbo card on the SteamShine Addons page: an enabled flag, one combination button, and a speed from 1 to 30 presses per second. Holding the combination button and pressing another button turns turbo on for that button, so holding it afterwards repeats it; pressing the same pair again turns it off. Turbo buttons belong to one connected controller and reset when it reconnects.</td></tr><tr><td>Default</td><td colspan="2">Empty (turbo off, combination button START, 10 presses per second)</td></tr><tr><td>Example</td><td colspan="2">@code{} steamshine_gamepad_turbo = {"enabled":true,"modifier":"START","hz":10} @endcode</td></tr></table>
+
 ## Input
 
 ### controller
