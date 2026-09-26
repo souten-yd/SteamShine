@@ -115,7 +115,7 @@ try {
   await page.locator('[data-activate="Balanced"]').click();
   await page.getByLabel('Administrator password', { exact: true }).fill('fixture-pass');
   await page.getByRole('button', { name: 'Authorize', exact: true }).click();
-  await page.getByText('GPU controls are authorized.', { exact: false }).waitFor();
+  await page.getByText('Runtime writes are authorized', { exact: false }).waitFor();
   assert.equal(applied, 1);
   assert.deepEqual(errors, []);
   await mkdir('dist/addons-browser', { recursive: true });
