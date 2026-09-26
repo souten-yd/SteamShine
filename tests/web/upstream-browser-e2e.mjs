@@ -94,6 +94,7 @@ try {
     'origin_web_ui_allowed = pc',
     'system_tray = disabled',
     'steamshine_web_ui_default = enabled',
+    `steamshine_gpu_profiles = ${JSON.stringify([{ name: 'Alternative', power_cap_watts: 260, cpu_governor: 'powersave', cpu_max_freq_mhz: 3600 }])}`,
     '',
   ].join('\n'));
   const logHandle = await import('node:fs').then(({ createWriteStream }) => createWriteStream(logFile));
@@ -202,6 +203,22 @@ try {
   await steamshinePage.locator('#login button').click();
   await steamshinePage.waitForURL(`${baseUrl}/steamshine/monitor`, { timeout: 5000 });
   await waitForMonitor(steamshinePage);
+
+  // Existing custom profiles must survive a process start and appear on the GPU page.
+  await steamshinePage.goto(`${baseUrl}/steamshine/gpu`, { waitUntil: 'domcontentloaded' });
+  const customProfile = steamshinePage.locator('[data-activate="Alternative"]');
+  await customProfile.waitFor({ state: 'visible', timeout: 5000 });
+  if (!(await customProfile.innerText()).includes('260W')) {
+    throw new Error('The saved Alternative GPU profile lost its power limit.');
+  }
+  const savedGpuProfiles = await steamshinePage.evaluate(async () => {
+    const response = await fetch('/api/steamshine/v1/gpu/profiles');
+    return response.json();
+  });
+  const savedAlternative = savedGpuProfiles.profiles.find((profile) => profile.name === 'Alternative');
+  if (savedAlternative?.power_cap_watts !== 260 || savedAlternative?.cpu_max_freq_mhz !== 3600 || savedAlternative?.cpu_governor !== 'powersave') {
+    throw new Error('The GPU API did not preserve the existing custom profile.');
+  }
   for (const viewport of [
     { name: 'desktop', width: 1440, height: 900 },
     { name: 'tablet', width: 768, height: 1024 },
@@ -715,6 +732,7 @@ try {
     login: 'passed',
     invalid_pin_rejected: true,
     steamshine_monitor_status: 200,
+    steamshine_saved_gpu_profile: 'passed',
     steamshine_login: 'passed',
     steamshine_secure_session_cookie: true,
     steamshine_invalid_pin_rejected: true,
