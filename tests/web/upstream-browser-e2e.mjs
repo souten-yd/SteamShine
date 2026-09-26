@@ -360,27 +360,34 @@ try {
   }
   securityResults.addons_status = deckyStatus.status;
 
-  /** Verify real cache/storage APIs and reject mutations before any host operation. */
+  /**
+   * Verify real cache/storage APIs and reject mutations before any host operation.
+   * Rejected probes go through the context API client: the server answers them
+   * before reading the request body, which Chromium reports as an aborted page
+   * request even though the rejection status was delivered.
+   */
   const storageSecurity = await steamshinePage.evaluate(async () => {
-    const session = await (await fetch('/api/steamshine/v1/session')).json();
-    const headers = { 'Content-Type': 'application/json', 'X-SteamShine-CSRF-Token': session.csrf_token };
     const results = {};
     for (const feature of ['steam-cache', 'storage']) {
       const response = await fetch(`/api/steamshine/v1/addons/${feature}`);
       results[feature] = { status: response.status, body: await response.json() };
     }
-    for (const path of ['/system/authorize', '/addons/storage/action', '/addons/steam-cache/configure']) {
-      const response = await fetch(`/api/steamshine/v1${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
-      results[`csrf:${path}`] = response.status;
-    }
-    const invalid = await fetch('/api/steamshine/v1/addons/storage/action', { method: 'POST', headers, body: JSON.stringify({ action: 'restore', uuid: '/dev/sda' }) });
-    results.invalid_uuid = invalid.status;
-    // Earlier administrator checks may exhaust the attempt budget; 429 is an equally safe rejection.
-    const malformed = await fetch('/api/steamshine/v1/system/authorize', { method: 'POST', headers, body: '{"password":"fixture-private-marker",' });
-    results.malformed_password = malformed.status;
-    results.password_reflected = (await malformed.text()).includes('fixture-private-marker');
+    results.csrf_token = (await (await fetch('/api/steamshine/v1/session')).json()).csrf_token;
     return results;
   });
+  const probeHeaders = { Origin: baseUrl, 'Content-Type': 'application/json' };
+  const csrfHeaders = { ...probeHeaders, 'X-SteamShine-CSRF-Token': storageSecurity.csrf_token };
+  delete storageSecurity.csrf_token;
+  for (const path of ['/system/authorize', '/addons/storage/action', '/addons/steam-cache/configure']) {
+    const response = await steamshineContext.request.post(`${baseUrl}/api/steamshine/v1${path}`, { headers: probeHeaders, data: '{}' });
+    storageSecurity[`csrf:${path}`] = response.status();
+  }
+  const invalidUuid = await steamshineContext.request.post(`${baseUrl}/api/steamshine/v1/addons/storage/action`, { headers: csrfHeaders, data: JSON.stringify({ action: 'restore', uuid: '/dev/sda' }) });
+  storageSecurity.invalid_uuid = invalidUuid.status();
+  // Earlier administrator checks may exhaust the attempt budget; 429 is an equally safe rejection.
+  const malformedPassword = await steamshineContext.request.post(`${baseUrl}/api/steamshine/v1/system/authorize`, { headers: csrfHeaders, data: '{"password":"fixture-private-marker",' });
+  storageSecurity.malformed_password = malformedPassword.status();
+  storageSecurity.password_reflected = (await malformedPassword.text()).includes('fixture-private-marker');
   if (storageSecurity['steam-cache'].status !== 200 || !Array.isArray(storageSecurity['steam-cache'].body.libraries)
     || storageSecurity.storage.status !== 200 || !Array.isArray(storageSecurity.storage.body.volumes)
     || Object.entries(storageSecurity).some(([key, value]) => key.startsWith('csrf:') && value !== 400)
