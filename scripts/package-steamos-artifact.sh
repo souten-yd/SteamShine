@@ -47,7 +47,6 @@ install -m 755 \
   "${root_dir}/scripts/migrate-steamos-apps.py" \
   "${root_dir}/scripts/steamshine-steam-cache.py" \
   "${root_dir}/scripts/steamshine-storage-helper.py" \
-  "${root_dir}/scripts/steamshine-provision-management.py" \
   "${root_dir}/scripts/steamshine-gamescope-session-guard.sh" \
   "${root_dir}/scripts/steamshine-decky-helper.sh" \
   "${root_dir}/scripts/steamshine-runtime-helper.sh" \
