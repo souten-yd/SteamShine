@@ -1697,6 +1697,12 @@ namespace input {
       if (gamepad.id < 0) {
         return;
       }
+      // Turning turbo off or changing its speed on the Web page applies to held buttons at once.
+      const auto settings {steamshine_gamepad_turbo::current()};
+      gamepad.turbo.hz = settings.hz;
+      if (!settings.enabled) {
+        steamshine_gamepad_turbo::clear(gamepad.turbo);
+      }
       const auto next {steamshine_gamepad_turbo::render(gamepad.turbo, steamshine_gamepad_turbo::clock_t::now())};
       if (!same_gamepad_state(next, gamepad.gamepad_state)) {
         platf::gamepad_update(platf_input, gamepad.id, next);
@@ -1861,7 +1867,7 @@ namespace input {
     for (const auto &toggle : steamshine_gamepad_turbo::update(gamepad.turbo, steamshine_gamepad_turbo::current(), gamepad_state, turbo_now)) {
       BOOST_LOG(info) << "GAMEPAD_TURBO controller=" << packet->controllerNumber
                       << " button=" << steamshine_gamepad_shortcuts::button_name(toggle.button)
-                      << " hz=" << toggle.hz;
+                      << " enabled=" << (toggle.enabled ? "true" : "false");
     }
     gamepad_state = steamshine_gamepad_turbo::render(gamepad.turbo, turbo_now);
     schedule_turbo_tick(input, packet->controllerNumber);

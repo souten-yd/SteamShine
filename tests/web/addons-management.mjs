@@ -19,7 +19,7 @@ let shortcutList = [];
 const shortcutSaves = [];
 const shortcutDeletes = [];
 let nextShortcutId = 1;
-let turboState = { enabled: false, presets: [5, 10, 15, 20].map((hz) => ({ inputs: [], hz })) };
+let turboState = { enabled: false, modifier: 'START', hz: 10 };
 const turboSaves = [];
 const errors = [];
 /** Return the simulated controller-shortcut API payload. */
@@ -52,8 +52,8 @@ try {
     if (path === '/session') return reply({ username: 'fixture', csrf_token: 'fixture-csrf' });
     if (path === '/input/turbo') {
       if (request.method() === 'POST') { turboSaves.push(body); turboState = body; }
-      const inputs = ['START', 'BACK', 'A', 'B', 'X', 'Y', 'LB', 'RB', 'LT', 'RT', 'LS', 'RS', 'UP', 'DOWN', 'LEFT', 'RIGHT'];
-      return reply({ ...turboState, available_inputs: inputs, available_targets: inputs.filter((name) => !['LT', 'RT'].includes(name)), min_hz: 1, max_hz: 30, max_inputs: 4 });
+      const buttons = ['START', 'BACK', 'A', 'B', 'X', 'Y', 'LB', 'RB', 'LS', 'RS', 'UP', 'DOWN', 'LEFT', 'RIGHT'];
+      return reply({ ...turboState, available_buttons: buttons, min_hz: 1, max_hz: 30 });
     }
     if (path.startsWith('/input/shortcuts')) {
       if (request.method() === 'POST') {
@@ -152,20 +152,24 @@ try {
   assert.deepEqual(shortcutDeletes, ['s1']);
   assert.equal(shortcutList.length, 1);
 
-  // Turbo: enable, give preset 1 Back + RB at 12 per second, reject an out-of-range speed.
+  // Turbo: the switch saves at once; the combination button and speed save with Save.
   const turboCard = page.locator('#controller-turbo');
+  await turboCard.getByText('Off: hold Start and press a button to toggle its turbo at 10 presses per second.').waitFor();
   await turboCard.getByLabel('Enable turbo').check();
-  const preset1 = turboCard.locator('[data-turbo-preset="0"]');
-  await preset1.getByRole('button', { name: 'Back / Select', exact: true }).click();
-  await preset1.getByRole('button', { name: 'RB', exact: true }).click();
-  await preset1.getByLabel('Presses per second').fill('40');
-  assert.equal(await turboCard.getByRole('button', { name: 'Save turbo', exact: true }).isDisabled(), true);
-  await preset1.getByLabel('Presses per second').fill('12');
-  await preset1.getByText('Hold Back / Select + RB and press a button to toggle 12 presses per second.').waitFor();
-  await turboCard.locator('[data-turbo-preset="1"]').getByText('Not used.').waitFor();
-  await turboCard.getByRole('button', { name: 'Save turbo', exact: true }).click();
+  await page.waitForFunction(() => !document.querySelector('#turbo-enabled').disabled);
+  assert.deepEqual(turboSaves.at(-1), { enabled: true, modifier: 'START', hz: 10 });
+  await turboCard.getByRole('group', { name: 'Combination button' }).getByRole('button', { name: 'Back / Select', exact: true }).click();
+  assert.equal(await turboCard.locator('[data-turbo-modifier][aria-pressed="true"]').count(), 1);
+  await turboCard.getByLabel('Presses per second').fill('40');
+  assert.equal(await turboCard.getByRole('button', { name: 'Save', exact: true }).isDisabled(), true);
+  await turboCard.getByLabel('Presses per second').fill('12');
+  await turboCard.getByText('On: hold Back / Select and press a button to toggle its turbo at 12 presses per second.').waitFor();
+  await turboCard.getByRole('button', { name: 'Save', exact: true }).click();
   await page.waitForFunction(() => !document.querySelector('#turbo-save').disabled);
-  assert.deepEqual(turboSaves.at(-1), { enabled: true, presets: [{ inputs: ['BACK', 'RB'], hz: 12 }, { inputs: [], hz: 10 }, { inputs: [], hz: 15 }, { inputs: [], hz: 20 }] });
+  assert.deepEqual(turboSaves.at(-1), { enabled: true, modifier: 'BACK', hz: 12 });
+  await turboCard.getByLabel('Enable turbo').uncheck();
+  await page.waitForFunction(() => !document.querySelector('#turbo-enabled').disabled);
+  assert.deepEqual(turboSaves.at(-1), { enabled: false, modifier: 'BACK', hz: 12 });
 
   await page.getByRole('button', { name: 'Use internal storage' }).click();
   await page.locator('#cache-result').filter({ hasText: '/saved/cache-backup' }).waitFor();
@@ -218,7 +222,7 @@ try {
   await page.goto(`${base}/steamshine/addons`);
   await page.getByRole('heading', { name: 'Storage recovery', exact: true }).waitFor();
   await page.screenshot({ path: 'dist/addons-browser/addons-320.png', fullPage: true });
-  console.log('PASS: controller shortcut create/edit/toggle/delete, turbo presets, cache setup, storage restore/cancel, password retry/clearing, Decky reuse, GPU authentication, and 320px layout.');
+  console.log('PASS: controller shortcut create/edit/toggle/delete, turbo switch/button/speed, cache setup, storage restore/cancel, password retry/clearing, Decky reuse, GPU authentication, and 320px layout.');
 } finally {
   await browser.close();
   await new Promise((done) => server.close(done));

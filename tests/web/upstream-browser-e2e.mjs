@@ -424,25 +424,24 @@ try {
   }
   securityResults.controller_shortcuts = deletedBody.shortcuts;
 
-  /** Save and validate turbo presets through the real API. */
+  /** Save and validate turbo settings through the real API. */
   const turboUrl = `${baseUrl}/api/steamshine/v1/input/turbo`;
   const turboDefault = await (await steamshineContext.request.get(turboUrl)).json();
-  const turboPresets = (first) => [first, { inputs: [], hz: 10 }, { inputs: [], hz: 15 }, { inputs: [], hz: 20 }];
   const postTurbo = (headers, body) => steamshineContext.request.post(turboUrl, { headers, data: JSON.stringify(body) });
-  const turboNoCsrf = await postTurbo(probeHeaders, { enabled: true, presets: turboPresets({ inputs: ['BACK'], hz: 10 }) });
-  const turboTooFast = await postTurbo(csrfHeaders, { enabled: true, presets: turboPresets({ inputs: ['BACK'], hz: 99 }) });
-  const turboShort = await postTurbo(csrfHeaders, { enabled: true, presets: [{ inputs: ['BACK'], hz: 10 }] });
-  const turboDuplicate = await postTurbo(csrfHeaders, { enabled: true, presets: [{ inputs: ['BACK'], hz: 10 }, { inputs: ['BACK'], hz: 20 }, { inputs: [], hz: 15 }, { inputs: [], hz: 20 }] });
-  const turboSaved = await postTurbo(csrfHeaders, { enabled: true, presets: turboPresets({ inputs: ['rb', 'BACK'], hz: 12 }) });
+  const turboNoCsrf = await postTurbo(probeHeaders, { enabled: true, modifier: 'START', hz: 10 });
+  const turboTooFast = await postTurbo(csrfHeaders, { enabled: true, modifier: 'START', hz: 99 });
+  const turboTrigger = await postTurbo(csrfHeaders, { enabled: true, modifier: 'LT', hz: 10 });
+  const turboMissing = await postTurbo(csrfHeaders, { enabled: true, hz: 10 });
+  const turboSaved = await postTurbo(csrfHeaders, { enabled: true, modifier: 'back', hz: 12 });
   const turboSavedBody = await turboSaved.json();
   const turboConfig = await readFile(configFile, 'utf8');
-  if (turboDefault.enabled !== false || turboDefault.presets?.length !== 4 || turboDefault.available_targets?.includes('LT')
-    || turboNoCsrf.status() !== 400 || turboTooFast.status() !== 400 || turboShort.status() !== 400 || turboDuplicate.status() !== 400
-    || turboSaved.status() !== 200 || turboSavedBody.presets[0].inputs.join('+') !== 'BACK+RB' || turboSavedBody.presets[0].hz !== 12
+  if (turboDefault.enabled !== false || turboDefault.modifier !== 'START' || turboDefault.hz !== 10 || turboDefault.available_buttons?.includes('LT')
+    || turboNoCsrf.status() !== 400 || turboTooFast.status() !== 400 || turboTrigger.status() !== 400 || turboMissing.status() !== 400
+    || turboSaved.status() !== 200 || turboSavedBody.modifier !== 'BACK' || turboSavedBody.hz !== 12
     || !turboConfig.includes('steamshine_gamepad_turbo = {"enabled":true')) {
     throw new Error(`Turbo API validation failed: ${JSON.stringify({ turboDefault, saved: turboSavedBody })}`);
   }
-  securityResults.controller_turbo = turboSavedBody.presets[0];
+  securityResults.controller_turbo = { modifier: turboSavedBody.modifier, hz: turboSavedBody.hz };
   // A stale upstream settings page must not clear the shortcuts.
   const staleUpstreamSave = await steamshinePage.evaluate(async () => {
     const upstreamHeaders = { 'Content-Type': 'application/json', Authorization: `Basic ${btoa('web-e2e:web-e2e-password')}` };

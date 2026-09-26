@@ -3056,21 +3056,16 @@ namespace confighttp {
    * @brief Serialize turbo settings and the accepted values for the Addon page.
    *
    * @param settings Settings to describe.
-   * @return JSON with presets and editor limits.
+   * @return JSON with the enabled flag, combination button, frequency, and limits.
    */
   nlohmann::json gamepad_turbo_json(const steamshine_gamepad_turbo::settings_t &settings) {
-    nlohmann::json presets = nlohmann::json::array();
-    for (const auto &preset : settings.presets) {
-      presets.push_back({{"inputs", shortcut_key_array(steamshine_gamepad_shortcuts::format_inputs(preset.modifier))}, {"hz", preset.hz}});
-    }
     return {
       {"enabled", settings.enabled},
-      {"presets", presets},
-      {"available_inputs", steamshine_gamepad_shortcuts::input_names()},
-      {"available_targets", steamshine_gamepad_turbo::target_names()},
+      {"modifier", settings.modifier},
+      {"hz", settings.hz},
+      {"available_buttons", steamshine_gamepad_turbo::button_names()},
       {"min_hz", steamshine_gamepad_turbo::MIN_HZ},
       {"max_hz", steamshine_gamepad_turbo::MAX_HZ},
-      {"max_inputs", steamshine_gamepad_shortcuts::MAX_INPUTS},
     };
   }
 
@@ -3101,33 +3096,21 @@ namespace confighttp {
     if (!read_steamshine_json(response, request, input)) {
       return;
     }
-    if (!input.contains("enabled") || !input["enabled"].is_boolean() || !input.contains("presets") || !input["presets"].is_array() || input["presets"].size() != steamshine_gamepad_turbo::PRESET_COUNT) {
-      bad_request(response, request, "Turbo settings need an enabled flag and four presets");
+    if (!input.contains("enabled") || !input["enabled"].is_boolean() || !input.contains("modifier") || !input["modifier"].is_string() || !input.contains("hz") || !input["hz"].is_number_integer()) {
+      bad_request(response, request, "Turbo settings need an enabled flag, a combination button, and a speed");
       return;
     }
     steamshine_gamepad_turbo::settings_t settings;
     settings.enabled = input["enabled"].get<bool>();
-    for (std::size_t index {0}; index < steamshine_gamepad_turbo::PRESET_COUNT; ++index) {
-      const nlohmann::json &entry = input["presets"][index];
-      std::string inputs;
-      if (!entry.is_object() || !entry.contains("inputs") || !join_shortcut_keys(entry["inputs"], inputs) || !entry.contains("hz") || !entry["hz"].is_number_integer()) {
-        bad_request(response, request, "Each turbo preset needs buttons and a frequency");
-        return;
-      }
-      const auto modifier {steamshine_gamepad_shortcuts::parse(inputs, 1000)};
-      if (!modifier) {
-        bad_request(response, request, "Choose up to four different buttons for each turbo preset");
-        return;
-      }
-      settings.presets[index] = {*modifier, entry["hz"].get<int>()};
-    }
+    settings.modifier = input["modifier"].get<std::string>();
+    settings.hz = input["hz"].get<int>();
     std::string error;
     if (!steamshine_gamepad_turbo::set(settings, error)) {
       bad_request(response, request, error);
       return;
     }
-    BOOST_LOG(info) << "GAMEPAD_TURBO_CONFIGURED enabled=" << (settings.enabled ? "true" : "false");
-    send_steamshine_response(response, gamepad_turbo_json(settings));
+    BOOST_LOG(info) << "GAMEPAD_TURBO_CONFIGURED enabled=" << (settings.enabled ? "true" : "false") << " modifier=" << settings.modifier << " hz=" << settings.hz;
+    send_steamshine_response(response, gamepad_turbo_json(steamshine_gamepad_turbo::current()));
   }
 
   /**

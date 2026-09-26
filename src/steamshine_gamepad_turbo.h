@@ -1,20 +1,19 @@
 /**
  * @file src/steamshine_gamepad_turbo.h
- * @brief Controller turbo (rapid fire) toggled from the gamepad with configurable presets.
+ * @brief Controller turbo (rapid fire) toggled per button from the gamepad.
  *
- * Each preset pairs a modifier combination with a frequency. Holding a preset's
- * modifier and pressing another button turns turbo on for that button at the
- * preset's frequency; repeating the gesture turns it off, and using another
- * preset changes the frequency. While the player holds a turbo button, the host
- * sees it pressed and released at that frequency. Turbo state belongs to one
- * connected controller and resets when it reconnects.
+ * One combination button (Start by default) and one frequency are configured.
+ * Holding the combination button and pressing another button turns turbo on
+ * for that button; repeating the gesture turns it off. While the player holds
+ * a turbo button, the host sees it pressed and released at the configured
+ * frequency. Turbo buttons belong to one connected controller and reset when
+ * it reconnects.
  */
 #pragma once
 
 #include "platform/common.h"
 #include "steamshine_gamepad_shortcuts.h"
 
-#include <array>
 #include <chrono>
 #include <cstdint>
 #include <map>
@@ -24,11 +23,6 @@
 #include <vector>
 
 namespace steamshine_gamepad_turbo {
-
-  /**
-   * @brief Number of configurable presets.
-   */
-  constexpr std::size_t PRESET_COUNT {4};
 
   /**
    * @brief Lowest accepted frequency in presses per second.
@@ -41,6 +35,16 @@ namespace steamshine_gamepad_turbo {
   constexpr int MAX_HZ {30};
 
   /**
+   * @brief Frequency used when the configuration omits one.
+   */
+  constexpr int DEFAULT_HZ {10};
+
+  /**
+   * @brief Combination button used when the configuration omits one.
+   */
+  constexpr std::string_view DEFAULT_MODIFIER {"START"};
+
+  /**
    * @brief Interval at which held turbo buttons are re-rendered.
    */
   constexpr std::chrono::milliseconds TICK {5};
@@ -51,19 +55,12 @@ namespace steamshine_gamepad_turbo {
   using clock_t = std::chrono::steady_clock;
 
   /**
-   * @brief One modifier combination and the frequency it assigns.
-   */
-  struct preset_t {
-    steamshine_gamepad_shortcuts::combo_t modifier;  ///< Inputs held while pressing the target; empty leaves the preset unused.
-    int hz {10};  ///< Presses per second.
-  };
-
-  /**
    * @brief Persisted turbo configuration.
    */
   struct settings_t {
     bool enabled {false};  ///< Whether turbo gestures and output are active.
-    std::array<preset_t, PRESET_COUNT> presets {preset_t {{}, 5}, preset_t {{}, 10}, preset_t {{}, 15}, preset_t {{}, 20}};  ///< Presets in display order.
+    std::string modifier {DEFAULT_MODIFIER};  ///< Combination button held while pressing a target.
+    int hz {DEFAULT_HZ};  ///< Presses per second for every turbo button.
   };
 
   /**
@@ -71,13 +68,13 @@ namespace steamshine_gamepad_turbo {
    */
   struct toggle_t {
     std::uint32_t button {0};  ///< Target button bit.
-    int hz {0};  ///< New frequency, or zero when turbo was turned off.
+    bool enabled {false};  ///< True when turbo was turned on, false when turned off.
 
     /**
      * @brief Compare two toggles.
      *
      * @param other Toggle to compare.
-     * @return True when both change the same button to the same frequency.
+     * @return True when both change the same button the same way.
      */
     bool operator==(const toggle_t &other) const = default;
   };
@@ -86,7 +83,8 @@ namespace steamshine_gamepad_turbo {
    * @brief Per-gamepad turbo state.
    */
   struct tracker_t {
-    std::map<std::uint32_t, int> active;  ///< Turbo frequency by button bit.
+    std::uint32_t active {0};  ///< Buttons with turbo turned on.
+    int hz {DEFAULT_HZ};  ///< Frequency used when rendering.
     std::map<std::uint32_t, clock_t::time_point> pressed_since;  ///< Press time of each held turbo button.
     std::uint32_t suppressed_targets {0};  ///< Gesture targets hidden from the host until released.
     std::uint32_t previous_buttons {0};  ///< Buttons held in the previous packet, for press detection.
@@ -94,11 +92,11 @@ namespace steamshine_gamepad_turbo {
   };
 
   /**
-   * @brief Return the button names that can be put into turbo, in display order.
+   * @brief Return the button names usable as the combination or as turbo targets.
    *
-   * @return Held-input names except triggers.
+   * @return Held-input names except triggers, in display order.
    */
-  const std::vector<std::string_view> &target_names();
+  const std::vector<std::string_view> &button_names();
 
   /**
    * @brief Process one gamepad packet: apply gestures and remember the input to render.
@@ -110,6 +108,13 @@ namespace steamshine_gamepad_turbo {
    * @return Turbo changes made by this packet.
    */
   std::vector<toggle_t> update(tracker_t &tracker, const settings_t &settings, platf::gamepad_state_t &state, clock_t::time_point now);
+
+  /**
+   * @brief Turn every turbo button off, for example after turbo is disabled from the Web page.
+   *
+   * @param tracker Per-gamepad turbo state.
+   */
+  void clear(tracker_t &tracker);
 
   /**
    * @brief Build the host-visible state, pulsing held turbo buttons.
@@ -136,7 +141,7 @@ namespace steamshine_gamepad_turbo {
    *
    * @param settings Candidate settings.
    * @param error Reason the settings are invalid.
-   * @return True when every frequency is in range and no two used presets hold the same inputs.
+   * @return True when the combination is one non-trigger button and the frequency is in range.
    */
   bool validate(const settings_t &settings, std::string &error);
 
@@ -166,10 +171,10 @@ namespace steamshine_gamepad_turbo {
   /**
    * @brief Validate, persist, and apply new settings without restarting.
    *
-   * @param settings Settings to save.
+   * @param settings Settings to save; the combination button is stored in canonical case.
    * @param error Failure reason.
    * @return True after the configuration was replaced and the settings published.
    */
-  bool set(const settings_t &settings, std::string &error);
+  bool set(settings_t settings, std::string &error);
 
 }  // namespace steamshine_gamepad_turbo

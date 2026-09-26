@@ -1,13 +1,12 @@
 /**
  * @file src/steamshine_gamepad_turbo.cpp
- * @brief Controller turbo (rapid fire) toggled from the gamepad with configurable presets.
+ * @brief Controller turbo (rapid fire) toggled per button from the gamepad.
  */
 #include "steamshine_gamepad_turbo.h"
 
 #include "config.h"
 
 #include <algorithm>
-#include <bit>
 #include <format>
 #include <iterator>
 #include <mutex>
@@ -34,26 +33,16 @@ namespace steamshine_gamepad_turbo {
     std::uint32_t target_mask() {
       static const std::uint32_t mask = [] {
         std::uint32_t result {0};
-        for (const auto name : target_names()) {
+        for (const auto name : button_names()) {
           result |= shortcuts::button_bit(name).value_or(0);
         }
         return result;
       }();
       return mask;
     }
-
-    /**
-     * @brief Count the inputs a modifier requires.
-     *
-     * @param combo Modifier combination.
-     * @return Number of buttons and triggers.
-     */
-    int input_count(const shortcuts::combo_t &combo) {
-      return std::popcount(combo.buttons) + (combo.left_trigger ? 1 : 0) + (combo.right_trigger ? 1 : 0);
-    }
   }  // namespace
 
-  const std::vector<std::string_view> &target_names() {
+  const std::vector<std::string_view> &button_names() {
     static const std::vector<std::string_view> names = [] {
       std::vector<std::string_view> result;
       for (const auto name : shortcuts::input_names()) {
@@ -69,63 +58,50 @@ namespace steamshine_gamepad_turbo {
   std::vector<toggle_t> update(tracker_t &tracker, const settings_t &settings, platf::gamepad_state_t &state, const clock_t::time_point now) {
     const auto raw {state.buttonFlags};
     std::vector<toggle_t> changes;
+    tracker.hz = settings.hz;
     if (!settings.enabled) {
-      for (const auto &[button, hz] : tracker.active) {
-        (void) hz;
-        changes.push_back({button, 0});
+      for (auto remaining {tracker.active}; remaining;) {
+        const std::uint32_t button {remaining & (~remaining + 1)};
+        remaining &= remaining - 1;
+        changes.push_back({button, false});
       }
-      tracker.active.clear();
-    } else {
-      // The held preset with the most inputs wins, so Back + RB can coexist with Back.
-      const preset_t *chosen {nullptr};
-      for (const auto &preset : settings.presets) {
-        if (shortcuts::held(preset.modifier, state) && (!chosen || input_count(preset.modifier) > input_count(chosen->modifier))) {
-          chosen = &preset;
-        }
-      }
-      if (chosen) {
-        auto targets {raw & ~tracker.previous_buttons & ~chosen->modifier.buttons & target_mask()};
-        while (targets) {
-          const std::uint32_t button {targets & (~targets + 1)};
-          targets &= targets - 1;
-          if (const auto existing {tracker.active.find(button)}; existing != tracker.active.end() && existing->second == chosen->hz) {
-            tracker.active.erase(existing);
-            changes.push_back({button, 0});
-          } else {
-            tracker.active[button] = chosen->hz;
-            changes.push_back({button, chosen->hz});
-          }
-          tracker.suppressed_targets |= button;
-        }
+      tracker.active = 0;
+    } else if (const auto modifier {shortcuts::button_bit(settings.modifier)}; modifier && (raw & *modifier)) {
+      auto targets {raw & ~tracker.previous_buttons & ~*modifier & target_mask()};
+      while (targets) {
+        const std::uint32_t button {targets & (~targets + 1)};
+        targets &= targets - 1;
+        tracker.active ^= button;
+        tracker.suppressed_targets |= button;
+        changes.push_back({button, (tracker.active & button) != 0});
       }
     }
     tracker.suppressed_targets &= raw;
     state.buttonFlags &= ~tracker.suppressed_targets;
     for (auto entry {tracker.pressed_since.begin()}; entry != tracker.pressed_since.end();) {
-      entry = tracker.active.contains(entry->first) && (state.buttonFlags & entry->first) ? std::next(entry) : tracker.pressed_since.erase(entry);
+      entry = (tracker.active & entry->first) && (state.buttonFlags & entry->first) ? std::next(entry) : tracker.pressed_since.erase(entry);
     }
-    for (const auto &[button, hz] : tracker.active) {
-      (void) hz;
-      if ((state.buttonFlags & button) && !tracker.pressed_since.contains(button)) {
-        tracker.pressed_since[button] = now;
-      }
+    for (auto held {tracker.active & state.buttonFlags}; held;) {
+      const std::uint32_t button {held & (~held + 1)};
+      held &= held - 1;
+      tracker.pressed_since.try_emplace(button, now);
     }
     tracker.previous_buttons = raw;
     tracker.input = state;
     return changes;
   }
 
+  void clear(tracker_t &tracker) {
+    tracker.active = 0;
+    tracker.pressed_since.clear();
+  }
+
   platf::gamepad_state_t render(const tracker_t &tracker, const clock_t::time_point now) {
     auto state {tracker.input};
-    for (const auto &[button, hz] : tracker.active) {
-      const auto since {tracker.pressed_since.find(button)};
-      if (!(state.buttonFlags & button) || since == tracker.pressed_since.end()) {
-        continue;
-      }
-      // Pressed for the first half of each 1/hz period.
-      const std::chrono::nanoseconds half_period {std::chrono::nanoseconds {std::chrono::seconds {1}} / (2 * hz)};
-      const auto phase {(now - since->second) / half_period};
-      if (phase % 2 != 0) {
+    // Pressed for the first half of each 1/hz period.
+    const std::chrono::nanoseconds half_period {std::chrono::nanoseconds {std::chrono::seconds {1}} / (2 * std::max(tracker.hz, MIN_HZ))};
+    for (const auto &[button, since] : tracker.pressed_since) {
+      if ((tracker.active & button) && (state.buttonFlags & button) && ((now - since) / half_period) % 2 != 0) {
         state.buttonFlags &= ~button;
       }
     }
@@ -133,34 +109,23 @@ namespace steamshine_gamepad_turbo {
   }
 
   bool ticking(const tracker_t &tracker) {
-    return std::ranges::any_of(tracker.active, [&tracker](const auto &entry) {
-      return (tracker.input.buttonFlags & entry.first) != 0;
-    });
+    return (tracker.active & tracker.input.buttonFlags) != 0;
   }
 
   bool validate(const settings_t &settings, std::string &error) {
-    for (std::size_t index {0}; index < PRESET_COUNT; ++index) {
-      const auto &preset {settings.presets[index]};
-      if (preset.hz < MIN_HZ || preset.hz > MAX_HZ) {
-        error = std::format("Turbo frequencies must be between {} and {} presses per second", MIN_HZ, MAX_HZ);
-        return false;
-      }
-      for (std::size_t other {0}; other < index; ++other) {
-        if (preset.modifier.enabled() && preset.modifier.same_inputs(settings.presets[other].modifier)) {
-          error = "Two turbo presets cannot use the same buttons";
-          return false;
-        }
-      }
+    if (!shortcuts::button_bit(settings.modifier)) {
+      error = "Choose one combination button for turbo";
+      return false;
+    }
+    if (settings.hz < MIN_HZ || settings.hz > MAX_HZ) {
+      error = std::format("Turbo speed must be between {} and {} presses per second", MIN_HZ, MAX_HZ);
+      return false;
     }
     return true;
   }
 
   std::string to_json(const settings_t &settings) {
-    nlohmann::json presets = nlohmann::json::array();
-    for (const auto &preset : settings.presets) {
-      presets.push_back({{"inputs", shortcuts::format_inputs(preset.modifier)}, {"hz", preset.hz}});
-    }
-    nlohmann::json result = {{"enabled", settings.enabled}, {"presets", presets}};
+    const nlohmann::json result = {{"enabled", settings.enabled}, {"modifier", settings.modifier}, {"hz", settings.hz}};
     return result.dump();
   }
 
@@ -170,25 +135,17 @@ namespace steamshine_gamepad_turbo {
       return settings;
     }
     const nlohmann::json parsed = nlohmann::json::parse(text, nullptr, false);
-    if (!parsed.is_object() || !parsed.contains("enabled") || !parsed["enabled"].is_boolean() || !parsed.contains("presets") || !parsed["presets"].is_array() || parsed["presets"].size() != PRESET_COUNT) {
+    if (!parsed.is_object() || !parsed.contains("enabled") || !parsed["enabled"].is_boolean() || !parsed.contains("modifier") || !parsed["modifier"].is_string() || !parsed.contains("hz") || !parsed["hz"].is_number_integer()) {
       return std::nullopt;
     }
     settings.enabled = parsed["enabled"].get<bool>();
-    for (std::size_t index {0}; index < PRESET_COUNT; ++index) {
-      const nlohmann::json &entry = parsed["presets"][index];
-      if (!entry.is_object() || !entry.contains("inputs") || !entry["inputs"].is_string() || !entry.contains("hz") || !entry["hz"].is_number_integer()) {
-        return std::nullopt;
-      }
-      const auto modifier {shortcuts::parse(entry["inputs"].get<std::string>(), 1000)};
-      if (!modifier) {
-        return std::nullopt;
-      }
-      settings.presets[index] = {*modifier, entry["hz"].get<int>()};
-    }
+    settings.modifier = parsed["modifier"].get<std::string>();
+    settings.hz = parsed["hz"].get<int>();
     std::string ignored;
     if (!validate(settings, ignored)) {
       return std::nullopt;
     }
+    settings.modifier = std::string {shortcuts::button_name(*shortcuts::button_bit(settings.modifier))};
     return settings;
   }
 
@@ -200,10 +157,11 @@ namespace steamshine_gamepad_turbo {
     return *g_current;
   }
 
-  bool set(const settings_t &settings, std::string &error) {
+  bool set(settings_t settings, std::string &error) {
     if (!validate(settings, error)) {
       return false;
     }
+    settings.modifier = std::string {shortcuts::button_name(*shortcuts::button_bit(settings.modifier))};
     std::lock_guard lock {g_mutex};
     const auto serialized {to_json(settings)};
     if (!shortcuts::write_config_value(CONFIG_KEY, serialized, {}, error)) {

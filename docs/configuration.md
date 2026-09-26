@@ -318,7 +318,7 @@ supported on the current platform.
 
 ### steamshine_gamepad_turbo
 
-<table><tr><td>Description</td><td colspan="2">JSON-encoded controller turbo settings managed by the Turbo card on the SteamShine Addons page: an enabled flag and four presets, each with modifier inputs and a frequency from 1 to 30 presses per second. Holding a preset's modifier and pressing another button turns turbo on for that button; repeating the gesture turns it off, and another preset changes the frequency. Turbo state belongs to one connected controller and resets when it reconnects.</td></tr><tr><td>Default</td><td colspan="2">Empty (turbo off; presets 5, 10, 15, and 20 per second without modifiers)</td></tr><tr><td>Example</td><td colspan="2">@code{} steamshine_gamepad_turbo = {"enabled":true,"presets":[{"inputs":"BACK+RB","hz":10},{"inputs":"BACK+LB","hz":20},{"inputs":"","hz":15},{"inputs":"","hz":5}]} @endcode</td></tr></table>
+<table><tr><td>Description</td><td colspan="2">JSON-encoded controller turbo settings managed by the Turbo card on the SteamShine Addons page: an enabled flag, one combination button, and a speed from 1 to 30 presses per second. Holding the combination button and pressing another button turns turbo on for that button, so holding it afterwards repeats it; pressing the same pair again turns it off. Turbo buttons belong to one connected controller and reset when it reconnects.</td></tr><tr><td>Default</td><td colspan="2">Empty (turbo off, combination button START, 10 presses per second)</td></tr><tr><td>Example</td><td colspan="2">@code{} steamshine_gamepad_turbo = {"enabled":true,"modifier":"START","hz":10} @endcode</td></tr></table>
 
 ## Input
 

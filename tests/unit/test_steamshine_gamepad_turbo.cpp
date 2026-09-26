@@ -30,20 +30,14 @@ namespace {
   }
 
   /**
-   * @brief Build enabled settings with up to two used presets.
+   * @brief Build enabled settings.
    *
-   * @param first First preset modifier.
-   * @param first_hz First preset frequency.
-   * @param second Second preset modifier.
-   * @param second_hz Second preset frequency.
+   * @param modifier Combination button.
+   * @param hz Presses per second.
    * @return Settings.
    */
-  turbo::settings_t settings(const std::string_view first, const int first_hz, const std::string_view second = {}, const int second_hz = 20) {
-    turbo::settings_t result;
-    result.enabled = true;
-    result.presets[0] = {*shortcuts::parse(first, 1000), first_hz};
-    result.presets[1] = {*shortcuts::parse(second, 1000), second_hz};
-    return result;
+  turbo::settings_t settings(const std::string_view modifier = "START", const int hz = 10) {
+    return {true, std::string {modifier}, hz};
   }
 
   /**
@@ -70,32 +64,34 @@ namespace {
 }  // namespace
 
 /**
- * @brief Offer every non-trigger input as a turbo target.
+ * @brief Offer every non-trigger input as the combination or a target.
  */
-TEST(SteamshineGamepadTurboTest, ListsTargets) {
-  EXPECT_EQ(turbo::target_names().size(), 14U);
-  EXPECT_EQ(std::ranges::find(turbo::target_names(), "LT"sv), turbo::target_names().end());
+TEST(SteamshineGamepadTurboTest, ListsButtons) {
+  EXPECT_EQ(turbo::button_names().size(), 14U);
+  EXPECT_EQ(std::ranges::find(turbo::button_names(), "LT"sv), turbo::button_names().end());
   EXPECT_EQ(shortcuts::button_bit("a"), platf::A);
   EXPECT_FALSE(shortcuts::button_bit("RT"));
   EXPECT_EQ(shortcuts::button_name(platf::DPAD_UP), "UP");
   EXPECT_EQ(shortcuts::button_name(platf::HOME), "");
+  EXPECT_EQ(turbo::settings_t {}.modifier, "START");
+  EXPECT_FALSE(turbo::settings_t {}.enabled);
 }
 
 /**
- * @brief Toggle turbo on, pulse while held, and toggle it off with the same gesture.
+ * @brief Start + A turns A's turbo on; A then pulses while held; Start + A turns it off.
  */
 TEST(SteamshineGamepadTurboTest, TogglesAndPulsesHeldButtons) {
-  const auto configured {settings("BACK+RB", 10)};
+  const auto configured {settings()};
   turbo::tracker_t tracker;
   const auto start {turbo::clock_t::now()};
   platf::gamepad_state_t state {};
 
-  EXPECT_EQ(send(tracker, configured, platf::BACK | platf::RIGHT_BUTTON, start), toggles_t {});
-  EXPECT_EQ(send(tracker, configured, platf::BACK | platf::RIGHT_BUTTON | platf::A, start, &state), (toggles_t {{platf::A, 10}}));
+  EXPECT_EQ(send(tracker, configured, platf::START, start), toggles_t {});
+  EXPECT_EQ(send(tracker, configured, platf::START | platf::A, start, &state), (toggles_t {{platf::A, true}}));
   // The gesture press never reaches the game.
-  EXPECT_EQ(state.buttonFlags, platf::BACK | platf::RIGHT_BUTTON);
+  EXPECT_EQ(state.buttonFlags, platf::START);
   EXPECT_FALSE(turbo::ticking(tracker));
-  send(tracker, configured, platf::BACK | platf::RIGHT_BUTTON, start);
+  send(tracker, configured, platf::START, start);
   send(tracker, configured, 0, start);
 
   // Holding A now pulses at 10 Hz: 50 ms pressed, 50 ms released.
@@ -107,78 +103,85 @@ TEST(SteamshineGamepadTurboTest, TogglesAndPulsesHeldButtons) {
   EXPECT_EQ(turbo::render(tracker, start + 100ms).buttonFlags, platf::A);
   send(tracker, configured, 0, start + 120ms);
   EXPECT_FALSE(turbo::ticking(tracker));
-  EXPECT_EQ(turbo::render(tracker, start + 150ms).buttonFlags, 0U);
 
   // A new press restarts the phase so the first press is never lost.
   send(tracker, configured, platf::A, start + 170ms);
   EXPECT_EQ(turbo::render(tracker, start + 170ms).buttonFlags, platf::A);
+  // Pressing Start while A is already held does not toggle A.
+  EXPECT_EQ(send(tracker, configured, platf::A | platf::START, start + 175ms), toggles_t {});
   send(tracker, configured, 0, start + 180ms);
 
-  send(tracker, configured, platf::BACK | platf::RIGHT_BUTTON, start + 200ms);
-  EXPECT_EQ(send(tracker, configured, platf::BACK | platf::RIGHT_BUTTON | platf::A, start + 200ms), (toggles_t {{platf::A, 0}}));
+  send(tracker, configured, platf::START, start + 200ms);
+  EXPECT_EQ(send(tracker, configured, platf::START | platf::A, start + 200ms), (toggles_t {{platf::A, false}}));
   send(tracker, configured, 0, start + 210ms);
   send(tracker, configured, platf::A, start + 220ms);
+  EXPECT_FALSE(turbo::ticking(tracker));
   EXPECT_EQ(turbo::render(tracker, start + 280ms).buttonFlags, platf::A);
 }
 
 /**
- * @brief Change frequency with another preset and prefer the preset with more inputs.
+ * @brief Toggle several buttons at once, follow speed changes, and use another combination button.
  */
-TEST(SteamshineGamepadTurboTest, ChangesFrequencyAndPrefersLargerPreset) {
-  const auto configured {settings("BACK", 5, "BACK+RB", 20)};
+TEST(SteamshineGamepadTurboTest, TogglesSeveralButtonsAndFollowsSpeed) {
   turbo::tracker_t tracker;
   const auto now {turbo::clock_t::now()};
+  send(tracker, settings("BACK"), platf::BACK, now);
+  EXPECT_EQ(send(tracker, settings("BACK"), platf::BACK | platf::X | platf::Y, now), (toggles_t {{platf::X, true}, {platf::Y, true}}));
+  send(tracker, settings("BACK"), 0, now);
+  // Start is an ordinary button when Back is the combination button.
+  EXPECT_EQ(send(tracker, settings("BACK"), platf::START, now), toggles_t {});
 
-  send(tracker, configured, platf::BACK, now);
-  EXPECT_EQ(send(tracker, configured, platf::BACK | platf::X | platf::Y, now), (toggles_t {{platf::X, 5}, {platf::Y, 5}}));
-  send(tracker, configured, platf::BACK, now);
-  // RB completes the larger preset, so it is a modifier rather than a target.
-  EXPECT_EQ(send(tracker, configured, platf::BACK | platf::RIGHT_BUTTON, now), toggles_t {});
-  EXPECT_EQ(send(tracker, configured, platf::BACK | platf::RIGHT_BUTTON | platf::X, now), (toggles_t {{platf::X, 20}}));
-  EXPECT_EQ(tracker.active.at(platf::X), 20);
-  EXPECT_EQ(tracker.active.at(platf::Y), 5);
+  send(tracker, settings("BACK", 20), platf::X, now);
+  EXPECT_EQ(tracker.hz, 20);
+  EXPECT_EQ(turbo::render(tracker, now + 25ms).buttonFlags, 0U);
+  EXPECT_EQ(turbo::render(tracker, now + 50ms).buttonFlags, platf::X);
 }
 
 /**
  * @brief Turning turbo off clears every turbo button and passes input through.
  */
 TEST(SteamshineGamepadTurboTest, DisabledSettingsClearTurbo) {
-  auto configured {settings("BACK", 10)};
+  auto configured {settings()};
   turbo::tracker_t tracker;
   const auto now {turbo::clock_t::now()};
-  send(tracker, configured, platf::BACK, now);
-  send(tracker, configured, platf::BACK | platf::A, now);
+  send(tracker, configured, platf::START, now);
+  send(tracker, configured, platf::START | platf::A, now);
   send(tracker, configured, 0, now);
 
   configured.enabled = false;
   platf::gamepad_state_t state {};
-  EXPECT_EQ(send(tracker, configured, platf::BACK | platf::A, now, &state), (toggles_t {{platf::A, 0}}));
-  EXPECT_EQ(state.buttonFlags, platf::BACK | platf::A);
-  EXPECT_TRUE(tracker.active.empty());
-  EXPECT_FALSE(turbo::ticking(tracker));
+  EXPECT_EQ(send(tracker, configured, platf::START | platf::A, now, &state), (toggles_t {{platf::A, false}}));
+  EXPECT_EQ(state.buttonFlags, platf::START | platf::A);
+  EXPECT_EQ(tracker.active, 0U);
+
+  tracker.active = platf::B;
+  tracker.pressed_since[platf::B] = now;
+  turbo::clear(tracker);
+  EXPECT_EQ(tracker.active, 0U);
+  EXPECT_TRUE(tracker.pressed_since.empty());
 }
 
 /**
- * @brief Validate ranges and duplicate presets, and round-trip the persisted JSON.
+ * @brief Validate the combination button and speed, and round-trip the persisted JSON.
  */
 TEST(SteamshineGamepadTurboTest, ValidatesAndSerializes) {
   std::string error;
   EXPECT_TRUE(turbo::validate(turbo::settings_t {}, error));
-  EXPECT_FALSE(turbo::validate(settings("BACK", 0), error));
-  EXPECT_FALSE(turbo::validate(settings("BACK", 31), error));
-  EXPECT_FALSE(turbo::validate(settings("BACK+RB", 10, "RB+BACK", 20), error));
-  EXPECT_NE(error.find("same buttons"), std::string::npos);
+  EXPECT_FALSE(turbo::validate(settings("START", 0), error));
+  EXPECT_FALSE(turbo::validate(settings("START", 31), error));
+  EXPECT_FALSE(turbo::validate(settings("LT"), error));
+  EXPECT_FALSE(turbo::validate(settings("START+A"), error));
+  EXPECT_FALSE(turbo::validate(settings("HOME"), error));
 
-  const auto round_trip {turbo::from_json(turbo::to_json(settings("BACK+RB", 12, "LT", 25)))};
+  const auto round_trip {turbo::from_json(turbo::to_json(settings("back", 12)))};
   ASSERT_TRUE(round_trip);
   EXPECT_TRUE(round_trip->enabled);
-  EXPECT_EQ(round_trip->presets[0].hz, 12);
-  EXPECT_EQ(shortcuts::format_inputs(round_trip->presets[1].modifier), "LT");
-  EXPECT_FALSE(round_trip->presets[2].modifier.enabled());
-  EXPECT_EQ(turbo::from_json("")->presets[3].hz, 20);
+  EXPECT_EQ(round_trip->modifier, "BACK");
+  EXPECT_EQ(round_trip->hz, 12);
+  EXPECT_EQ(turbo::from_json("")->modifier, "START");
   EXPECT_FALSE(turbo::from_json("[]"));
-  EXPECT_FALSE(turbo::from_json(R"({"enabled":true,"presets":[]})"));
-  EXPECT_FALSE(turbo::from_json(R"({"enabled":true,"presets":[{"inputs":"BACK","hz":10},{"inputs":"","hz":10},{"inputs":"","hz":10},{"inputs":"HOME","hz":10}]})"));
+  EXPECT_FALSE(turbo::from_json(R"({"enabled":true,"modifier":"START"})"));
+  EXPECT_FALSE(turbo::from_json(R"({"enabled":true,"modifier":"RT","hz":10})"));
 }
 
 /**
@@ -196,15 +199,15 @@ TEST(SteamshineGamepadTurboTest, PersistsWithoutRestart) {
   config::sunshine.config_file = file.string();
 
   std::string error;
-  ASSERT_TRUE(turbo::set(settings("BACK+RB", 15), error)) << error;
+  ASSERT_TRUE(turbo::set(settings("back", 15), error)) << error;
   std::stringstream saved;
   saved << std::ifstream {file}.rdbuf();
   EXPECT_NE(saved.str().find("locale = ja"), std::string::npos);
-  EXPECT_NE(saved.str().find(R"(steamshine_gamepad_turbo = {"enabled":true)"), std::string::npos);
-  EXPECT_EQ(turbo::current().presets[0].hz, 15);
+  EXPECT_NE(saved.str().find(R"(steamshine_gamepad_turbo = {"enabled":true,"hz":15,"modifier":"BACK"})"), std::string::npos);
+  EXPECT_EQ(turbo::current().modifier, "BACK");
   EXPECT_EQ(config::sunshine.steamshine_gamepad_turbo, turbo::to_json(turbo::current()));
-  EXPECT_FALSE(turbo::set(settings("BACK", 99), error));
-  EXPECT_EQ(turbo::current().presets[0].hz, 15);
+  EXPECT_FALSE(turbo::set(settings("START", 99), error));
+  EXPECT_EQ(turbo::current().hz, 15);
 
   config::sunshine.config_file = (directory / "missing" / "sunshine.conf").string();
   EXPECT_FALSE(turbo::set(turbo::settings_t {}, error));

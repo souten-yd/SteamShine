@@ -491,7 +491,7 @@
     "steamshine_gamepad_shortcuts": "SteamShine controller shortcuts",
     "steamshine_gamepad_shortcuts_desc": "JSON-encoded controller shortcuts that send keys such as Home or Home + A when a button combination is held. Managed by the SteamShine Addons page.",
     "steamshine_gamepad_turbo": "SteamShine controller turbo",
-    "steamshine_gamepad_turbo_desc": "JSON-encoded turbo presets: modifier buttons and a frequency used to toggle rapid fire from the controller. Managed by the SteamShine Addons page.",
+    "steamshine_gamepad_turbo_desc": "JSON-encoded turbo settings: whether turbo is on, the combination button that toggles turbo for another button, and the speed. Managed by the SteamShine Addons page.",
     "steamshine_codec_fallback": "SteamShine codec fallback",
     "steamshine_codec_fallback_desc": "Controls whether a manual codec request rejects strictly or permits H.264 recovery only when the requested codec is unavailable.",
     "steamshine_codec_fallback_h264": "Allow explicit H.264 recovery",

@@ -1101,65 +1101,64 @@ function wireShortcuts() {
   refresh();
 }
 
-/** @brief Render the controller turbo presets. */
+/** @brief Render the controller turbo settings. */
 function turboCard(turbo) {
   if (turbo.message) return `<div class="section stack addons-card" id="controller-turbo"><h3>Turbo</h3><p class="notice">${escapeHtml(turbo.message)}</p></div>`;
-  const presets = turbo.presets.map((preset, index) => {
-    const selected = new Set(preset.inputs);
-    const chips = turbo.available_inputs.map((name) => `<button type="button" class="combo-chip" data-turbo-input="${escapeHtml(name)}" aria-pressed="${selected.has(name)}">${escapeHtml(SHORTCUT_KEY_LABELS[name] || name)}</button>`).join('');
-    return `<div class="section stack turbo-preset" data-turbo-preset="${index}"><h4>Preset ${index + 1}</h4>
-      <label>Presses per second<input type="number" data-turbo-hz min="${turbo.min_hz}" max="${turbo.max_hz}" step="1" value="${preset.hz}"></label>
-      <div class="combo-chips" role="group" aria-label="Preset ${index + 1} buttons">${chips}</div>
-      <p class="field-hint" data-turbo-summary></p></div>`;
-  }).join('');
-  return `<div class="section stack addons-card" id="controller-turbo"><h3>Turbo</h3>
-    <p>Rapid fire for any button. Hold a preset’s buttons and press the button to repeat; while you hold that button, it is pressed and released at the preset’s speed. Do the same again to turn it off, or use another preset to change the speed.</p>
-    <label class="checkbox-row">Enable turbo<input type="checkbox" id="turbo-enabled" ${turbo.enabled ? 'checked' : ''}></label>
-    ${presets}
-    <p class="field-hint">Presets without buttons are not used. Choose buttons your games do not need, because they still reach the game while held. Turbo is set per controller and resets when it reconnects.</p>
-    <div class="btn-row"><button type="button" class="btn-primary" id="turbo-save">Save turbo</button></div></div>`;
+  const chips = turbo.available_buttons.map((name) => `<button type="button" class="combo-chip" data-turbo-modifier="${escapeHtml(name)}" aria-pressed="${name === turbo.modifier}">${escapeHtml(SHORTCUT_KEY_LABELS[name] || name)}</button>`).join('');
+  return `<div class="section stack addons-card" id="controller-turbo"><div class="shortcut-head"><h3>Turbo</h3>
+      <label class="checkbox-row">Enable turbo<input type="checkbox" id="turbo-enabled" ${turbo.enabled ? 'checked' : ''}></label></div>
+    <p>Rapid fire for any button. Hold the combination button and press a button to turn its turbo on; from then on, holding that button repeats it. Press the same pair again to turn it off.</p>
+    <div class="stack"><span class="field-label">Combination button</span><div class="combo-chips" role="group" aria-label="Combination button">${chips}</div></div>
+    <label>Presses per second<input type="number" id="turbo-hz" min="${turbo.min_hz}" max="${turbo.max_hz}" step="1" value="${turbo.hz}"></label>
+    <p class="field-hint" id="turbo-summary" role="status"></p>
+    <div class="btn-row"><button type="button" class="btn-primary" id="turbo-save">Save</button></div>
+    <p class="field-hint">The combination button still reaches the game when pressed. Turbo buttons are set per controller and reset when it reconnects.</p></div>`;
 }
 
-/** @brief Wire preset editing and saving for the turbo card. */
+/** @brief Wire the enable toggle, combination button, and speed for the turbo card. */
 function wireTurbo(turbo) {
   const card = document.querySelector('#controller-turbo');
   if (!card || turbo.message) return;
+  const hz = card.querySelector('#turbo-hz');
+  const toggle = card.querySelector('#turbo-enabled');
   const read = () => ({
-    enabled: card.querySelector('#turbo-enabled').checked,
-    presets: Array.from(card.querySelectorAll('[data-turbo-preset]')).map((section) => ({
-      inputs: turbo.available_inputs.filter((name) => section.querySelector(`[data-turbo-input="${name}"]`).getAttribute('aria-pressed') === 'true'),
-      hz: Number(section.querySelector('[data-turbo-hz]').value),
-    })),
+    enabled: toggle.checked,
+    modifier: card.querySelector('[data-turbo-modifier][aria-pressed="true"]')?.dataset.turboModifier || turbo.modifier,
+    hz: Number(hz.value),
   });
+  const valid = (settings) => Number.isInteger(settings.hz) && settings.hz >= turbo.min_hz && settings.hz <= turbo.max_hz;
   const refresh = () => {
     const settings = read();
-    let valid = true;
-    card.querySelectorAll('[data-turbo-preset]').forEach((section, index) => {
-      const preset = settings.presets[index];
-      section.querySelectorAll('[data-turbo-input]').forEach((chip) => {
-        chip.disabled = chip.getAttribute('aria-pressed') !== 'true' && preset.inputs.length >= turbo.max_inputs;
-      });
-      const hzValid = Number.isInteger(preset.hz) && preset.hz >= turbo.min_hz && preset.hz <= turbo.max_hz;
-      valid = valid && hzValid;
-      section.querySelector('[data-turbo-summary]').textContent = !hzValid
-        ? `Enter ${turbo.min_hz}–${turbo.max_hz} presses per second.`
-        : (preset.inputs.length ? `Hold ${shortcutKeys(preset.inputs).join(' + ')} and press a button to toggle ${preset.hz} presses per second.` : 'Not used.');
-    });
-    card.querySelector('#turbo-save').disabled = !valid;
+    const label = SHORTCUT_KEY_LABELS[settings.modifier] || settings.modifier;
+    card.querySelector('#turbo-summary').textContent = !valid(settings)
+      ? `Enter ${turbo.min_hz}–${turbo.max_hz} presses per second.`
+      : `${settings.enabled ? 'On' : 'Off'}: hold ${label} and press a button to toggle its turbo at ${settings.hz} presses per second.`;
+    card.querySelector('#turbo-save').disabled = !valid(settings);
   };
-  card.querySelectorAll('[data-turbo-input]').forEach((chip) => chip.addEventListener('click', () => {
-    chip.setAttribute('aria-pressed', String(chip.getAttribute('aria-pressed') !== 'true'));
+  const save = async (settings) => {
+    card.querySelectorAll('button,input').forEach((control) => { control.disabled = true; });
+    try {
+      const saved = await json(await api('/input/turbo', { method: 'POST', body: JSON.stringify(settings) }));
+      Object.assign(turbo, saved);
+      toast(saved.enabled ? `Turbo is on (${saved.hz} per second).` : 'Turbo is off.', 'ok');
+    } catch (error) {
+      toggle.checked = turbo.enabled;
+      toast(error.message, 'error');
+    }
+    card.querySelectorAll('button,input').forEach((control) => { control.disabled = false; });
+    refresh();
+  };
+  card.querySelectorAll('[data-turbo-modifier]').forEach((chip) => chip.addEventListener('click', () => {
+    card.querySelectorAll('[data-turbo-modifier]').forEach((other) => other.setAttribute('aria-pressed', String(other === chip)));
     refresh();
   }));
-  card.querySelectorAll('[data-turbo-hz]').forEach((field) => field.addEventListener('input', refresh));
-  card.querySelector('#turbo-save').addEventListener('click', async () => {
-    card.querySelector('#turbo-save').disabled = true;
-    try {
-      const saved = await json(await api('/input/turbo', { method: 'POST', body: JSON.stringify(read()) }));
-      toast(saved.enabled ? 'Turbo settings saved.' : 'Turbo is off.', 'ok');
-    } catch (error) { toast(error.message, 'error'); }
-    refresh();
+  hz.addEventListener('input', refresh);
+  // The switch applies at once; unsaved button or speed edits are only kept when valid.
+  toggle.addEventListener('change', () => {
+    const settings = read();
+    save(valid(settings) ? settings : { ...settings, modifier: turbo.modifier, hz: turbo.hz });
   });
+  card.querySelector('#turbo-save').addEventListener('click', () => save(read()));
   refresh();
 }
 
