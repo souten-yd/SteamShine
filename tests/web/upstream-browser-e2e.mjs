@@ -184,7 +184,7 @@ try {
   const steamshineContext = await browser.newContext({ ignoreHTTPSErrors: true });
   const steamshinePage = await steamshineContext.newPage();
   steamshinePage.on('console', (message) => {
-    if (message.type() === 'error' && !/status of (400|401|429)/.test(message.text())) consoleErrors.push(message.text());
+    if (message.type() === 'error' && !/status of (400|401|429)/.test(message.text()) && !(/status of 403/.test(message.text()) && message.location().url.includes('/gpu/profiles/Alternative/activate'))) consoleErrors.push(message.text());
   });
   steamshinePage.on('requestfailed', (request) => {
     if (request.url().startsWith(baseUrl) && !request.url().includes('/api/steamshine/v1/session') && !request.url().includes('/api/steamshine/v1/pairing/pin') && !request.url().includes('/api/steamshine/v1/config/virtual-display') && !request.url().includes('/api/steamshine/v1/stream/profiles')) {
@@ -218,6 +218,15 @@ try {
   const savedAlternative = savedGpuProfiles.profiles.find((profile) => profile.name === 'Alternative');
   if (savedAlternative?.power_cap_watts !== 260 || savedAlternative?.cpu_max_freq_mhz !== 3600 || savedAlternative?.cpu_governor !== 'powersave') {
     throw new Error('The GPU API did not preserve the existing custom profile.');
+  }
+  // Administrator provisioning requires CSRF and throttles rejected credentials before sudo.
+  const adminSession = await steamshinePage.evaluate(async () => (await (await fetch('/api/steamshine/v1/session')).json()));
+  const adminUrl = `${baseUrl}/api/steamshine/v1/system/authorize`;
+  const adminNoCsrf = await steamshineContext.request.post(adminUrl, { headers: { Origin: baseUrl }, data: { password: '' } });
+  if (adminNoCsrf.status() !== 400) throw new Error('Administrator authorization accepted a request without CSRF.');
+  for (let attempt = 0; attempt < 6; attempt++) {
+    const denied = await steamshineContext.request.post(adminUrl, { headers: { Origin: baseUrl, 'X-SteamShine-CSRF-Token': adminSession.csrf_token }, data: { password: '' } });
+    if (denied.status() !== (attempt < 5 ? 403 : 429)) throw new Error('Administrator authentication did not reject or throttle invalid input.');
   }
   // Runtime-suspended GPUs must not erase disabled profile fields or claim a failed apply.
   const gpuCapsRoute = '**/api/steamshine/v1/gpu/capabilities';
