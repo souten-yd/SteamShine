@@ -145,13 +145,9 @@ namespace steamshine_addons {
     }
 
     /**
-
      * @brief Locate a script in this installation without accepting client-controlled paths.
-
      * @param filename Fixed packaged filename.
-
      * @return Script path or an empty path.
-
      */
     std::filesystem::path packaged_script(const std::string_view filename) {
 #if defined(__linux__)

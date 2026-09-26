@@ -304,9 +304,7 @@ TEST(SteamshineGpuControlTest, RejectsInvalidPrivilegedGpuCapabilityProbe) {
 }
 
 /**
-
  * @brief Refresh GPU limits after authorization without losing detected CPU capabilities.
-
  */
 TEST(SteamshineGpuControlTest, RefreshesAuthorizationAndPreservesUnavailableProbe) {
   steamshine_gpuctl::capabilities_t previous;
@@ -329,9 +327,7 @@ TEST(SteamshineGpuControlTest, RefreshesAuthorizationAndPreservesUnavailableProb
 }
 
 /**
-
  * @brief Reject invalid limits before touching the saved profile list.
-
  */
 TEST(SteamshineGpuControlTest, RejectsNonFiniteOrNegativeLimits) {
   steamshine_gpuctl::profile_t profile;

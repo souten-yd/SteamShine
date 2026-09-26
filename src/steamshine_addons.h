@@ -94,44 +94,29 @@ namespace steamshine_addons {
   bool ensure_decky_active_for_owned_session();
 
   /**
-
    * @brief Inspect whether the fixed Decky or GPU helper is current and authorized.
-
    * @param name Fixed helper name.
-
    * @return True when ready.
-
    */
   bool management_ready(std::string_view name);
 
   /**
-
    * @brief Inspect Web management authorization without prompting.
-
    * @return Per-feature readiness and local authorization availability.
-
    */
   nlohmann::json management_status();
 
   /**
-
    * @brief Validate a password transport value without logging it.
-
    * @param password Transient password.
-
    * @return Whether it fits one bounded stdin line.
-
    */
   bool management_password_valid(std::string_view password);
 
   /**
-
    * @brief Authenticate with sudo over stdin and provision only fixed management operations.
-
    * @param password Transient administrator password.
-
    * @return Operation result without credentials.
-
    */
   nlohmann::json authorize_management(std::string_view password);
 

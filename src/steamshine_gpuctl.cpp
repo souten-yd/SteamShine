@@ -119,6 +119,8 @@ namespace steamshine_gpuctl {
      * @return Normalized exit code and bounded combined standard output/error.
      */
     std::pair<int, std::string> run_runtime_helper(const std::vector<std::string> &helper_arguments) {
+      static std::mutex helper_mutex;  ///< Serialize probes and writes while the helper holds the GPU active.
+      std::lock_guard lock {helper_mutex};
 #if defined(__linux__)
       std::vector<std::string> arguments {"/usr/bin/sudo", "-n", std::string {RUNTIME_HELPER}};
       arguments.insert(arguments.end(), helper_arguments.begin(), helper_arguments.end());

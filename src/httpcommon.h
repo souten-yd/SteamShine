@@ -57,6 +57,14 @@ namespace http {
    * @return Percent-encoded URL component.
    */
   std::string url_escape(const std::string &url);
+
+  /**
+   * @brief Decode a URL path segment once, preserving literal plus signs.
+   * @param value Encoded path segment.
+   * @return Decoded bytes, including UTF-8 profile names.
+   */
+  std::string url_unescape(const std::string &value);
+
   /**
    * @brief Extract the host component from a URL.
    *

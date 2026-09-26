@@ -87,9 +87,7 @@ TEST(SteamshineAddonsTest, StartsInactiveInstalledDeckyForOwnedSession) {
 }
 
 /**
-
  * @brief Reject password values that could inject additional sudo input or exceed the request budget.
-
  */
 TEST(SteamshineAddonsTest, ValidatesTransientAdministratorPassword) {
   EXPECT_TRUE(steamshine_addons::management_password_valid("a valid password"));

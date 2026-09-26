@@ -280,6 +280,18 @@ try {
   await createdCard.waitFor();
   if (!(await createdCard.innerText()).includes('330W')) throw new Error('New profile power limit changed after reopening the page.');
   await steamshinePage.unroute(gpuCapsRoute);
+  // Percent-encoded names must identify exactly the profile that was saved.
+  const nameRoundTrip = await steamshinePage.evaluate(async () => {
+    const session = await (await fetch('/api/steamshine/v1/session')).json();
+    const headers = { 'Content-Type': 'application/json', 'X-SteamShine-CSRF-Token': session.csrf_token };
+    const name = '日本語 + 100% / GPU';
+    const saved = await fetch('/api/steamshine/v1/gpu/profiles', { method: 'POST', headers, body: JSON.stringify({ name, power_cap_watts: 250 }) });
+    await saved.json();
+    const removed = await fetch(`/api/steamshine/v1/gpu/profiles/${encodeURIComponent(name)}`, { method: 'DELETE', headers });
+    await removed.json();
+    return [saved.status, removed.status];
+  });
+  if (nameRoundTrip.some((status) => status !== 200)) throw new Error('GPU profile names did not survive URL encoding.');
   // Saving upstream settings from an older tab must retain profiles added later.
   const profilePersistence = await steamshinePage.evaluate(async () => {
     const session = await (await fetch('/api/steamshine/v1/session')).json();

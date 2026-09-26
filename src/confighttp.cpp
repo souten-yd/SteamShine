@@ -2313,15 +2313,10 @@ namespace confighttp {
   }
 
   /**
-
    * @brief Request Web administrator authentication only when a required helper is unavailable.
-
    * @param response HTTP response.
-
    * @param helper Fixed helper name.
-
    * @return Whether the operation may proceed.
-
    */
   bool require_steamshine_management(const resp_https_t &response, const std::string_view helper) {
     if (steamshine_addons::management_ready(helper)) {
@@ -2332,13 +2327,9 @@ namespace confighttp {
   }
 
   /**
-
    * @brief Return fixed-operation management readiness.
-
    * @param response HTTP response.
-
    * @param request Authenticated request.
-
    */
   void steamshine_management_status(const resp_https_t &response, const req_https_t &request) {
     if (!require_steamshine_session(response, request).empty()) {
@@ -2347,13 +2338,9 @@ namespace confighttp {
   }
 
   /**
-
    * @brief Authenticate a transient administrator password without logging or saving its contents.
-
    * @param response HTTP response.
-
    * @param request Session- and CSRF-protected HTTPS request.
-
    */
   void steamshine_authorize_management(const resp_https_t &response, const req_https_t &request) {
     if (require_steamshine_mutation(response, request).empty()) {
@@ -2815,7 +2802,9 @@ namespace confighttp {
       return;
     }
     steamshine_gpuctl::refresh_capabilities();
-    send_steamshine_response(response, steamshine_gpuctl::capabilities());
+    auto capabilities {steamshine_gpuctl::capabilities()};
+    capabilities.runtime_write_authorized = steamshine_addons::management_ready("runtime");
+    send_steamshine_response(response, capabilities);
   }
 
   /**
@@ -2877,7 +2866,7 @@ namespace confighttp {
       return;
     }
     std::string error;
-    if (!steamshine_gpuctl::delete_custom_profile(request->path_match[1], error)) {
+    if (!steamshine_gpuctl::delete_custom_profile(http::url_unescape(request->path_match[1]), error)) {
       bad_request(response, request, error);
       return;
     }
@@ -2897,7 +2886,7 @@ namespace confighttp {
     if (!require_steamshine_management(response, "runtime")) {
       return;
     }
-    const auto result {steamshine_gpuctl::activate_profile(request->path_match[1])};
+    const auto result {steamshine_gpuctl::activate_profile(http::url_unescape(request->path_match[1]))};
     if (!result.success) {
       bad_request(response, request, result.error.empty() ? "GPU profile could not be applied" : result.error);
       return;
@@ -3848,9 +3837,7 @@ namespace confighttp {
         std::uint64_t id;  ///< Registration to remove.
 
         /**
-
          * @brief Remove the transport from the shutdown registry.
-
          */
         ~connection_guard_t() {
           connections.remove(id);
