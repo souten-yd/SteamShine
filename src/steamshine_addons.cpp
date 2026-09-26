@@ -12,11 +12,13 @@
 #include <cerrno>
 #include <filesystem>
 #include <fstream>
+#include <regex>
 #include <string>
 #include <utility>
 
 #if defined(__linux__)
   #include <fcntl.h>
+  #include <sys/socket.h>
   #include <sys/wait.h>
   #include <unistd.h>
 #endif
@@ -47,9 +49,10 @@ namespace steamshine_addons {
      * @brief Execute a fixed argv vector, capturing a bounded combined output.
      *
      * @param arguments Executable and arguments; no shell is involved.
+     * @param input Optional transient input, written through an anonymous socket and never logged.
      * @return Normalized exit code and bounded output.
      */
-    std::pair<int, std::string> run_command(const std::vector<std::string> &arguments) {
+    std::pair<int, std::string> run_command(const std::vector<std::string> &arguments, const std::string_view input = {}) {
 #if defined(__linux__)
       if (arguments.empty()) {
         return {-1, {}};
@@ -58,13 +61,24 @@ namespace steamshine_addons {
       if (::pipe2(output_pipe, O_CLOEXEC) != 0) {
         return {-1, {}};
       }
-      const pid_t child {::fork()};
-      if (child < 0) {
+      int input_pair[2] {-1, -1};
+      if (::socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, input_pair) != 0) {
         ::close(output_pipe[0]);
         ::close(output_pipe[1]);
         return {-1, {}};
       }
+      const pid_t child {::fork()};
+      if (child < 0) {
+        ::close(output_pipe[0]);
+        ::close(output_pipe[1]);
+        ::close(input_pair[0]);
+        ::close(input_pair[1]);
+        return {-1, {}};
+      }
       if (child == 0) {
+        ::close(input_pair[0]);
+        ::dup2(input_pair[1], STDIN_FILENO);
+        ::close(input_pair[1]);
         ::close(output_pipe[0]);
         ::dup2(output_pipe[1], STDOUT_FILENO);
         ::dup2(output_pipe[1], STDERR_FILENO);
@@ -78,6 +92,20 @@ namespace steamshine_addons {
         ::execv(argv.front(), argv.data());
         _exit(127);
       }
+      ::close(input_pair[1]);
+      std::size_t sent = 0;
+      while (sent < input.size()) {
+        const auto count {::send(input_pair[0], input.data() + sent, input.size() - sent, MSG_NOSIGNAL)};
+        if (count > 0) {
+          sent += static_cast<std::size_t>(count);
+        } else if (count < 0 && errno == EINTR) {
+          continue;
+        } else {
+          break;
+        }
+      }
+      ::shutdown(input_pair[0], SHUT_WR);
+      ::close(input_pair[0]);
       ::close(output_pipe[1]);
       std::string output;
       std::array<char, 4096> buffer {};
@@ -101,6 +129,7 @@ namespace steamshine_addons {
       return {WIFEXITED(status) ? WEXITSTATUS(status) : -1, std::move(output)};
 #else
       (void) arguments;
+      (void) input;
       return {-1, {}};
 #endif
     }
@@ -113,6 +142,23 @@ namespace steamshine_addons {
      */
     bool systemd_predicate(const std::string &predicate) {
       return run_command({"/usr/bin/systemctl", predicate, "--quiet", "plugin_loader.service"}).first == 0;
+    }
+
+    /**
+     * @brief Locate a script in this installation without accepting client-controlled paths.
+     * @param filename Fixed packaged filename.
+     * @return Script path or an empty path.
+     */
+    std::filesystem::path packaged_script(const std::string_view filename) {
+#if defined(__linux__)
+      std::error_code error;
+      const auto executable {std::filesystem::canonical("/proc/self/exe", error)};
+      const auto script {executable.parent_path().parent_path() / "scripts" / filename};
+      if (!error && std::filesystem::is_regular_file(script, error)) {
+        return script;
+      }
+#endif
+      return {};
     }
 
   }  // namespace
@@ -196,6 +242,46 @@ namespace steamshine_addons {
     BOOST_LOG(info) << "ADDON_EVENT addon=decky action=start phase=owned_session_prepare reason=inactive";
     const auto result {perform_decky_action(decky_action_e::start)};
     return result.success && result.status.service_active;
+  }
+
+  bool management_ready(const std::string_view name) {
+    if (name != "runtime" && name != "decky") {
+      return false;
+    }
+    const auto stem {"steamshine-"s + std::string {name} + "-helper"};
+    const auto source {packaged_script(stem + ".sh")};
+    const auto destination {"/var/lib/steamshine/helpers/"s + stem};
+    std::ifstream packaged {source, std::ios::binary};
+    std::ifstream installed {destination, std::ios::binary};
+    if (!packaged || !installed || !std::equal(std::istreambuf_iterator<char> {packaged}, {}, std::istreambuf_iterator<char> {installed}, {})) {
+      return false;
+    }
+    return run_command({"/usr/bin/sudo", "-n", destination, "authorize"}).first == 0;
+  }
+
+  nlohmann::json management_status() {
+    return {{"runtime", management_ready("runtime")}, {"decky", management_ready("decky")}, {"authorization_available", !packaged_script("steamshine-provision-management.py").empty()}};
+  }
+
+  bool management_password_valid(const std::string_view password) {
+    return !password.empty() && password.size() <= 1024 && password.find_first_of("\r\n") == std::string_view::npos && password.find('\0') == std::string_view::npos;
+  }
+
+  nlohmann::json authorize_management(const std::string_view password) {
+    const auto script {packaged_script("steamshine-provision-management.py")};
+    if (!management_password_valid(password) || script.empty()) {
+      return {{"success", false}, {"message", "Enter the local administrator password; a current SteamOS package is required."}};
+    }
+    std::string input {password};
+    input.push_back('\n');
+    const auto [code, output] {run_command({"/usr/bin/timeout", "90", "/usr/bin/sudo", "-S", "-k", "-p", "", "--", "/usr/bin/python3", script.string()}, input)};
+    std::fill(input.begin(), input.end(), '\0');
+    if (code != 0) {
+      return {{"success", false}, {"message", "Administrator authentication or management setup failed. Check the password and try again."}};
+    }
+    const auto status = management_status();
+    const bool ready {status.value("runtime", false) && status.value("decky", false)};
+    return {{"success", ready}, {"message", ready ? "Web management is ready." : "Management authorization could not be verified."}, {"helpers", status}};
   }
 
   void to_json(nlohmann::json &json, const decky_status_t &value) {

@@ -203,7 +203,7 @@ install_runtime_helper() {
   fi
   temporary="$(mktemp)"
   cat >"${temporary}" <<EOF
-Cmnd_Alias STEAMSHINE_RUNTIME = ${helper} authorize, ${helper} apply-profile *, ${helper} remove-helper
+Cmnd_Alias STEAMSHINE_RUNTIME = ${helper} authorize, ${helper} probe-gpu, ${helper} apply-profile *, ${helper} remove-helper
 Defaults!STEAMSHINE_RUNTIME !authenticate
 ${username} ALL=(root) NOPASSWD: STEAMSHINE_RUNTIME
 EOF

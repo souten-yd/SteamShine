@@ -434,7 +434,10 @@ namespace nvhttp {
   }
 
   /**
-   * @brief Add authorized client data.
+   * @brief Add an authorized client or refresh its existing canonical certificate identity.
+   *
+   * Successful re-pairing preserves the UUID and removes duplicate records for
+   * that certificate; ordinary authorization still rejects ambiguous saved identities.
    *
    * @param name Human-readable name to assign.
    * @param cert Certificate data or object used by the operation.
@@ -452,13 +455,25 @@ namespace nvhttp {
     named_cert.uuid = uuid_util::uuid_t::generate().string();
 
     std::lock_guard lock {client_auth_mutex()};
-    client_root.named_devices.emplace_back(std::move(named_cert));
+    auto existing = std::ranges::find(client_root.named_devices, named_cert.cert, &named_cert_t::cert);
+    if (existing != client_root.named_devices.end()) {
+      named_cert.uuid = existing->uuid;
+      *existing = named_cert;
+      // A completed PIN handshake explicitly authorizes this identity again.
+      // Drop historical duplicates only here, never during ordinary loading.
+      const auto duplicate = std::remove_if(std::next(existing), client_root.named_devices.end(), [&](const auto &entry) {
+        return entry.cert == named_cert.cert;
+      });
+      client_root.named_devices.erase(duplicate, client_root.named_devices.end());
+    } else {
+      client_root.named_devices.emplace_back(named_cert);
+    }
     rebuild_client_cert_chain();
 
     if (!config::sunshine.flags[config::flag::FRESH_STATE]) {
       save_state();
     }
-    return client_root.named_devices.back().uuid;
+    return named_cert.uuid;
   }
 
   /**

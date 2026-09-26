@@ -250,6 +250,17 @@ namespace http {
     return result;
   }
 
+  std::string url_unescape(const std::string &value) {
+    int length {};
+    char *decoded = curl_easy_unescape(nullptr, value.c_str(), static_cast<int>(value.size()), &length);
+    if (!decoded) {
+      return value;
+    }
+    std::string result(decoded, static_cast<std::size_t>(length));
+    curl_free(decoded);
+    return result;
+  }
+
   /**
    * @brief Extract the host component from a URL string.
    */

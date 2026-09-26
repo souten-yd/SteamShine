@@ -9,6 +9,7 @@ let pollTimer = null;
 let terminalSocket = null;
 let terminalInstance = null;
 let terminalCleanup = null;
+let administratorDialog = null;
 
 /** @brief Escape arbitrary strings before putting them into a rendered template. */
 function escapeHtml(value) {
@@ -67,6 +68,52 @@ function confirmDialog({ title, message, confirmLabel = 'Confirm', danger = true
     backdrop.querySelector('[data-a="cancel"]').onclick = () => close(false);
     backdrop.querySelector('[data-a="confirm"]').onclick = () => close(true);
   });
+}
+
+/** @brief Authenticate the local administrator over HTTPS without retaining credentials. */
+function authorizeManagement() {
+  if (administratorDialog) return administratorDialog;
+  administratorDialog = new Promise((resolve) => {
+    const backdrop = document.createElement('div');
+    backdrop.className = 'modal-backdrop';
+    backdrop.innerHTML = `<div class="modal" role="dialog" aria-modal="true" aria-labelledby="administrator-title"><h3 id="administrator-title">Administrator authentication</h3><p>Enter this host's administrator password to enable GPU profile controls. The password is used for this request only and is not saved.</p><form id="administrator-form" class="stack" autocomplete="off"><label>Administrator password<input name="administrator_password" type="password" autocomplete="off" maxlength="1024" required></label><div class="notice" role="status"></div><div class="btn-row"><button type="button" class="btn-ghost" data-admin-cancel>Cancel</button><button type="submit" class="btn-primary">Authorize</button></div></form></div>`;
+    document.body.appendChild(backdrop);
+    const form = backdrop.querySelector('form');
+    const field = form.elements.administrator_password;
+    const cancel = backdrop.querySelector('[data-admin-cancel]');
+    const submit = form.querySelector('[type="submit"]');
+    const close = (result) => { field.value = ''; backdrop.remove(); resolve(result); };
+    cancel.onclick = () => close(false);
+    form.onsubmit = async (event) => {
+      event.preventDefault();
+      const body = JSON.stringify({ password: field.value });
+      field.value = '';
+      submit.disabled = true;
+      cancel.disabled = true;
+      form.querySelector('.notice').textContent = 'Authenticating…';
+      try {
+        await json(await api('/system/authorize', { method: 'POST', body }));
+        close(true);
+      } catch (error) {
+        form.querySelector('.notice').textContent = error.message;
+        submit.disabled = false;
+        cancel.disabled = false;
+        field.focus();
+      }
+    };
+    field.focus();
+  }).finally(() => { administratorDialog = null; });
+  return administratorDialog;
+}
+
+/** @brief Retry a fixed management action after an explicit administrator-authentication challenge. */
+async function managedApi(path, options = {}) {
+  const response = await api(path, options);
+  if (response.status !== 403) return response;
+  const failure = await response.clone().json().catch(() => ({}));
+  if (failure.code !== 'admin_authorization_required') return response;
+  if (!await authorizeManagement()) throw new Error('Administrator authentication cancelled. No action was run.');
+  return api(path, options);
 }
 
 /** @brief Inline icon set (stroke-based, 24x24 viewbox). */
@@ -207,7 +254,7 @@ function renderSetup() {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     try { await json(await api('/setup/credentials', { method: 'POST', body: JSON.stringify(Object.fromEntries(form)) })); navigate('/steamshine/login'); }
-    catch (error) { event.currentTarget.querySelector('.notice').textContent = error.message; }
+    catch (error) { backdrop.querySelector('.notice').textContent = error.message; }
   };
 }
 
@@ -289,7 +336,7 @@ async function renderMonitor() {
     const coreBars = (m.cpu.per_cpu || []).map((p) => `<div class="core-bar${p >= 90 ? ' hot' : ''}" title="${p.toFixed(0)}%"><span style="height:${p}%"></span></div>`).join('');
 
     const selectedCapStatus = m.gpu?.selected_power_cap_watts != null
-      ? `<div class="row"><span class="k">Selected profile limit</span><span class="v num">${m.gpu.selected_power_cap_watts.toFixed(0)} W <span class="badge ${m.gpu.selected_power_cap_applied ? 'badge-ok' : 'badge-warn'}">${m.gpu.selected_power_cap_applied ? 'applied' : 'NOT APPLIED'}</span></span></div>`
+      ? `<div class="row"><span class="k">Selected profile limit</span><span class="v num">${m.gpu.selected_power_cap_watts.toFixed(0)} W <span class="badge ${m.gpu.selected_power_cap_applied ? 'badge-ok' : 'badge-warn'}">${m.gpu.selected_power_cap_applied === true ? 'applied' : m.gpu.selected_power_cap_applied === false ? 'NOT APPLIED' : 'reading unavailable'}</span></span></div>`
       : '';
     const gpuSection = m.gpu ? `<div class="section"><h3>GPU — ${escapeHtml(m.gpu.name)}</h3><div class="rows">
         <div class="row"><span class="k">Hotspot</span><span class="v num">${m.gpu.hotspot_c != null ? `${m.gpu.hotspot_c.toFixed(0)}°C` : 'N/A'}</span></div>
@@ -836,7 +883,7 @@ async function renderApplications() {
       const form = new FormData(event.currentTarget);
       const payload = { name: form.get('name'), cmd: form.get('cmd') || '', 'image-path': form.get('image-path') || '', elevated: form.get('elevated') === 'on', index: index ?? -1 };
       try { await json(await api('/apps', { method: 'POST', body: JSON.stringify(payload) })); backdrop.remove(); toast('Saved', 'ok'); load(); }
-      catch (error) { event.currentTarget.querySelector('.notice').textContent = error.message; }
+      catch (error) { backdrop.querySelector('.notice').textContent = error.message; }
     };
   };
 
@@ -913,7 +960,7 @@ function renderGpuBody(caps, profiles, active, gpuMetrics) {
     const selected = p.name === active;
     const applied = selected && gpuMetrics?.selected_power_cap_applied === true;
     return `<div class="profile-card${applied ? ' active' : ''}" data-activate="${escapeHtml(p.name)}">
-      ${selected ? `<span class="active-tag">${applied ? 'POWER APPLIED' : 'SELECTED — NOT APPLIED'}</span>` : ''}
+      ${selected ? `<span class="active-tag">${applied ? 'POWER APPLIED' : gpuMetrics?.selected_power_cap_applied === false ? 'SELECTED — NOT APPLIED' : 'SELECTED — POWER READING UNAVAILABLE'}</span>` : ''}
       <h4>${escapeHtml(p.name)}</h4>
       <p class="profile-desc">${escapeHtml(p.description || '')}</p>
       <div class="profile-meta"><span>${p.power_cap_watts}W</span><span>${escapeHtml(p.cpu_governor)}</span>${p.gpu_clock_offset_mhz ? `<span>+${p.gpu_clock_offset_mhz}MHz</span>` : ''}</div>
@@ -923,7 +970,8 @@ function renderGpuBody(caps, profiles, active, gpuMetrics) {
   const capRow = (label, ok, detail) => `<div class="row"><span class="k">${escapeHtml(label)}</span><span class="v">${ok ? `<span class="badge badge-ok">supported</span>` : `<span class="badge badge-warn">unsupported</span>`}${detail ? ` <span class="field-hint">${escapeHtml(detail)}</span>` : ''}</span></div>`;
   wrap.innerHTML = `
     <div class="section"><h3>Profiles</h3><div class="profile-grid">${cards || '<div class="empty">No profiles.</div>'}</div></div>
-    <div class="callout ${caps.runtime_write_authorized ? 'info' : 'warn'}">${caps.runtime_write_authorized ? 'Runtime writes are authorized through SteamShine’s root-owned, fixed-operation helper. Values are validated and the live power cap is verified after every apply.' : 'Runtime writes are not authorized. The selected profile cannot be applied; run SteamShine repair interactively once. Repair restarts an active service when it provisions the helper.'}</div>
+    <div class="callout ${caps.runtime_write_authorized ? 'info' : 'warn'}">${caps.runtime_write_authorized ? 'Runtime writes are authorized through SteamShine’s root-owned, fixed-operation helper. Values are validated and the live power cap is verified after every apply.' : 'Runtime writes are not authorized. The selected profile cannot be applied; authenticate here to enable GPU controls.'}</div>
+    ${caps.runtime_write_authorized ? '' : '<button id="authorize-gpu" class="btn-primary">Authorize GPU controls</button>'}
     <div class="section"><h3>Detected capabilities</h3><div class="rows">
       ${capRow('GPU power limit', caps.power_cap_supported, caps.power_cap_supported ? `${caps.power_cap_min_watts}–${caps.power_cap_max_watts} W` : undefined)}
       ${capRow('GPU performance level', caps.perf_level_supported)}
@@ -935,9 +983,10 @@ function renderGpuBody(caps, profiles, active, gpuMetrics) {
 
 function wireGpuHandlers(caps, profiles) {
   const root = document.querySelector('#gpu-root');
+  root.querySelector('#authorize-gpu')?.addEventListener('click', async () => { if (await authorizeManagement()) await renderGpu(); });
   root.querySelectorAll('[data-activate]').forEach((el) => el.addEventListener('click', async (e) => {
     if (e.target.closest('[data-edit],[data-delete]')) return;
-    try { const r = await json(await api(`/gpu/profiles/${encodeURIComponent(el.dataset.activate)}/activate`, { method: 'POST', body: '{}' })); toast(`Applied (${(r.applied || []).length} fields, ${(r.skipped || []).length} skipped)`, 'ok'); renderGpu(); }
+    try { const r = await json(await managedApi(`/gpu/profiles/${encodeURIComponent(el.dataset.activate)}/activate`, { method: 'POST', body: '{}' })); toast(`Applied (${(r.applied || []).length} fields, ${(r.skipped || []).length} skipped)`, 'ok'); renderGpu(); }
     catch (error) { toast(error.message, 'error'); await renderGpu(); }
   }));
   root.querySelectorAll('[data-edit]').forEach((b) => b.addEventListener('click', (e) => { e.stopPropagation(); openProfileForm(caps, profiles.find((p) => p.name === b.dataset.edit)); }));
@@ -949,7 +998,12 @@ function wireGpuHandlers(caps, profiles) {
   }));
 }
 
+/** @brief Edit supported fields while retaining unavailable values from a saved profile. */
 function openProfileForm(caps, existing) {
+  if (!existing && caps.gpu_present && !caps.power_cap_supported) {
+    toast('GPU power limits are unavailable. Authorize GPU controls and refresh before creating a profile.', 'error');
+    return;
+  }
   const backdrop = document.createElement('div');
   backdrop.className = 'modal-backdrop';
   const odDisabled = caps.od_clk_voltage_supported ? '' : 'disabled';
@@ -980,14 +1034,16 @@ function openProfileForm(caps, existing) {
   backdrop.querySelector('#profile-form').onsubmit = async (event) => {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
+    // Disabled controls are absent from FormData; they must not erase saved values.
+    const numberField = (name) => form.has(name) ? Number(form.get(name)) : (existing?.[name] ?? 0);
     const payload = {
       name: form.get('name'), description: form.get('description') || '',
-      power_cap_watts: Number(form.get('power_cap_watts')), cpu_governor: form.get('cpu_governor'),
-      cpu_max_freq_mhz: Number(form.get('cpu_max_freq_mhz')), gpu_clock_offset_mhz: Number(form.get('gpu_clock_offset_mhz') || 0),
-      gpu_voltage_offset_mv: Number(form.get('gpu_voltage_offset_mv') || 0),
+      power_cap_watts: numberField('power_cap_watts'), cpu_governor: form.get('cpu_governor') || existing?.cpu_governor || '',
+      cpu_max_freq_mhz: numberField('cpu_max_freq_mhz'), gpu_clock_offset_mhz: numberField('gpu_clock_offset_mhz'),
+      gpu_voltage_offset_mv: numberField('gpu_voltage_offset_mv'),
     };
     try { await json(await api('/gpu/profiles', { method: 'POST', body: JSON.stringify(payload) })); backdrop.remove(); toast('Saved', 'ok'); renderGpu(); }
-    catch (error) { event.currentTarget.querySelector('.notice').textContent = error.message; }
+    catch (error) { backdrop.querySelector('.notice').textContent = error.message; }
   };
 }
 
@@ -1400,6 +1456,20 @@ async function renderTerminal() {
     if (terminalSocket?.readyState === WebSocket.OPEN) terminalSocket.send(JSON.stringify({ type: 'input', data }));
   };
 
+  /**
+   * @brief Report this viewer's fitted geometry and request a full repaint.
+   *
+   * xterm only emits resize events when its own size changes, so a reconnect
+   * at an unchanged size would otherwise leave tmux drawing for the geometry
+   * of an earlier viewer. The repaint replaces replayed output entirely.
+   */
+  const synchronizeGeometry = () => {
+    if (disposed || terminalSocket?.readyState !== WebSocket.OPEN) return;
+    if (!composing && host.isConnected) fitAddon.fit();
+    const { cols, rows } = terminalInstance;
+    terminalSocket.send(JSON.stringify({ type: 'resize', cols, rows, redraw: Boolean(active.persistent) }));
+  };
+
   terminalInstance.onData(sendInput);
   terminalInstance.onResize(({ cols, rows }) => {
     if (terminalSocket?.readyState === WebSocket.OPEN) terminalSocket.send(JSON.stringify({ type: 'resize', cols, rows }));
@@ -1476,7 +1546,7 @@ async function renderTerminal() {
             host.classList.remove('replaying');
             terminalInputReady = true;
             setConnectionState('Connected', 'open');
-            scheduleFit();
+            synchronizeGeometry();
           });
         }
         return;

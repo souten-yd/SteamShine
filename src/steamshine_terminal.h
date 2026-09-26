@@ -141,9 +141,23 @@ namespace steamshine_terminal {
   bool resize(std::string_view session_id, unsigned short cols, unsigned short rows);
 
   /**
+   * @brief Ask tmux to repaint the full screen of one persistent session.
+   *
+   * Browsers call this after reporting their fitted geometry, so a
+   * reconnecting viewer receives the current screen at its own size instead
+   * of output rendered for an earlier geometry.
+   *
+   * @param session_id Destination session.
+   * @return True when tmux accepted the repaint request.
+   */
+  bool redraw(std::string_view session_id);
+
+  /**
    * @brief Subscribe to one session's PTY output.
    *
-   * The bounded backlog is delivered synchronously before live output. The
+   * For in-process fallback shells, the bounded backlog is delivered
+   * synchronously before live output. Persistent tmux sessions retain no raw
+   * backlog; callers request a current screen with redraw() instead. The
    * callback is serialized with unsubscribe(), allowing a connection to
    * destroy callback state immediately after unsubscribe() returns.
    *

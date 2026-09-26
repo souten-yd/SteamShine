@@ -28,6 +28,16 @@ const successScreenshotFile = join(reportDirectory, 'steamshine-monitor.png');
 const configFile = join(homeDirectory, 'sunshine.conf');
 const consoleErrors = [];
 const failedRequests = [];
+
+/**
+ * Record a failed same-origin request unless navigation cancelled an idempotent poll.
+ * Reloading a page aborts its in-flight metric polls; the server never saw an error.
+ */
+function recordFailedRequest(request) {
+  const reason = request.failure()?.errorText || 'unknown';
+  if (request.method() === 'GET' && reason === 'net::ERR_ABORTED') return;
+  failedRequests.push(`${request.method()} ${request.url()} (${reason})`);
+}
 const websocketErrors = [];
 const securityResults = {};
 const responsiveViewports = [];
@@ -120,7 +130,7 @@ try {
     if (message.type() === 'error' && !/status of 401/.test(message.text())) consoleErrors.push(message.text());
   });
   setupPage.on('requestfailed', (request) => {
-    if (request.url().startsWith(baseUrl) && !request.url().includes('/api/steamshine/v1/session')) failedRequests.push(`${request.method()} ${request.url()}`);
+    if (request.url().startsWith(baseUrl) && !request.url().includes('/api/steamshine/v1/session')) recordFailedRequest(request);
   });
   await setupPage.waitForSelector('#usernameInput');
   await setupPage.waitForFunction(() => !document.querySelector('body')?.hasAttribute('v-cloak'));
@@ -161,7 +171,7 @@ try {
     if (message.type() === 'error') consoleErrors.push(message.text());
   });
   authenticatedPage.on('requestfailed', (request) => {
-    if (request.url().startsWith(baseUrl)) failedRequests.push(`${request.method()} ${request.url()}`);
+    if (request.url().startsWith(baseUrl)) recordFailedRequest(request);
   });
   const rootResponse = await authenticatedPage.goto(`${baseUrl}/sunshine/`, { waitUntil: 'networkidle' });
   if (rootResponse?.status() !== 200) {
@@ -184,11 +194,11 @@ try {
   const steamshineContext = await browser.newContext({ ignoreHTTPSErrors: true });
   const steamshinePage = await steamshineContext.newPage();
   steamshinePage.on('console', (message) => {
-    if (message.type() === 'error' && !/status of (400|401|429)/.test(message.text())) consoleErrors.push(message.text());
+    if (message.type() === 'error' && !/status of (400|401|429)/.test(message.text()) && !(/status of 403/.test(message.text()) && message.location().url.includes('/gpu/profiles/Alternative/activate'))) consoleErrors.push(message.text());
   });
   steamshinePage.on('requestfailed', (request) => {
     if (request.url().startsWith(baseUrl) && !request.url().includes('/api/steamshine/v1/session') && !request.url().includes('/api/steamshine/v1/pairing/pin') && !request.url().includes('/api/steamshine/v1/config/virtual-display') && !request.url().includes('/api/steamshine/v1/stream/profiles')) {
-      failedRequests.push(`${request.method()} ${request.url()}`);
+      recordFailedRequest(request);
     }
   });
   steamshinePage.on('websocket', (socket) => {
@@ -218,6 +228,104 @@ try {
   const savedAlternative = savedGpuProfiles.profiles.find((profile) => profile.name === 'Alternative');
   if (savedAlternative?.power_cap_watts !== 260 || savedAlternative?.cpu_max_freq_mhz !== 3600 || savedAlternative?.cpu_governor !== 'powersave') {
     throw new Error('The GPU API did not preserve the existing custom profile.');
+  }
+  // Administrator provisioning requires CSRF and throttles rejected credentials before sudo.
+  const adminSession = await steamshinePage.evaluate(async () => (await (await fetch('/api/steamshine/v1/session')).json()));
+  const adminUrl = `${baseUrl}/api/steamshine/v1/system/authorize`;
+  const adminNoCsrf = await steamshineContext.request.post(adminUrl, { headers: { Origin: baseUrl }, data: { password: '' } });
+  if (adminNoCsrf.status() !== 400) throw new Error('Administrator authorization accepted a request without CSRF.');
+  for (let attempt = 0; attempt < 6; attempt++) {
+    const denied = await steamshineContext.request.post(adminUrl, { headers: { Origin: baseUrl, 'X-SteamShine-CSRF-Token': adminSession.csrf_token }, data: { password: '' } });
+    if (denied.status() !== (attempt < 5 ? 403 : 429)) throw new Error('Administrator authentication did not reject or throttle invalid input.');
+  }
+  // Runtime-suspended GPUs must not erase disabled profile fields or claim a failed apply.
+  const gpuCapsRoute = '**/api/steamshine/v1/gpu/capabilities';
+  const unavailableCaps = { gpu_present: true, gpu_name: 'Test AMD GPU', runtime_write_authorized: false,
+    power_cap_supported: false, power_cap_min_watts: 0, power_cap_max_watts: 0, power_cap_default_watts: 0,
+    cpu_freq_supported: false, cpu_governors: ['powersave'], od_clk_voltage_supported: false };
+  await steamshinePage.route(gpuCapsRoute, (route) => route.fulfill({ json: unavailableCaps }));
+  await steamshinePage.reload({ waitUntil: 'domcontentloaded' });
+  await steamshinePage.locator('[data-edit="Alternative"]').click();
+  await steamshinePage.locator('#profile-form input[name="description"]').fill('Preserved while GPU sleeps');
+  const disabledSave = steamshinePage.waitForResponse((response) => response.url().endsWith('/gpu/profiles') && response.request().method() === 'POST');
+  await steamshinePage.locator('#profile-form button.btn-primary').click();
+  await (await disabledSave).finished();
+  await steamshinePage.locator('#profile-form').waitFor({ state: 'detached' });
+  const preserved = await steamshinePage.evaluate(async () => (await (await fetch('/api/steamshine/v1/gpu/profiles')).json()).profiles.find((p) => p.name === 'Alternative'));
+  if (preserved.power_cap_watts !== 260 || preserved.cpu_max_freq_mhz !== 3600) throw new Error('Disabled GPU controls erased saved limits.');
+  await steamshinePage.locator('#add-profile').click();
+  if (await steamshinePage.locator('#profile-form').count()) throw new Error('An unavailable power range allowed a zero-limit profile.');
+  await steamshinePage.locator('#authorize-gpu').click();
+  await steamshinePage.locator('#administrator-form').waitFor();
+  await steamshinePage.locator('[data-admin-cancel]').click();
+  await steamshinePage.route('**/api/steamshine/v1/gpu/profiles/Alternative/activate', (route) => route.fulfill({ status: 403, json: { code: 'admin_authorization_required' } }));
+  await steamshinePage.locator('[data-activate="Alternative"] h4').click();
+  await steamshinePage.locator('#administrator-form').waitFor();
+  await steamshinePage.locator('[data-admin-cancel]').click();
+  await steamshinePage.unroute('**/api/steamshine/v1/gpu/profiles/Alternative/activate');
+  // Successful authorization clears the password field and refreshes detected bounds.
+  await steamshinePage.route('**/api/steamshine/v1/system/authorize', (route) => route.fulfill({ json: { success: true } }));
+  await steamshinePage.locator('#authorize-gpu').click();
+  await steamshinePage.locator('[name="administrator_password"]').fill('test-only-password');
+  await steamshinePage.locator('#administrator-form [type="submit"]').click();
+  await steamshinePage.locator('#administrator-form').waitFor({ state: 'detached' });
+  await steamshinePage.unroute('**/api/steamshine/v1/system/authorize');
+  await steamshinePage.unroute(gpuCapsRoute);
+  await steamshinePage.reload({ waitUntil: 'domcontentloaded' });
+  await steamshinePage.locator('[data-edit="Alternative"]').waitFor();
+  const availableCaps = { ...unavailableCaps, runtime_write_authorized: true, power_cap_supported: true,
+    power_cap_min_watts: 231, power_cap_max_watts: 340, power_cap_default_watts: 330,
+    cpu_freq_supported: true, cpu_min_freq_mhz: 400, cpu_max_freq_mhz: 3600 };
+  await steamshinePage.route(gpuCapsRoute, (route) => route.fulfill({ json: availableCaps }));
+  await steamshinePage.reload({ waitUntil: 'domcontentloaded' });
+  await steamshinePage.locator('#add-profile').click();
+  await steamshinePage.locator('#profile-form input[name="name"]').fill('Browser-created profile');
+  if (await steamshinePage.locator('#profile-form [name="power_cap_watts"]').inputValue() !== '330') throw new Error('New profile does not use the detected default power limit.');
+  const newSave = steamshinePage.waitForResponse((response) => response.url().endsWith('/gpu/profiles') && response.request().method() === 'POST');
+  await steamshinePage.locator('#profile-form button.btn-primary').click();
+  await (await newSave).finished();
+  await steamshinePage.locator('#profile-form').waitFor({ state: 'detached' });
+  await steamshinePage.reload({ waitUntil: 'domcontentloaded' });
+  const createdCard = steamshinePage.locator('[data-activate="Browser-created profile"]');
+  await createdCard.waitFor();
+  if (!(await createdCard.innerText()).includes('330W')) throw new Error('New profile power limit changed after reopening the page.');
+  await steamshinePage.unroute(gpuCapsRoute);
+  // Percent-encoded names must identify exactly the profile that was saved.
+  const nameRoundTrip = await steamshinePage.evaluate(async () => {
+    const session = await (await fetch('/api/steamshine/v1/session')).json();
+    const headers = { 'Content-Type': 'application/json', 'X-SteamShine-CSRF-Token': session.csrf_token };
+    const name = '日本語 + 100% / GPU';
+    const saved = await fetch('/api/steamshine/v1/gpu/profiles', { method: 'POST', headers, body: JSON.stringify({ name, power_cap_watts: 250 }) });
+    await saved.json();
+    const removed = await fetch(`/api/steamshine/v1/gpu/profiles/${encodeURIComponent(name)}`, { method: 'DELETE', headers });
+    await removed.json();
+    return [saved.status, removed.status];
+  });
+  if (nameRoundTrip.some((status) => status !== 200)) throw new Error('GPU profile names did not survive URL encoding.');
+  // Saving upstream settings from an older tab must retain profiles added later.
+  const profilePersistence = await steamshinePage.evaluate(async () => {
+    const session = await (await fetch('/api/steamshine/v1/session')).json();
+    const headers = { 'Content-Type': 'application/json', 'X-SteamShine-CSRF-Token': session.csrf_token };
+    const created = await fetch('/api/steamshine/v1/gpu/profiles', {
+      method: 'POST', headers, body: JSON.stringify({ name: 'Second profile', power_cap_watts: 250, cpu_governor: 'powersave', cpu_max_freq_mhz: 2040 }),
+    });
+    await created.json();
+    const upstreamHeaders = { 'Content-Type': 'application/json', Authorization: `Basic ${btoa('web-e2e:web-e2e-password')}` };
+    const config = await (await fetch('/api/config', { headers: upstreamHeaders })).json();
+    delete config.status;
+    config.steamshine_gpu_profiles = '[]';
+    const saved = await fetch('/api/config', { method: 'POST', headers: upstreamHeaders, body: JSON.stringify(config) });
+    await saved.json();
+    return { created: created.status, saved: saved.status };
+  });
+  if (profilePersistence.created !== 200 || profilePersistence.saved !== 200) {
+    throw new Error(`GPU profile persistence requests failed: ${JSON.stringify(profilePersistence)}`);
+  }
+  const persistedGpuConfig = await readFile(configFile, 'utf8');
+  const persistedGpuLine = persistedGpuConfig.split('\n').find((line) => line.startsWith('steamshine_gpu_profiles = '));
+  const persistedGpuNames = JSON.parse(persistedGpuLine.slice(persistedGpuLine.indexOf('=') + 1)).map((profile) => profile.name);
+  if (!persistedGpuNames.includes('Alternative') || !persistedGpuNames.includes('Second profile')) {
+    throw new Error('Saving upstream settings discarded custom GPU profiles on disk.');
   }
   for (const viewport of [
     { name: 'desktop', width: 1440, height: 900 },

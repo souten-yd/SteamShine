@@ -71,3 +71,16 @@ INSTANTIATE_TEST_SUITE_P(
     std::make_tuple(URL_2, "hello-redirect.txt")
   )
 );
+
+/**
+ * @brief Decode profile path segments exactly once without treating plus as form whitespace.
+ */
+TEST(UrlPathDecodeTests, PreservesProfileNames) {
+  for (const std::string name : {"Alternative", "Second profile", "日本語 + 100% / GPU", "%20", "a+b"}) {
+    EXPECT_EQ(http::url_unescape(http::url_escape(name)), name);
+  }
+  EXPECT_EQ(http::url_unescape("a+b"), "a+b");
+  EXPECT_EQ(http::url_unescape("a%20b"), "a b");
+  EXPECT_EQ(http::url_unescape("%2520"), "%20");
+  EXPECT_EQ(http::url_unescape(""), "");
+}

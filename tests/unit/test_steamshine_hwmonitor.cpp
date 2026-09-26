@@ -179,3 +179,166 @@ TEST(SteamshineHardwareMonitorTest, PreservesHardwareCapForUnresolvedPreset) {
   steamshine_hwmonitor::annotate_selected_profile_power_cap(without_gpu, 225.0);
   EXPECT_FALSE(without_gpu.gpu);
 }
+
+/**
+ * @brief Refuse to overwrite unreadable profile lists, including partially valid arrays.
+ */
+TEST(SteamshineGpuControlTest, RejectsMutationOfMalformedStoredProfiles) {
+  const auto saved = config::sunshine.steamshine_gpu_profiles;
+  const auto restore = util::fail_guard([&]() {
+    config::sunshine.steamshine_gpu_profiles = saved;
+  });
+  for (const std::string value : {"not-json", "{}", R"([{"name":"Existing"},[]])"}) {
+    config::sunshine.steamshine_gpu_profiles = value;
+    steamshine_gpuctl::profile_t profile {.name = "New"};
+    std::string error;
+    EXPECT_FALSE(steamshine_gpuctl::save_custom_profile(profile, error));
+    EXPECT_FALSE(error.empty());
+    EXPECT_FALSE(steamshine_gpuctl::delete_custom_profile("Existing", error));
+    EXPECT_EQ(config::sunshine.steamshine_gpu_profiles, value);
+  }
+}
+
+/**
+ * @brief A failed disk write must not report success or change the in-memory profile list.
+ */
+TEST(SteamshineGpuControlTest, FailedSaveAndDeletePreserveProfiles) {
+  const auto saved = config::sunshine.steamshine_gpu_profiles;
+  const auto saved_path = config::sunshine.config_file;
+  const auto restore = util::fail_guard([&]() {
+    config::sunshine.steamshine_gpu_profiles = saved;
+    config::sunshine.config_file = saved_path;
+  });
+  const std::string existing = R"([{"name":"Existing","power_cap_watts":250}])";
+  config::sunshine.steamshine_gpu_profiles = existing;
+  config::sunshine.config_file = "/dev/null/cannot-save.conf";
+  steamshine_gpuctl::profile_t profile {.name = "New"};
+  std::string error;
+  EXPECT_FALSE(steamshine_gpuctl::save_custom_profile(profile, error));
+  EXPECT_FALSE(error.empty());
+  EXPECT_EQ(config::sunshine.steamshine_gpu_profiles, existing);
+  EXPECT_FALSE(steamshine_gpuctl::delete_custom_profile("Existing", error));
+  EXPECT_EQ(config::sunshine.steamshine_gpu_profiles, existing);
+}
+
+/**
+ * @brief Parse a complete privileged GPU probe captured while the device is active.
+ */
+TEST(SteamshineGpuControlTest, ParsesPrivilegedGpuCapabilityProbe) {
+  constexpr std::string_view response {R"({
+    "gpu_present": true,
+    "power_cap_supported": true,
+    "power_cap_min_microwatts": 231000000,
+    "power_cap_max_microwatts": 340000000,
+    "power_cap_default_microwatts": 330000000,
+    "perf_level_supported": true,
+    "od_clk_voltage_supported": false
+  })"};
+
+  const auto parsed {steamshine_gpuctl::parse_gpu_capability_probe(response)};
+
+  ASSERT_TRUE(parsed);
+  EXPECT_TRUE(parsed->gpu_present);
+  EXPECT_TRUE(parsed->power_cap_supported);
+  EXPECT_DOUBLE_EQ(parsed->power_cap_min_watts, 231.0);
+  EXPECT_DOUBLE_EQ(parsed->power_cap_max_watts, 340.0);
+  EXPECT_DOUBLE_EQ(parsed->power_cap_default_watts, 330.0);
+  EXPECT_TRUE(parsed->perf_level_supported);
+  EXPECT_FALSE(parsed->od_clk_voltage_supported);
+}
+
+/**
+ * @brief Accept an absent GPU only when every dependent capability is disabled.
+ */
+TEST(SteamshineGpuControlTest, ParsesAbsentPrivilegedGpuCapabilityProbe) {
+  constexpr std::string_view response {R"({
+    "gpu_present": false,
+    "power_cap_supported": false,
+    "power_cap_min_microwatts": 0,
+    "power_cap_max_microwatts": 0,
+    "power_cap_default_microwatts": 0,
+    "perf_level_supported": false,
+    "od_clk_voltage_supported": false
+  })"};
+
+  const auto parsed {steamshine_gpuctl::parse_gpu_capability_probe(response)};
+
+  ASSERT_TRUE(parsed);
+  EXPECT_FALSE(parsed->gpu_present);
+  EXPECT_FALSE(parsed->power_cap_supported);
+}
+
+/**
+ * @brief Reject malformed, contradictory, and unsafe privileged probe values.
+ */
+TEST(SteamshineGpuControlTest, RejectsInvalidPrivilegedGpuCapabilityProbe) {
+  EXPECT_FALSE(steamshine_gpuctl::parse_gpu_capability_probe("not-json"));
+  EXPECT_FALSE(steamshine_gpuctl::parse_gpu_capability_probe(R"({"gpu_present":false})"));
+  EXPECT_FALSE(steamshine_gpuctl::parse_gpu_capability_probe(R"({
+    "gpu_present": false,
+    "power_cap_supported": false,
+    "power_cap_min_microwatts": 0,
+    "power_cap_max_microwatts": 0,
+    "power_cap_default_microwatts": 0,
+    "perf_level_supported": true,
+    "od_clk_voltage_supported": false
+  })"));
+  EXPECT_FALSE(steamshine_gpuctl::parse_gpu_capability_probe(R"({
+    "gpu_present": true,
+    "power_cap_supported": true,
+    "power_cap_min_microwatts": 340000000,
+    "power_cap_max_microwatts": 231000000,
+    "power_cap_default_microwatts": 330000000,
+    "perf_level_supported": true,
+    "od_clk_voltage_supported": false
+  })"));
+  EXPECT_FALSE(steamshine_gpuctl::parse_gpu_capability_probe(R"({
+    "gpu_present": true,
+    "power_cap_supported": false,
+    "power_cap_min_microwatts": 1,
+    "power_cap_max_microwatts": 0,
+    "power_cap_default_microwatts": 0,
+    "perf_level_supported": true,
+    "od_clk_voltage_supported": false
+  })"));
+}
+
+/**
+ * @brief Refresh GPU limits after authorization without losing detected CPU capabilities.
+ */
+TEST(SteamshineGpuControlTest, RefreshesAuthorizationAndPreservesUnavailableProbe) {
+  steamshine_gpuctl::capabilities_t previous;
+  previous.cpu_freq_supported = true;
+  previous.cpu_max_freq_mhz = 3600;
+  steamshine_gpuctl::gpu_capability_probe_t probe;
+  probe.gpu_present = true;
+  probe.power_cap_supported = true;
+  probe.power_cap_min_watts = 231;
+  probe.power_cap_max_watts = 340;
+  probe.power_cap_default_watts = 330;
+  const auto refreshed = steamshine_gpuctl::merge_authorization_probe(previous, true, probe);
+  EXPECT_TRUE(refreshed.runtime_write_authorized);
+  EXPECT_TRUE(refreshed.power_cap_supported);
+  EXPECT_EQ(refreshed.power_cap_default_watts, 330);
+  EXPECT_EQ(refreshed.cpu_max_freq_mhz, 3600);
+  const auto unavailable = steamshine_gpuctl::merge_authorization_probe(refreshed, false, std::nullopt);
+  EXPECT_FALSE(unavailable.runtime_write_authorized);
+  EXPECT_EQ(unavailable.power_cap_default_watts, 330);
+}
+
+/**
+ * @brief Reject invalid limits before touching the saved profile list.
+ */
+TEST(SteamshineGpuControlTest, RejectsNonFiniteOrNegativeLimits) {
+  steamshine_gpuctl::profile_t profile;
+  profile.name = "Invalid limits";
+  std::string error;
+  for (const double invalid : {-1.0, std::numeric_limits<double>::infinity(), std::numeric_limits<double>::quiet_NaN()}) {
+    profile.power_cap_watts = invalid;
+    EXPECT_FALSE(steamshine_gpuctl::save_custom_profile(profile, error));
+    profile.power_cap_watts = 250;
+    profile.cpu_max_freq_mhz = invalid;
+    EXPECT_FALSE(steamshine_gpuctl::save_custom_profile(profile, error));
+    profile.cpu_max_freq_mhz = 2000;
+  }
+}

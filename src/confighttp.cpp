@@ -296,6 +296,7 @@ namespace confighttp {
 
   std::map<std::string, rate_limit_t, std::less<>> steamshine_login_attempts;  ///< Login attempts by remote address.
   std::map<std::string, rate_limit_t, std::less<>> steamshine_pin_attempts;  ///< PIN attempts by remote address.
+  std::map<std::string, rate_limit_t, std::less<>> steamshine_admin_attempts;  ///< Administrator authentication attempts by remote address.
   std::mutex steamshine_rate_limit_mutex;  ///< Mutex protecting SteamShine rate-limit state.
 
   /**
@@ -1792,6 +1793,15 @@ namespace confighttp {
       std::stringstream config_stream;
       nlohmann::json output_tree;
       nlohmann::json input_tree = nlohmann::json::parse(ss);
+      // GPU profiles are managed by their own API. A stale upstream settings
+      // page must not replace newly saved profiles with its earlier snapshot.
+      const auto persisted = config::parse_config(file_handler::read_file(config::sunshine.config_file.c_str()));
+      for (const auto *key : {"steamshine_gpu_profiles", "steamshine_gpu_active_profile"}) {
+        input_tree.erase(key);
+        if (const auto entry = persisted.find(key); entry != persisted.end()) {
+          input_tree[key] = entry->second;
+        }
+      }
       for (const auto &[k, v] : input_tree.items()) {
         if (v.is_null() || (v.is_string() && v.get<std::string>().empty())) {
           continue;
@@ -2303,6 +2313,67 @@ namespace confighttp {
   }
 
   /**
+   * @brief Request Web administrator authentication only when a required helper is unavailable.
+   * @param response HTTP response.
+   * @param helper Fixed helper name.
+   * @return Whether the operation may proceed.
+   */
+  bool require_steamshine_management(const resp_https_t &response, const std::string_view helper) {
+    if (steamshine_addons::management_ready(helper)) {
+      return true;
+    }
+    send_steamshine_response(response, {{"status", false}, {"code", "admin_authorization_required"}, {"message", "Administrator authentication is required."}}, {}, SimpleWeb::StatusCode::client_error_forbidden);
+    return false;
+  }
+
+  /**
+   * @brief Return fixed-operation management readiness.
+   * @param response HTTP response.
+   * @param request Authenticated request.
+   */
+  void steamshine_management_status(const resp_https_t &response, const req_https_t &request) {
+    if (!require_steamshine_session(response, request).empty()) {
+      send_steamshine_response(response, steamshine_addons::management_status());
+    }
+  }
+
+  /**
+   * @brief Authenticate a transient administrator password without logging or saving its contents.
+   * @param response HTTP response.
+   * @param request Session- and CSRF-protected HTTPS request.
+   */
+  void steamshine_authorize_management(const resp_https_t &response, const req_https_t &request) {
+    if (require_steamshine_mutation(response, request).empty()) {
+      return;
+    }
+    const auto address {net::addr_to_normalized_string(request->remote_endpoint().address())};
+    if (steamshine_rate_limit_exhausted(steamshine_admin_attempts, address, 5U, std::chrono::minutes(5))) {
+      send_steamshine_response(response, {{"status", false}, {"message", "Too many authentication attempts. Try again in five minutes."}}, {}, SimpleWeb::StatusCode::client_error_too_many_requests);
+      return;
+    }
+    nlohmann::json input;
+    if (!read_steamshine_json(response, request, input)) {
+      return;
+    }
+    if (!input.contains("password") || !input["password"].is_string()) {
+      bad_request(response, request, "An administrator password is required");
+      return;
+    }
+    auto password {input["password"].get<std::string>()};
+    input["password"] = nullptr;
+    record_steamshine_rate_limit_failure(steamshine_admin_attempts, address);
+    const auto result = steamshine_addons::authorize_management(password);
+    std::fill(password.begin(), password.end(), '\0');
+    if (!result.value("success", false)) {
+      send_steamshine_response(response, result, {}, SimpleWeb::StatusCode::client_error_forbidden);
+      return;
+    }
+    clear_steamshine_rate_limit(steamshine_admin_attempts, address);
+    steamshine_gpuctl::refresh_capabilities();
+    send_steamshine_response(response, result);
+  }
+
+  /**
    * @brief Return whether the shared Web credential has been initialized.
    *
    * @param response The HTTP response object.
@@ -2730,7 +2801,10 @@ namespace confighttp {
     if (require_steamshine_session(response, request).empty()) {
       return;
     }
-    send_steamshine_response(response, steamshine_gpuctl::capabilities());
+    steamshine_gpuctl::refresh_capabilities();
+    auto capabilities {steamshine_gpuctl::capabilities()};
+    capabilities.runtime_write_authorized = steamshine_addons::management_ready("runtime");
+    send_steamshine_response(response, capabilities);
   }
 
   /**
@@ -2792,7 +2866,7 @@ namespace confighttp {
       return;
     }
     std::string error;
-    if (!steamshine_gpuctl::delete_custom_profile(request->path_match[1], error)) {
+    if (!steamshine_gpuctl::delete_custom_profile(http::url_unescape(request->path_match[1]), error)) {
       bad_request(response, request, error);
       return;
     }
@@ -2809,7 +2883,10 @@ namespace confighttp {
     if (require_steamshine_mutation(response, request).empty()) {
       return;
     }
-    const auto result {steamshine_gpuctl::activate_profile(request->path_match[1])};
+    if (!require_steamshine_management(response, "runtime")) {
+      return;
+    }
+    const auto result {steamshine_gpuctl::activate_profile(http::url_unescape(request->path_match[1]))};
     if (!result.success) {
       bad_request(response, request, result.error.empty() ? "GPU profile could not be applied" : result.error);
       return;
@@ -3759,7 +3836,9 @@ namespace confighttp {
         terminal_connection_registry_t &connections;  ///< Registry holding the live transport.
         std::uint64_t id;  ///< Registration to remove.
 
-        /** @brief Remove the transport from the shutdown registry. */
+        /**
+         * @brief Remove the transport from the shutdown registry.
+         */
         ~connection_guard_t() {
           connections.remove(id);
         }
@@ -3870,6 +3949,9 @@ namespace confighttp {
             static_cast<unsigned short>(std::clamp(payload.value("cols", 80), 1, 500)),
             static_cast<unsigned short>(std::clamp(payload.value("rows", 24), 1, 200))
           );
+          if (payload.value("redraw", false)) {
+            steamshine_terminal::redraw(terminal_session_id);
+          }
         }
       }
     } catch (const std::exception &e) {
@@ -4012,6 +4094,8 @@ namespace confighttp {
     server.resource["^/api/steamshine/v1/gpu/profiles/([^/]+)/activate$"]["POST"] = steamshine_handler(steamshine_activate_gpu_profile);
     server.resource["^/api/steamshine/v1/addons/decky$"]["GET"] = steamshine_handler(steamshine_decky_status);
     server.resource["^/api/steamshine/v1/addons/decky/action$"]["POST"] = steamshine_handler(steamshine_decky_action);
+    server.resource["^/api/steamshine/v1/system/authorize$"]["POST"] = steamshine_handler(steamshine_authorize_management);
+    server.resource["^/api/steamshine/v1/system/management$"]["GET"] = steamshine_handler(steamshine_management_status);
     server.resource["^/api/steamshine/v1/terminal/status$"]["GET"] = steamshine_handler(steamshine_terminal_status);
     server.resource["^/api/steamshine/v1/terminal/start$"]["POST"] = steamshine_handler(steamshine_terminal_start);
     server.resource["^/api/steamshine/v1/terminal/stop$"]["POST"] = steamshine_handler(steamshine_terminal_stop);

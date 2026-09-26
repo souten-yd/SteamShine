@@ -8,6 +8,7 @@
 #include "logging.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
@@ -258,9 +259,14 @@ namespace steamshine_terminal {
      */
     void broadcast(const std::shared_ptr<session_t> &session, const std::string_view chunk) {
       std::lock_guard lock {session->subscriber_mutex};
-      session->backlog.append(chunk);
-      if (session->backlog.size() > MAX_BACKLOG_BYTES) {
-        session->backlog.erase(0, session->backlog.size() - MAX_BACKLOG_BYTES);
+      // tmux repaints persistent sessions on demand. Its raw output contains
+      // absolute cursor movement for whichever geometry was active, so
+      // replaying it into a browser with another size corrupts the screen.
+      if (!session->persistent) {
+        session->backlog.append(chunk);
+        if (session->backlog.size() > MAX_BACKLOG_BYTES) {
+          session->backlog.erase(0, session->backlog.size() - MAX_BACKLOG_BYTES);
+        }
       }
       for (const auto &[id, callback] : session->subscribers) {
         (void) id;
@@ -690,18 +696,25 @@ namespace steamshine_terminal {
 
     const auto repeat_count {std::to_string(std::clamp(std::abs(lines), 1, 200))};
     const std::string command {lines < 0 ? "scroll-up" : "scroll-down"};
-    if (!session->copy_mode_active) {
-      if (lines > 0 || run_command({"tmux", "copy-mode", "-t", session->tmux_name}).exit_code != 0) {
-        return false;
-      }
-      session->copy_mode_active = true;
-    }
-    const auto result {run_command({"tmux", "send-keys", "-t", session->tmux_name, "-X", "-N", repeat_count, command})};
-    if (result.exit_code != 0) {
-      session->copy_mode_active = false;
+    // `-e` leaves copy mode when scrolling reaches the live bottom, so a
+    // downward swipe returns to live output without requiring a keypress.
+    const auto enter_copy_mode = [&session] {
+      session->copy_mode_active = run_command({"tmux", "copy-mode", "-e", "-t", session->tmux_name}).exit_code == 0;
+      return session->copy_mode_active;
+    };
+    const auto send_scroll = [&] {
+      return run_command({"tmux", "send-keys", "-t", session->tmux_name, "-X", "-N", repeat_count, command}).exit_code == 0;
+    };
+    if (!session->copy_mode_active && (lines > 0 || !enter_copy_mode())) {
       return false;
     }
-    return true;
+    if (send_scroll()) {
+      return true;
+    }
+    // tmux may already have left copy mode at the bottom; re-enter it for an
+    // upward swipe instead of dropping the first gesture frame.
+    session->copy_mode_active = false;
+    return lines < 0 && enter_copy_mode() && send_scroll();
 #else
     (void) session_id;
     (void) lines;
@@ -727,6 +740,27 @@ namespace steamshine_terminal {
     (void) session_id;
     (void) cols;
     (void) rows;
+    return false;
+#endif
+  }
+
+  bool redraw(const std::string_view session_id) {
+#if defined(__linux__)
+    const auto session {find_session(session_id)};
+    if (!session) {
+      return false;
+    }
+    std::lock_guard lock {session->pty_mutex};
+    if (!session->persistent || session->master_fd < 0 || session->stopping) {
+      return false;
+    }
+    std::array<char, 128> client_tty {};
+    if (::ptsname_r(session->master_fd, client_tty.data(), client_tty.size()) != 0) {
+      return false;
+    }
+    return run_command({"tmux", "refresh-client", "-t", client_tty.data()}).exit_code == 0;
+#else
+    (void) session_id;
     return false;
 #endif
   }
