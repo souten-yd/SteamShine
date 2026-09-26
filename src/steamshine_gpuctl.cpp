@@ -77,7 +77,6 @@ namespace steamshine_gpuctl {
     struct hardware_paths_t {
       fs::path gpu_device_dir;  ///< `/sys/class/drm/card*/device`.
       fs::path gpu_hwmon_dir;  ///< `gpu_device_dir/hwmon/hwmon*`.
-      fs::path power_cap_path;  ///< `gpu_hwmon_dir/power1_cap`.
       fs::path perf_level_path;  ///< `gpu_device_dir/power_dpm_force_performance_level`.
       fs::path od_clk_voltage_path;  ///< `gpu_device_dir/pp_od_clk_voltage`.
       std::vector<fs::path> cpu_governor_paths;  ///< One `cpuN/cpufreq/scaling_governor` per online core.
@@ -110,6 +109,7 @@ namespace steamshine_gpuctl {
 
     std::once_flag g_detect_once;
     capabilities_t g_capabilities;
+    std::mutex g_capabilities_mutex;  ///< Protect refreshed capability snapshots after Web authorization.
     hardware_paths_t g_paths;
 
     /**
@@ -191,6 +191,26 @@ namespace steamshine_gpuctl {
     }
 
     /**
+     * @brief Ask the privileged helper to inspect a possibly suspended AMD GPU.
+     *
+     * @return Validated GPU capabilities, or no value when the helper is unavailable.
+     */
+    std::optional<gpu_capability_probe_t> probe_gpu_capabilities() {
+      const auto [exit_code, output] {run_runtime_helper({"probe-gpu"})};
+      if (exit_code != 0) {
+        BOOST_LOG(warning) << "steamshine_gpuctl: privileged GPU capability probe failed"
+                           << " exit_code=" << exit_code
+                           << " output=" << nlohmann::json(output).dump();
+        return std::nullopt;
+      }
+      const auto parsed {parse_gpu_capability_probe(output)};
+      if (!parsed) {
+        BOOST_LOG(warning) << "steamshine_gpuctl: privileged GPU capability probe returned invalid data";
+      }
+      return parsed;
+    }
+
+    /**
      * @brief Enumerate present CPU cores' cpufreq directories.
      */
     std::vector<fs::path> locate_cpu_cpufreq_dirs() {
@@ -212,6 +232,7 @@ namespace steamshine_gpuctl {
     void detect() {
       std::call_once(g_detect_once, [] {
         g_capabilities.runtime_write_authorized = runtime_write_authorized();
+        const auto privileged_gpu {g_capabilities.runtime_write_authorized ? probe_gpu_capabilities() : std::nullopt};
         const auto device_dir {locate_amd_gpu_device_dir()};
         if (device_dir) {
           g_paths.gpu_device_dir = *device_dir;
@@ -224,12 +245,19 @@ namespace steamshine_gpuctl {
           const auto device_id {read_attribute(*device_dir / "device")};
           g_capabilities.gpu_name = device_id.empty() ? "AMD GPU" : ("AMD GPU (1002:" + (device_id.rfind("0x", 0) == 0 ? device_id.substr(2) : device_id) + ")");
 
-          if (!g_paths.gpu_hwmon_dir.empty()) {
-            g_paths.power_cap_path = g_paths.gpu_hwmon_dir / "power1_cap";
+          if (privileged_gpu && privileged_gpu->gpu_present) {
+            g_capabilities.power_cap_supported = privileged_gpu->power_cap_supported;
+            g_capabilities.power_cap_min_watts = privileged_gpu->power_cap_min_watts;
+            g_capabilities.power_cap_max_watts = privileged_gpu->power_cap_max_watts;
+            g_capabilities.power_cap_default_watts = privileged_gpu->power_cap_default_watts;
+            g_capabilities.perf_level_supported = privileged_gpu->perf_level_supported;
+            g_capabilities.od_clk_voltage_supported = privileged_gpu->od_clk_voltage_supported;
+          } else if (!g_paths.gpu_hwmon_dir.empty()) {
+            const auto power_cap_path {g_paths.gpu_hwmon_dir / "power1_cap"};
             const auto cap_min {read_double(g_paths.gpu_hwmon_dir / "power1_cap_min")};
             const auto cap_max {read_double(g_paths.gpu_hwmon_dir / "power1_cap_max")};
             const auto cap_default {read_double(g_paths.gpu_hwmon_dir / "power1_cap_default")};
-            if (cap_min && cap_max && fs::exists(g_paths.power_cap_path)) {
+            if (cap_min && cap_max && *cap_min > 0 && *cap_max >= *cap_min && fs::exists(power_cap_path)) {
               g_capabilities.power_cap_supported = true;
               g_capabilities.power_cap_min_watts = *cap_min / 1'000'000.0;
               g_capabilities.power_cap_max_watts = *cap_max / 1'000'000.0;
@@ -238,10 +266,11 @@ namespace steamshine_gpuctl {
           }
 
           g_paths.perf_level_path = *device_dir / "power_dpm_force_performance_level";
-          g_capabilities.perf_level_supported = fs::exists(g_paths.perf_level_path);
-
           g_paths.od_clk_voltage_path = *device_dir / "pp_od_clk_voltage";
-          g_capabilities.od_clk_voltage_supported = fs::exists(g_paths.od_clk_voltage_path);
+          if (!privileged_gpu || !privileged_gpu->gpu_present) {
+            g_capabilities.perf_level_supported = fs::exists(g_paths.perf_level_path);
+            g_capabilities.od_clk_voltage_supported = fs::exists(g_paths.od_clk_voltage_path);
+          }
         }
 
         g_paths.cpu_governor_paths.clear();
@@ -269,25 +298,6 @@ namespace steamshine_gpuctl {
       });
     }
 
-    /**
-     * @brief Read back a microwatt power cap after the helper has applied it.
-     *
-     * Drivers may quantize limits slightly, so the verification accepts the
-     * larger of one watt or 0.5 percent of the requested value.
-     *
-     * @param path Resolved `power1_cap` sysfs attribute.
-     * @param microwatts Requested cap in microwatts.
-     * @return True when the live value matches.
-     */
-    bool verify_power_cap(const fs::path &path, const std::uint64_t microwatts) {
-      const auto observed {read_double(path)};
-      if (!observed) {
-        return false;
-      }
-      const double tolerance {std::max(1'000'000.0, static_cast<double>(microwatts) * 0.005)};
-      return std::abs(*observed - static_cast<double>(microwatts)) <= tolerance;
-    }
-
     double clamp(double value, double lo, double hi) {
       return std::clamp(value, std::min(lo, hi), std::max(lo, hi));
     }
@@ -313,9 +323,69 @@ namespace steamshine_gpuctl {
 
   }  // namespace
 
-  const capabilities_t &capabilities() {
+  capabilities_t capabilities() {
     detect();
+    std::scoped_lock lock {g_capabilities_mutex};
     return g_capabilities;
+  }
+
+  capabilities_t merge_authorization_probe(capabilities_t previous, const bool authorized, const std::optional<gpu_capability_probe_t> &probe) {
+    previous.runtime_write_authorized = authorized;
+    if (authorized && probe && probe->gpu_present) {
+      previous.gpu_present = true;
+      previous.power_cap_supported = probe->power_cap_supported;
+      previous.power_cap_min_watts = probe->power_cap_min_watts;
+      previous.power_cap_max_watts = probe->power_cap_max_watts;
+      previous.power_cap_default_watts = probe->power_cap_default_watts;
+      previous.perf_level_supported = probe->perf_level_supported;
+      previous.od_clk_voltage_supported = probe->od_clk_voltage_supported;
+    }
+    return previous;
+  }
+
+  void refresh_capabilities() {
+    detect();
+    const bool authorized {runtime_write_authorized()};
+    const auto probe {authorized ? probe_gpu_capabilities() : std::nullopt};
+    std::scoped_lock lock {g_capabilities_mutex};
+    g_capabilities = merge_authorization_probe(g_capabilities, authorized, probe);
+  }
+
+  std::optional<gpu_capability_probe_t> parse_gpu_capability_probe(const std::string_view output) {
+    try {
+      const nlohmann::json json = nlohmann::json::parse(std::string {output});
+      gpu_capability_probe_t result;
+      result.gpu_present = json.at("gpu_present").get<bool>();
+      result.power_cap_supported = json.at("power_cap_supported").get<bool>();
+      result.perf_level_supported = json.at("perf_level_supported").get<bool>();
+      result.od_clk_voltage_supported = json.at("od_clk_voltage_supported").get<bool>();
+      for (const auto key : {"power_cap_min_microwatts", "power_cap_max_microwatts", "power_cap_default_microwatts"}) {
+        if (!json.at(key).is_number_unsigned()) {
+          return std::nullopt;
+        }
+      }
+      const auto minimum {json.at("power_cap_min_microwatts").get<std::uint64_t>()};
+      const auto maximum {json.at("power_cap_max_microwatts").get<std::uint64_t>()};
+      const auto default_value {json.at("power_cap_default_microwatts").get<std::uint64_t>()};
+      if (!result.gpu_present && (result.power_cap_supported || result.perf_level_supported || result.od_clk_voltage_supported)) {
+        return std::nullopt;
+      }
+      if (result.power_cap_supported) {
+        if (minimum == 0 || maximum < minimum || default_value < minimum || default_value > maximum) {
+          return std::nullopt;
+        }
+        constexpr double MICROWATTS_PER_WATT {1'000'000.0};
+        result.power_cap_min_watts = static_cast<double>(minimum) / MICROWATTS_PER_WATT;
+        result.power_cap_max_watts = static_cast<double>(maximum) / MICROWATTS_PER_WATT;
+        result.power_cap_default_watts = static_cast<double>(default_value) / MICROWATTS_PER_WATT;
+      } else if (minimum != 0 || maximum != 0 || default_value != 0) {
+        return std::nullopt;
+      }
+      return result;
+    } catch (const std::exception &error) {
+      BOOST_LOG(warning) << "steamshine_gpuctl: could not parse privileged GPU capability response: " << error.what();
+      return std::nullopt;
+    }
   }
 
   std::vector<profile_t> builtin_profiles() {
@@ -377,9 +447,10 @@ namespace steamshine_gpuctl {
      * @brief Replace the configuration before publishing custom-profile changes in memory.
      * @param profiles Complete profile list to persist.
      * @param error Failure reason, leaving the previous in-memory list intact.
+     * @param selection Optional new active profile, published only after durable replacement.
      * @return True only after replacing the saved configuration.
      */
-    bool persist_custom_profiles(const std::vector<profile_t> &profiles, std::string &error) {
+    bool persist_custom_profiles(const std::vector<profile_t> &profiles, std::string &error, const std::optional<std::string> &selection = std::nullopt) {
       nlohmann::json array = nlohmann::json::array();
       for (const auto &profile : profiles) {
         array.push_back(profile);
@@ -388,6 +459,9 @@ namespace steamshine_gpuctl {
       std::stringstream config_stream;
       auto vars = config::parse_config(file_handler::read_file(config::sunshine.config_file.c_str()));
       vars["steamshine_gpu_profiles"] = serialized;
+      if (selection) {
+        vars["steamshine_gpu_active_profile"] = *selection;
+      }
       for (const auto &[key, value] : vars) {
         config_stream << key << " = " << value << std::endl;
       }
@@ -419,6 +493,9 @@ namespace steamshine_gpuctl {
         return false;
       }
       config::sunshine.steamshine_gpu_profiles = serialized;
+      if (selection) {
+        config::sunshine.steamshine_gpu_active_profile = *selection;
+      }
       return true;
     }
 
@@ -434,6 +511,11 @@ namespace steamshine_gpuctl {
     }
     if (is_builtin_name(profile.name)) {
       error = "Cannot overwrite a built-in profile; choose a different name";
+      return false;
+    }
+    if (!std::isfinite(profile.power_cap_watts) || profile.power_cap_watts < 0 ||
+        !std::isfinite(profile.cpu_max_freq_mhz) || profile.cpu_max_freq_mhz < 0) {
+      error = "Profile limits must be finite, non-negative values";
       return false;
     }
     std::lock_guard lock {g_profiles_mutex};
@@ -509,6 +591,11 @@ namespace steamshine_gpuctl {
       detect();
       apply_result_t result;
       const auto &caps {capabilities()};
+      if (caps.power_cap_supported && (!std::isfinite(target.power_cap_watts) || target.power_cap_watts < caps.power_cap_min_watts || target.power_cap_watts > caps.power_cap_max_watts)) {
+        result.success = false;
+        result.error = "Profile power limit is outside the detected GPU range; edit the profile before applying";
+        return result;
+      }
       const bool wants_overdrive {target.gpu_clock_offset_mhz != 0 || target.gpu_voltage_offset_mv != 0};
       std::string power_microwatts {"-"};
       std::string performance_level {"-"};
@@ -560,7 +647,9 @@ namespace steamshine_gpuctl {
       })};
       const bool helper_ok {helper_exit_code == 0};
       if (caps.power_cap_supported) {
-        (helper_ok && verify_power_cap(g_paths.power_cap_path, requested_power_microwatts) ? result.applied : result.skipped).push_back("power_cap_watts");
+        // The helper verifies the cap while it still holds the GPU active; a
+        // second unprivileged read here can race runtime suspend.
+        (helper_ok ? result.applied : result.skipped).push_back("power_cap_watts");
       }
       if (caps.perf_level_supported) {
         (helper_ok ? result.applied : result.skipped).push_back("gpu_perf_level");
@@ -585,7 +674,7 @@ namespace steamshine_gpuctl {
         return std::ranges::find(result.applied, field) != result.applied.end();
       };
       std::vector<std::string> failed_required;
-      if (caps.power_cap_supported && !applied("power_cap_watts")) {
+      if ((caps.power_cap_supported || target.power_cap_watts > 0) && !applied("power_cap_watts")) {
         failed_required.push_back("power_cap_watts");
       }
       if (caps.perf_level_supported && !applied("gpu_perf_level")) {
@@ -602,7 +691,7 @@ namespace steamshine_gpuctl {
       }
       if (!failed_required.empty()) {
         result.success = false;
-        result.error = caps.runtime_write_authorized ? "GPU profile write or verification failed" : "GPU profile writes are not authorized; run SteamShine repair interactively";
+        result.error = caps.runtime_write_authorized ? "GPU profile write or verification failed" : "GPU profile writes require administrator authorization from the Web GPU page";
         BOOST_LOG(error) << "GPU_PROFILE_APPLY_FAILED profile=" << target.name
                          << " error=" << result.error
                          << " failed_fields=" << nlohmann::json(failed_required).dump()
@@ -613,21 +702,23 @@ namespace steamshine_gpuctl {
                         << " applied_fields=" << nlohmann::json(result.applied).dump();
       }
 
-      if (persist_selection) {
-        config::sunshine.steamshine_gpu_active_profile = target.name;
-        auto vars = config::parse_config(file_handler::read_file(config::sunshine.config_file.c_str()));
-        vars["steamshine_gpu_active_profile"] = target.name;
-        std::stringstream config_stream;
-        for (const auto &[key, value] : vars) {
-          config_stream << key << " = " << value << std::endl;
+      if (persist_selection && result.success) {
+        std::lock_guard lock {g_profiles_mutex};
+        bool valid;
+        const auto profiles {custom_profiles_locked(&valid)};
+        if (!valid) {
+          result.success = false;
+          result.error = "Stored GPU profiles could not be read; selection was not saved";
+        } else if (!persist_custom_profiles(profiles, result.error, target.name)) {
+          result.success = false;
         }
-        file_handler::write_file(config::sunshine.config_file.c_str(), config_stream.str());
       }
       return result;
     }
   }  // namespace
 
   apply_result_t activate_profile(const std::string &name) {
+    refresh_capabilities();
     apply_result_t result;
     std::optional<profile_t> target;
     for (const auto &profile : builtin_profiles()) {
@@ -651,6 +742,7 @@ namespace steamshine_gpuctl {
   }
 
   apply_result_t reapply_active_profile() {
+    refresh_capabilities();
     const auto target {active_profile()};
     return target ? apply_profile(*target, false) : apply_result_t {};
   }

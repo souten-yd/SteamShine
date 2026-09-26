@@ -219,6 +219,58 @@ try {
   if (savedAlternative?.power_cap_watts !== 260 || savedAlternative?.cpu_max_freq_mhz !== 3600 || savedAlternative?.cpu_governor !== 'powersave') {
     throw new Error('The GPU API did not preserve the existing custom profile.');
   }
+  // Runtime-suspended GPUs must not erase disabled profile fields or claim a failed apply.
+  const gpuCapsRoute = '**/api/steamshine/v1/gpu/capabilities';
+  const unavailableCaps = { gpu_present: true, gpu_name: 'Test AMD GPU', runtime_write_authorized: false,
+    power_cap_supported: false, power_cap_min_watts: 0, power_cap_max_watts: 0, power_cap_default_watts: 0,
+    cpu_freq_supported: false, cpu_governors: ['powersave'], od_clk_voltage_supported: false };
+  await steamshinePage.route(gpuCapsRoute, (route) => route.fulfill({ json: unavailableCaps }));
+  await steamshinePage.reload({ waitUntil: 'domcontentloaded' });
+  await steamshinePage.locator('[data-edit="Alternative"]').click();
+  await steamshinePage.locator('#profile-form input[name="description"]').fill('Preserved while GPU sleeps');
+  const disabledSave = steamshinePage.waitForResponse((response) => response.url().endsWith('/gpu/profiles') && response.request().method() === 'POST');
+  await steamshinePage.locator('#profile-form button.btn-primary').click();
+  await (await disabledSave).finished();
+  await steamshinePage.locator('#profile-form').waitFor({ state: 'detached' });
+  const preserved = await steamshinePage.evaluate(async () => (await (await fetch('/api/steamshine/v1/gpu/profiles')).json()).profiles.find((p) => p.name === 'Alternative'));
+  if (preserved.power_cap_watts !== 260 || preserved.cpu_max_freq_mhz !== 3600) throw new Error('Disabled GPU controls erased saved limits.');
+  await steamshinePage.locator('#add-profile').click();
+  if (await steamshinePage.locator('#profile-form').count()) throw new Error('An unavailable power range allowed a zero-limit profile.');
+  await steamshinePage.locator('#authorize-gpu').click();
+  await steamshinePage.locator('#administrator-form').waitFor();
+  await steamshinePage.locator('[data-admin-cancel]').click();
+  await steamshinePage.route('**/api/steamshine/v1/gpu/profiles/Alternative/activate', (route) => route.fulfill({ status: 403, json: { code: 'admin_authorization_required' } }));
+  await steamshinePage.locator('[data-activate="Alternative"] h4').click();
+  await steamshinePage.locator('#administrator-form').waitFor();
+  await steamshinePage.locator('[data-admin-cancel]').click();
+  await steamshinePage.unroute('**/api/steamshine/v1/gpu/profiles/Alternative/activate');
+  // Successful authorization clears the password field and refreshes detected bounds.
+  await steamshinePage.route('**/api/steamshine/v1/system/authorize', (route) => route.fulfill({ json: { success: true } }));
+  await steamshinePage.locator('#authorize-gpu').click();
+  await steamshinePage.locator('[name="administrator_password"]').fill('test-only-password');
+  await steamshinePage.locator('#administrator-form [type="submit"]').click();
+  await steamshinePage.locator('#administrator-form').waitFor({ state: 'detached' });
+  await steamshinePage.unroute('**/api/steamshine/v1/system/authorize');
+  await steamshinePage.unroute(gpuCapsRoute);
+  await steamshinePage.reload({ waitUntil: 'domcontentloaded' });
+  await steamshinePage.locator('[data-edit="Alternative"]').waitFor();
+  const availableCaps = { ...unavailableCaps, runtime_write_authorized: true, power_cap_supported: true,
+    power_cap_min_watts: 231, power_cap_max_watts: 340, power_cap_default_watts: 330,
+    cpu_freq_supported: true, cpu_min_freq_mhz: 400, cpu_max_freq_mhz: 3600 };
+  await steamshinePage.route(gpuCapsRoute, (route) => route.fulfill({ json: availableCaps }));
+  await steamshinePage.reload({ waitUntil: 'domcontentloaded' });
+  await steamshinePage.locator('#add-profile').click();
+  await steamshinePage.locator('#profile-form input[name="name"]').fill('Browser-created profile');
+  if (await steamshinePage.locator('#profile-form [name="power_cap_watts"]').inputValue() !== '330') throw new Error('New profile does not use the detected default power limit.');
+  const newSave = steamshinePage.waitForResponse((response) => response.url().endsWith('/gpu/profiles') && response.request().method() === 'POST');
+  await steamshinePage.locator('#profile-form button.btn-primary').click();
+  await (await newSave).finished();
+  await steamshinePage.locator('#profile-form').waitFor({ state: 'detached' });
+  await steamshinePage.reload({ waitUntil: 'domcontentloaded' });
+  const createdCard = steamshinePage.locator('[data-activate="Browser-created profile"]');
+  await createdCard.waitFor();
+  if (!(await createdCard.innerText()).includes('330W')) throw new Error('New profile power limit changed after reopening the page.');
+  await steamshinePage.unroute(gpuCapsRoute);
   // Saving upstream settings from an older tab must retain profiles added later.
   const profilePersistence = await steamshinePage.evaluate(async () => {
     const session = await (await fetch('/api/steamshine/v1/session')).json();

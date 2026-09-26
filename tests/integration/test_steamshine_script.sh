@@ -188,6 +188,7 @@ if "${root_dir}/scripts/steamshine-runtime-helper.sh" authorize >/dev/null 2>&1;
   exit 1
 fi
 grep -Fq 'steamshine-runtime-helper.sh' "${root_dir}/scripts/package-steamos-artifact.sh"
+python3 "${root_dir}/tests/integration/test_steamshine_management.py"
 grep -Fq 'Defaults!STEAMSHINE_RUNTIME !authenticate' "${root_dir}/steamshine.sh"
 grep -Fq "sudo -n -k \"\${helper}\" authorize" "${root_dir}/steamshine.sh"
 grep -Fq 'Environment=XDG_RUNTIME_DIR=%t' "${root_dir}/packaging/linux/steamshine.service.in"

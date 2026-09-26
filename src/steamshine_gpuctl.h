@@ -22,6 +22,7 @@
 #include <nlohmann/json.hpp>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace steamshine_gpuctl {
@@ -44,6 +45,31 @@ namespace steamshine_gpuctl {
     double cpu_max_freq_mhz {0.0};  ///< Highest CPU clock the hardware will accept.
     std::vector<std::string> cpu_governors;  ///< Governors reported by `scaling_available_governors`.
   };
+
+  /**
+   * @brief GPU capability values returned by the privileged runtime probe.
+   *
+   * Power values use watts after parsing and validation. The runtime helper
+   * temporarily resumes a suspended AMD GPU while collecting the underlying
+   * sysfs values, then restores its prior runtime-power policy.
+   */
+  struct gpu_capability_probe_t {
+    bool gpu_present {false};  ///< Whether the helper found an AMD GPU driven by `amdgpu`.
+    bool power_cap_supported {false};  ///< Whether a complete, valid power-cap range was reported.
+    double power_cap_min_watts {0.0};  ///< Lowest reported GPU power limit.
+    double power_cap_max_watts {0.0};  ///< Highest reported GPU power limit.
+    double power_cap_default_watts {0.0};  ///< Factory-default reported GPU power limit.
+    bool perf_level_supported {false};  ///< Whether the GPU performance-level attribute exists.
+    bool od_clk_voltage_supported {false};  ///< Whether the GPU overdrive attribute exists.
+  };
+
+  /**
+   * @brief Parse and validate one bounded JSON response from the runtime GPU probe.
+   *
+   * @param output Runtime-helper output containing microwatt power values.
+   * @return Parsed capabilities, or no value when the response is malformed or inconsistent.
+   */
+  std::optional<gpu_capability_probe_t> parse_gpu_capability_probe(std::string_view output);
 
   /**
    * @brief One named GPU/CPU performance profile.
@@ -70,11 +96,25 @@ namespace steamshine_gpuctl {
   };
 
   /**
-   * @brief Detect and cache hardware capabilities for the process lifetime.
+   * @brief Return a synchronized snapshot of cached hardware capabilities.
    *
    * @return The detected capabilities.
    */
-  const capabilities_t &capabilities();
+  capabilities_t capabilities();
+
+  /**
+   * @brief Refresh administrator authorization and GPU bounds without restarting SteamShine.
+   */
+  void refresh_capabilities();
+
+  /**
+   * @brief Merge renewed authorization and an optional hardware probe into a capability snapshot.
+   * @param previous Previously detected hardware capabilities.
+   * @param authorized Whether fixed runtime operations are now authorized.
+   * @param probe Fresh privileged GPU information, when available.
+   * @return Updated capabilities while retaining CPU detection and unavailable probe data.
+   */
+  capabilities_t merge_authorization_probe(capabilities_t previous, bool authorized, const std::optional<gpu_capability_probe_t> &probe);
 
   /**
    * @brief Return the four built-in profiles (Silent/Balanced/Performance/OC),

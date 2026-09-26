@@ -64,3 +64,21 @@ and stable failure reasons. A separately launched SteamShine process is reported
 Run `./steamshine.sh compatibility-check` after a SteamOS update. It verifies the measured SteamOS 3.8.16 baseline, ABI floors, Gamescope headless/device-selection options, and the expected RX 9070 XT render node. When the virtual-display feature is enabled, `start` runs the same gate before creating the user service. `hardware-test --interactive` records the gate first and stops the user service if its acceptance harness fails.
 
 Exit statuses: 0 success; 1 general error; 2 usage; 3 unsupported OS; 4 missing dependency; 6 build failure; 7 test failure; 8 service failure; 9 configuration failure; 10 uninstall failure.
+
+### GPU profile detection and administrator authentication
+
+The GPU page probes power limits through the fixed `probe-gpu` runtime-helper operation.
+The helper temporarily resumes an AMD GPU, validates its minimum, maximum, and default
+power limits, and restores its previous runtime-power policy on exit. Applying a profile
+verifies the power limit before releasing that temporary hold. A requested limit that
+cannot be applied is reported as a failure and does not replace the saved active selection.
+
+If the helper needs authorization or updating, the GPU page displays an administrator
+password dialog. The HTTPS endpoint requires an authenticated session and CSRF token,
+limits authentication attempts, and passes the transient password to sudo on stdin.
+Passwords are not saved or included in command arguments or logs. The packaged provisioner
+installs only the fixed GPU and Decky helper operations after sudo authentication.
+
+A new GPU profile requires detected power bounds. Editing an existing profile preserves
+values whose controls are unavailable instead of replacing them with zero. A missing
+live power reading is displayed as unavailable, independently of the saved selection.

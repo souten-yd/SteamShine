@@ -85,3 +85,20 @@ TEST(SteamshineAddonsTest, StartsInactiveInstalledDeckyForOwnedSession) {
   status.service_active = true;
   EXPECT_FALSE(steamshine_addons::decky_start_required(status));
 }
+
+/**
+
+ * @brief Reject password values that could inject additional sudo input or exceed the request budget.
+
+ */
+TEST(SteamshineAddonsTest, ValidatesTransientAdministratorPassword) {
+  EXPECT_TRUE(steamshine_addons::management_password_valid("a valid password"));
+  EXPECT_TRUE(steamshine_addons::management_password_valid(std::string(1024, 'x')));
+  EXPECT_FALSE(steamshine_addons::management_password_valid(""));
+  EXPECT_FALSE(steamshine_addons::management_password_valid(std::string(1025, 'x')));
+  EXPECT_FALSE(steamshine_addons::management_password_valid("line\ncommand"));
+  EXPECT_FALSE(steamshine_addons::management_password_valid("line\rcommand"));
+  EXPECT_FALSE(steamshine_addons::management_password_valid(std::string("a\0b", 3)));
+  EXPECT_FALSE(steamshine_addons::management_ready("arbitrary"));
+  EXPECT_FALSE(steamshine_addons::authorize_management("").value("success", true));
+}
