@@ -219,6 +219,29 @@ try {
   if (savedAlternative?.power_cap_watts !== 260 || savedAlternative?.cpu_max_freq_mhz !== 3600 || savedAlternative?.cpu_governor !== 'powersave') {
     throw new Error('The GPU API did not preserve the existing custom profile.');
   }
+  // Saving upstream settings from an older tab must retain profiles added later.
+  const profilePersistence = await steamshinePage.evaluate(async () => {
+    const session = await (await fetch('/api/steamshine/v1/session')).json();
+    const headers = { 'Content-Type': 'application/json', 'X-SteamShine-CSRF-Token': session.csrf_token };
+    const created = await fetch('/api/steamshine/v1/gpu/profiles', {
+      method: 'POST', headers, body: JSON.stringify({ name: 'Second profile', power_cap_watts: 250, cpu_governor: 'powersave', cpu_max_freq_mhz: 2040 }),
+    });
+    const upstreamHeaders = { 'Content-Type': 'application/json', Authorization: `Basic ${btoa('web-e2e:web-e2e-password')}` };
+    const config = await (await fetch('/api/config', { headers: upstreamHeaders })).json();
+    delete config.status;
+    config.steamshine_gpu_profiles = '[]';
+    const saved = await fetch('/api/config', { method: 'POST', headers: upstreamHeaders, body: JSON.stringify(config) });
+    return { created: created.status, saved: saved.status };
+  });
+  if (profilePersistence.created !== 200 || profilePersistence.saved !== 200) {
+    throw new Error(`GPU profile persistence requests failed: ${JSON.stringify(profilePersistence)}`);
+  }
+  const persistedGpuConfig = await readFile(configFile, 'utf8');
+  const persistedGpuLine = persistedGpuConfig.split('\n').find((line) => line.startsWith('steamshine_gpu_profiles = '));
+  const persistedGpuNames = JSON.parse(persistedGpuLine.slice(persistedGpuLine.indexOf('=') + 1)).map((profile) => profile.name);
+  if (!persistedGpuNames.includes('Alternative') || !persistedGpuNames.includes('Second profile')) {
+    throw new Error('Saving upstream settings discarded custom GPU profiles on disk.');
+  }
   for (const viewport of [
     { name: 'desktop', width: 1440, height: 900 },
     { name: 'tablet', width: 768, height: 1024 },

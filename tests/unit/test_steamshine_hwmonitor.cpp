@@ -179,3 +179,44 @@ TEST(SteamshineHardwareMonitorTest, PreservesHardwareCapForUnresolvedPreset) {
   steamshine_hwmonitor::annotate_selected_profile_power_cap(without_gpu, 225.0);
   EXPECT_FALSE(without_gpu.gpu);
 }
+
+/**
+ * @brief Refuse to overwrite unreadable profile lists, including partially valid arrays.
+ */
+TEST(SteamshineGpuControlTest, RejectsMutationOfMalformedStoredProfiles) {
+  const auto saved = config::sunshine.steamshine_gpu_profiles;
+  const auto restore = util::fail_guard([&]() {
+    config::sunshine.steamshine_gpu_profiles = saved;
+  });
+  for (const std::string value : {"not-json", "{}", R"([{"name":"Existing"},[]])"}) {
+    config::sunshine.steamshine_gpu_profiles = value;
+    steamshine_gpuctl::profile_t profile {.name = "New"};
+    std::string error;
+    EXPECT_FALSE(steamshine_gpuctl::save_custom_profile(profile, error));
+    EXPECT_FALSE(error.empty());
+    EXPECT_FALSE(steamshine_gpuctl::delete_custom_profile("Existing", error));
+    EXPECT_EQ(config::sunshine.steamshine_gpu_profiles, value);
+  }
+}
+
+/**
+ * @brief A failed disk write must not report success or change the in-memory profile list.
+ */
+TEST(SteamshineGpuControlTest, FailedSaveAndDeletePreserveProfiles) {
+  const auto saved = config::sunshine.steamshine_gpu_profiles;
+  const auto saved_path = config::sunshine.config_file;
+  const auto restore = util::fail_guard([&]() {
+    config::sunshine.steamshine_gpu_profiles = saved;
+    config::sunshine.config_file = saved_path;
+  });
+  const std::string existing = R"([{"name":"Existing","power_cap_watts":250}])";
+  config::sunshine.steamshine_gpu_profiles = existing;
+  config::sunshine.config_file = "/dev/null/cannot-save.conf";
+  steamshine_gpuctl::profile_t profile {.name = "New"};
+  std::string error;
+  EXPECT_FALSE(steamshine_gpuctl::save_custom_profile(profile, error));
+  EXPECT_FALSE(error.empty());
+  EXPECT_EQ(config::sunshine.steamshine_gpu_profiles, existing);
+  EXPECT_FALSE(steamshine_gpuctl::delete_custom_profile("Existing", error));
+  EXPECT_EQ(config::sunshine.steamshine_gpu_profiles, existing);
+}

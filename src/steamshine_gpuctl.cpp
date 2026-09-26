@@ -337,9 +337,13 @@ namespace steamshine_gpuctl {
   namespace {
     /**
      * @brief Parse the stored custom-profile list. Caller must already hold `g_profiles_mutex`.
+     * @param valid Optional output indicating whether every stored entry was decoded.
      * @return Profiles decoded from the persisted top-level JSON array.
      */
-    std::vector<profile_t> custom_profiles_locked() {
+    std::vector<profile_t> custom_profiles_locked(bool *valid = nullptr) {
+      if (valid) {
+        *valid = true;
+      }
       std::vector<profile_t> result;
       if (config::sunshine.steamshine_gpu_profiles.empty()) {
         return result;
@@ -347,10 +351,16 @@ namespace steamshine_gpuctl {
       try {
         // List initialization would wrap the parsed array in another JSON array.
         const nlohmann::json parsed = nlohmann::json::parse(config::sunshine.steamshine_gpu_profiles);
+        if (!parsed.is_array()) {
+          throw std::invalid_argument("Stored GPU profiles must be an array");
+        }
         for (const auto &entry : parsed) {
           result.push_back(entry.get<profile_t>());
         }
       } catch (const std::exception &e) {
+        if (valid) {
+          *valid = false;
+        }
         BOOST_LOG(warning) << "steamshine_gpuctl: failed to parse stored profiles: "sv << e.what();
       }
       return result;
@@ -364,21 +374,52 @@ namespace steamshine_gpuctl {
 
   namespace {
     /**
-     * @brief Persist the given custom-profile list back to the configuration file.
+     * @brief Replace the configuration before publishing custom-profile changes in memory.
+     * @param profiles Complete profile list to persist.
+     * @param error Failure reason, leaving the previous in-memory list intact.
+     * @return True only after replacing the saved configuration.
      */
-    void persist_custom_profiles(const std::vector<profile_t> &profiles) {
+    bool persist_custom_profiles(const std::vector<profile_t> &profiles, std::string &error) {
       nlohmann::json array = nlohmann::json::array();
       for (const auto &profile : profiles) {
         array.push_back(profile);
       }
-      config::sunshine.steamshine_gpu_profiles = array.dump();
+      const auto serialized = array.dump();
       std::stringstream config_stream;
       auto vars = config::parse_config(file_handler::read_file(config::sunshine.config_file.c_str()));
-      vars["steamshine_gpu_profiles"] = config::sunshine.steamshine_gpu_profiles;
+      vars["steamshine_gpu_profiles"] = serialized;
       for (const auto &[key, value] : vars) {
         config_stream << key << " = " << value << std::endl;
       }
-      file_handler::write_file(config::sunshine.config_file.c_str(), config_stream.str());
+      const fs::path destination {config::sunshine.config_file};
+      const auto temporary = destination.string() + ".gpu-profiles.tmp";
+      {
+        std::ofstream output {temporary, std::ios::trunc};
+        output << config_stream.str();
+        output.close();
+        if (!output) {
+          std::error_code ignored;
+          fs::remove(temporary, ignored);
+          error = "Unable to save GPU profiles; existing settings were retained";
+          return false;
+        }
+      }
+      std::error_code write_error;
+      const auto permissions = fs::exists(destination, write_error) ? fs::status(destination, write_error).permissions() : fs::perms::owner_read | fs::perms::owner_write;
+      if (!write_error) {
+        fs::permissions(temporary, permissions, write_error);
+      }
+      if (!write_error) {
+        fs::rename(temporary, destination, write_error);
+      }
+      if (write_error) {
+        std::error_code ignored;
+        fs::remove(temporary, ignored);
+        error = "Unable to replace GPU profile configuration; existing settings were retained";
+        return false;
+      }
+      config::sunshine.steamshine_gpu_profiles = serialized;
+      return true;
     }
 
     bool is_builtin_name(const std::string &name) {
@@ -396,7 +437,12 @@ namespace steamshine_gpuctl {
       return false;
     }
     std::lock_guard lock {g_profiles_mutex};
-    auto profiles {custom_profiles_locked()};
+    bool valid;
+    auto profiles {custom_profiles_locked(&valid)};
+    if (!valid) {
+      error = "Stored GPU profiles could not be read; refusing to overwrite them";
+      return false;
+    }
     const auto it {std::find_if(profiles.begin(), profiles.end(), [&](const profile_t &existing) {
       return existing.name == profile.name;
     })};
@@ -405,8 +451,7 @@ namespace steamshine_gpuctl {
     } else {
       profiles.push_back(profile);
     }
-    persist_custom_profiles(profiles);
-    return true;
+    return persist_custom_profiles(profiles, error);
   }
 
   bool delete_custom_profile(const std::string &name, std::string &error) {
@@ -415,7 +460,12 @@ namespace steamshine_gpuctl {
       return false;
     }
     std::lock_guard lock {g_profiles_mutex};
-    auto profiles {custom_profiles_locked()};
+    bool valid;
+    auto profiles {custom_profiles_locked(&valid)};
+    if (!valid) {
+      error = "Stored GPU profiles could not be read; refusing to overwrite them";
+      return false;
+    }
     const auto before_size {profiles.size()};
     profiles.erase(std::remove_if(profiles.begin(), profiles.end(), [&](const profile_t &existing) {
                      return existing.name == name;
@@ -425,8 +475,7 @@ namespace steamshine_gpuctl {
       error = "Profile not found";
       return false;
     }
-    persist_custom_profiles(profiles);
-    return true;
+    return persist_custom_profiles(profiles, error);
   }
 
   std::string active_profile_name() {

@@ -1792,6 +1792,15 @@ namespace confighttp {
       std::stringstream config_stream;
       nlohmann::json output_tree;
       nlohmann::json input_tree = nlohmann::json::parse(ss);
+      // GPU profiles are managed by their own API. A stale upstream settings
+      // page must not replace newly saved profiles with its earlier snapshot.
+      const auto persisted = config::parse_config(file_handler::read_file(config::sunshine.config_file.c_str()));
+      for (const auto *key : {"steamshine_gpu_profiles", "steamshine_gpu_active_profile"}) {
+        input_tree.erase(key);
+        if (const auto entry = persisted.find(key); entry != persisted.end()) {
+          input_tree[key] = entry->second;
+        }
+      }
       for (const auto &[k, v] : input_tree.items()) {
         if (v.is_null() || (v.is_string() && v.get<std::string>().empty())) {
           continue;
