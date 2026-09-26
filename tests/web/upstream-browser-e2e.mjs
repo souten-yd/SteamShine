@@ -226,11 +226,13 @@ try {
     const created = await fetch('/api/steamshine/v1/gpu/profiles', {
       method: 'POST', headers, body: JSON.stringify({ name: 'Second profile', power_cap_watts: 250, cpu_governor: 'powersave', cpu_max_freq_mhz: 2040 }),
     });
+    await created.json();
     const upstreamHeaders = { 'Content-Type': 'application/json', Authorization: `Basic ${btoa('web-e2e:web-e2e-password')}` };
     const config = await (await fetch('/api/config', { headers: upstreamHeaders })).json();
     delete config.status;
     config.steamshine_gpu_profiles = '[]';
     const saved = await fetch('/api/config', { method: 'POST', headers: upstreamHeaders, body: JSON.stringify(config) });
+    await saved.json();
     return { created: created.status, saved: saved.status };
   });
   if (profilePersistence.created !== 200 || profilePersistence.saved !== 200) {
