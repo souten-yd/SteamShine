@@ -1528,4 +1528,7 @@ pre {
 .combo-chip { min-height: 2.5rem; padding: 0.35rem 0.75rem; border-radius: 999px; background: transparent; border: 1px solid var(--border-strong); color: inherit; font-size: 0.85rem; }
 .combo-chip[aria-pressed="true"] { background: var(--chrome-2); border-color: var(--chrome-2); color: #0b0c0e; font-weight: 600; }
 .combo-chip:disabled { opacity: 0.4; }
-.shortcut-action h4 { margin: 0; }
+.shortcut-head { display: flex; justify-content: space-between; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
+.shortcut-head h4, #shortcut-editor h4 { margin: 0; overflow-wrap: anywhere; }
+.combo-order { display: inline-grid; place-items: center; width: 1.2rem; height: 1.2rem; margin-right: 0.35rem; border-radius: 50%; background: #0b0c0e; color: var(--chrome-2); font-size: 0.7rem; }
+.field-label { font-size: 0.85rem; color: var(--text-faint); }

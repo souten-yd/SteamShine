@@ -400,39 +400,41 @@ try {
   const shortcutsUrl = `${baseUrl}/api/steamshine/v1/input/shortcuts`;
   const shortcutsDefault = await (await steamshineContext.request.get(shortcutsUrl)).json();
   const postShortcut = (headers, body) => steamshineContext.request.post(shortcutsUrl, { headers, data: JSON.stringify(body) });
-  const shortcutNoCsrf = await postShortcut(probeHeaders, { action: 'home', inputs: ['START'], hold_ms: 1000 });
-  const shortcutInvalid = await postShortcut(csrfHeaders, { action: 'home', inputs: ['START', 'HOME'], hold_ms: 1000 });
-  const shortcutTooLong = await postShortcut(csrfHeaders, { action: 'home', inputs: ['START'], hold_ms: 60000 });
-  const shortcutUnknown = await postShortcut(csrfHeaders, { action: 'power', inputs: ['START'], hold_ms: 1000 });
-  const homeSaved = await postShortcut(csrfHeaders, { action: 'home', inputs: ['back', 'START'], hold_ms: 3000 });
-  const quickSaved = await postShortcut(csrfHeaders, { action: 'quick_access', inputs: ['START', 'BACK', 'A'], hold_ms: 1500 });
-  const quickDuplicate = await postShortcut(csrfHeaders, { action: 'quick_access', inputs: ['BACK', 'START'], hold_ms: 500 });
+  const shortcutNoCsrf = await postShortcut(probeHeaders, { inputs: ['START'], hold_ms: 1000, output: ['HOME'] });
+  const shortcutInvalid = await postShortcut(csrfHeaders, { inputs: ['START', 'HOME'], hold_ms: 1000, output: ['HOME'] });
+  const shortcutTooLong = await postShortcut(csrfHeaders, { inputs: ['START'], hold_ms: 60000, output: ['HOME'] });
+  const shortcutNoOutput = await postShortcut(csrfHeaders, { inputs: ['START'], hold_ms: 1000, output: [] });
+  const homeSaved = await (await postShortcut(csrfHeaders, { name: 'Home', inputs: ['back', 'START'], hold_ms: 3000, output: ['HOME'] })).json();
+  const quickSaved = await postShortcut(csrfHeaders, { name: 'Decky', inputs: ['START', 'BACK', 'A'], hold_ms: 1500, output: ['home', 'A'] });
+  const quickDuplicate = await postShortcut(csrfHeaders, { inputs: ['BACK', 'START'], hold_ms: 500, output: ['A'] });
   const quickSavedBody = await quickSaved.json();
-  const homeConfig = await readFile(configFile, 'utf8');
-  if (shortcutsDefault.actions?.home?.enabled !== false || shortcutsDefault.actions?.quick_access?.enabled !== false || shortcutsDefault.available_inputs?.length !== 16
-    || shortcutNoCsrf.status() !== 400 || shortcutInvalid.status() !== 400 || shortcutTooLong.status() !== 400 || shortcutUnknown.status() !== 400
-    || homeSaved.status() !== 200 || quickSaved.status() !== 200 || quickDuplicate.status() !== 400
-    || quickSavedBody.actions.home.inputs.join('+') !== 'START+BACK' || quickSavedBody.actions.quick_access.inputs.join('+') !== 'START+BACK+A'
-    || !homeConfig.includes('steamshine_home_combo = START+BACK\n') || !homeConfig.includes('steamshine_home_combo_hold_ms = 3000')
-    || !homeConfig.includes('steamshine_quick_access_combo = START+BACK+A') || !homeConfig.includes('steamshine_quick_access_combo_hold_ms = 1500')) {
-    throw new Error(`Controller shortcut API validation failed: ${JSON.stringify({ shortcutsDefault, saved: quickSavedBody, duplicate: quickDuplicate.status() })}`);
+  const homeId = homeSaved.saved?.id;
+  const disabled = await postShortcut(csrfHeaders, { ...homeSaved.saved, enabled: false });
+  const deleteNoCsrf = await steamshineContext.request.delete(`${shortcutsUrl}/${homeId}`, { headers: probeHeaders });
+  const deleted = await steamshineContext.request.delete(`${shortcutsUrl}/${homeId}`, { headers: csrfHeaders });
+  const deletedBody = await deleted.json();
+  const shortcutConfig = await readFile(configFile, 'utf8');
+  if (!Array.isArray(shortcutsDefault.shortcuts) || shortcutsDefault.shortcuts.length !== 0 || shortcutsDefault.available_outputs?.[0] !== 'HOME'
+    || shortcutNoCsrf.status() !== 400 || shortcutInvalid.status() !== 400 || shortcutTooLong.status() !== 400 || shortcutNoOutput.status() !== 400
+    || !homeId || quickSaved.status() !== 200 || quickDuplicate.status() !== 400 || disabled.status() !== 200
+    || deleteNoCsrf.status() !== 400 || deleted.status() !== 200 || deletedBody.shortcuts.length !== 1
+    || quickSavedBody.saved.output.join('+') !== 'HOME+A' || quickSavedBody.saved.inputs.join('+') !== 'START+BACK+A'
+    || !shortcutConfig.includes('"output":"HOME+A"') || shortcutConfig.includes(homeId)) {
+    throw new Error(`Controller shortcut API validation failed: ${JSON.stringify({ shortcutsDefault, quick: quickSavedBody, duplicate: quickDuplicate.status(), deleted: deletedBody })}`);
   }
-  securityResults.controller_shortcuts = quickSavedBody.actions;
+  securityResults.controller_shortcuts = deletedBody.shortcuts;
   // A stale upstream settings page must not clear the shortcuts.
   const staleUpstreamSave = await steamshinePage.evaluate(async () => {
     const upstreamHeaders = { 'Content-Type': 'application/json', Authorization: `Basic ${btoa('web-e2e:web-e2e-password')}` };
     const config = await (await fetch('/api/config', { headers: upstreamHeaders })).json();
     delete config.status;
-    config.steamshine_home_combo = 'A';
-    config.steamshine_home_combo_hold_ms = 500;
-    config.steamshine_quick_access_combo = '';
+    config.steamshine_gamepad_shortcuts = '[]';
     const saved = await fetch('/api/config', { method: 'POST', headers: upstreamHeaders, body: JSON.stringify(config) });
     await saved.json();
     return saved.status;
   });
   const homeAfterStale = await readFile(configFile, 'utf8');
-  if (staleUpstreamSave !== 200 || !homeAfterStale.includes('steamshine_home_combo = START+BACK\n') || !homeAfterStale.includes('steamshine_home_combo_hold_ms = 3000')
-    || !homeAfterStale.includes('steamshine_quick_access_combo = START+BACK+A')) {
+  if (staleUpstreamSave !== 200 || !homeAfterStale.includes('"output":"HOME+A"')) {
     throw new Error('Saving upstream settings replaced the controller shortcuts.');
   }
 

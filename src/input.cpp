@@ -20,6 +20,7 @@ extern "C" {
 #include <functional>
 #include <iterator>
 #include <list>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <span>
@@ -296,7 +297,7 @@ namespace input {
 
     thread_pool_util::ThreadPool::task_id_t back_timeout_id;  ///< Back timeout ID.
 
-    std::array<thread_pool_util::ThreadPool::task_id_t, steamshine_gamepad_shortcuts::ACTION_COUNT> shortcut_timeout_ids;  ///< Pending shortcut hold timers, indexed by action.
+    std::map<std::string, thread_pool_util::ThreadPool::task_id_t, std::less<>> shortcut_timeout_ids;  ///< Pending shortcut hold timers, keyed by shortcut identifier.
 
     steamshine_gamepad_shortcuts::tracker_t shortcuts;  ///< Shortcut suppression and timer state.
 
@@ -453,12 +454,13 @@ namespace input {
         task_pool.cancel(gamepad.back_timeout_id);
         gamepad.back_timeout_id = nullptr;
       }
-      for (auto &timeout_id : gamepad.shortcut_timeout_ids) {
+      for (const auto &[id, timeout_id] : gamepad.shortcut_timeout_ids) {
+        (void) id;
         if (timeout_id) {
           task_pool.cancel(timeout_id);
-          timeout_id = nullptr;
         }
       }
+      gamepad.shortcut_timeout_ids.clear();
       gamepad.shortcuts = {};
       if (gamepad.id >= 0) {
         ::input::free_gamepad(platf_input, gamepad.id);
@@ -1764,45 +1766,37 @@ namespace input {
     }
 
     const auto shortcuts {steamshine_gamepad_shortcuts::current()};
-    const auto timer_actions {steamshine_gamepad_shortcuts::filter(gamepad.shortcuts, shortcuts, gamepad_state)};
-    for (std::size_t index {0}; index < steamshine_gamepad_shortcuts::ACTION_COUNT; ++index) {
-      auto &timeout_id {gamepad.shortcut_timeout_ids[index]};
-      if (timer_actions[index] == steamshine_gamepad_shortcuts::timer_action_e::cancel && timeout_id) {
-        task_pool.cancel(timeout_id);
-        timeout_id = nullptr;
-      } else if (timer_actions[index] == steamshine_gamepad_shortcuts::timer_action_e::arm) {
-        const auto action {static_cast<steamshine_gamepad_shortcuts::action_e>(index)};
-        auto f = [input, controller = packet->controllerNumber, shortcuts, action, index]() {
-          auto &gamepad = input->gamepads[controller];
-          gamepad.shortcut_timeout_ids[index] = nullptr;
-          if (gamepad.id < 0 || !gamepad.shortcuts.armed[index]) {
-            return;
-          }
-          auto &state = gamepad.gamepad_state;
-          // Release the combination for the host first so games never see
-          // the long press, then tap Home, or hold Home and tap A.
-          steamshine_gamepad_shortcuts::fire(gamepad.shortcuts, shortcuts, action, state);
-          platf::gamepad_update(platf_input, gamepad.id, state);
-          state.buttonFlags |= platf::HOME;
-          platf::gamepad_update(platf_input, gamepad.id, state);
-          if (action == steamshine_gamepad_shortcuts::action_e::quick_access) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
-            state.buttonFlags |= platf::A;
-            platf::gamepad_update(platf_input, gamepad.id, state);
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
-            state.buttonFlags &= ~platf::A;
-            platf::gamepad_update(platf_input, gamepad.id, state);
-          }
-          std::this_thread::sleep_for(std::chrono::milliseconds(100));
-          state.buttonFlags &= ~platf::HOME;
-          platf::gamepad_update(platf_input, gamepad.id, state);
-          BOOST_LOG(info) << "GAMEPAD_SHORTCUT action=" << steamshine_gamepad_shortcuts::action_name(action)
-                          << " controller=" << controller
-                          << " inputs=" << steamshine_gamepad_shortcuts::format_inputs(shortcuts[index])
-                          << " hold_ms=" << shortcuts[index].hold.count();
-        };
-        timeout_id = task_pool.pushDelayed(std::move(f), shortcuts[index].hold).task_id;
+    for (const auto &change : steamshine_gamepad_shortcuts::filter(gamepad.shortcuts, shortcuts, gamepad_state)) {
+      if (const auto pending {gamepad.shortcut_timeout_ids.find(change.id)}; pending != gamepad.shortcut_timeout_ids.end()) {
+        task_pool.cancel(pending->second);
+        gamepad.shortcut_timeout_ids.erase(pending);
       }
+      if (!change.arm) {
+        continue;
+      }
+      const auto shortcut {std::ranges::find(shortcuts, change.id, &steamshine_gamepad_shortcuts::shortcut_t::id)};
+      auto f = [input, controller = packet->controllerNumber, shortcuts, fired = *shortcut]() {
+        auto &gamepad = input->gamepads[controller];
+        gamepad.shortcut_timeout_ids.erase(fired.id);
+        if (gamepad.id < 0 || !gamepad.shortcuts.armed.contains(fired.id)) {
+          return;
+        }
+        auto &state = gamepad.gamepad_state;
+        // Release the held inputs for the host first so games never see the
+        // long press, then press the output keys in order and release them.
+        steamshine_gamepad_shortcuts::fire(gamepad.shortcuts, shortcuts, fired, state);
+        platf::gamepad_update(platf_input, gamepad.id, state);
+        for (const auto &frame : steamshine_gamepad_shortcuts::output_frames(fired.output, state)) {
+          std::this_thread::sleep_for(steamshine_gamepad_shortcuts::OUTPUT_STEP);
+          platf::gamepad_update(platf_input, gamepad.id, frame);
+        }
+        BOOST_LOG(info) << "GAMEPAD_SHORTCUT id=" << fired.id
+                        << " controller=" << controller
+                        << " inputs=" << steamshine_gamepad_shortcuts::format_inputs(fired.trigger)
+                        << " output=" << steamshine_gamepad_shortcuts::format_output(fired.output)
+                        << " hold_ms=" << fired.trigger.hold.count();
+      };
+      gamepad.shortcut_timeout_ids[change.id] = task_pool.pushDelayed(std::move(f), shortcut->trigger.hold).task_id;
     }
 
     const auto hold_release {detect_gamepad_hold_release(gamepad.gamepad_state, gamepad_state)};
@@ -2580,12 +2574,13 @@ namespace input {
         task_pool.cancel(gamepad.back_timeout_id);
         gamepad.back_timeout_id = nullptr;
       }
-      for (auto &timeout_id : gamepad.shortcut_timeout_ids) {
+      for (const auto &[id, timeout_id] : gamepad.shortcut_timeout_ids) {
+        (void) id;
         if (timeout_id) {
           task_pool.cancel(timeout_id);
-          timeout_id = nullptr;
         }
       }
+      gamepad.shortcut_timeout_ids.clear();
       gamepad.shortcuts = {};
       if (gamepad.id >= 0) {
         platf::gamepad_update(platf_input, gamepad.id, {});

@@ -440,10 +440,7 @@ namespace config {
 
     std::string steamshine_gpu_active_profile;  ///< Name of the GPU/CPU performance profile selected for verified activation and startup reapplication.
     std::string steamshine_gpu_profiles;  ///< JSON-encoded array of custom GPU/CPU performance profiles.
-    std::string steamshine_home_combo;  ///< `+`-separated gamepad inputs that emulate Home when held, or empty when disabled.
-    int steamshine_home_combo_hold_ms;  ///< Hold time in milliseconds before the Home combination fires.
-    std::string steamshine_quick_access_combo;  ///< `+`-separated gamepad inputs that open Steam's Quick Access menu when held, or empty when disabled.
-    int steamshine_quick_access_combo_hold_ms;  ///< Hold time in milliseconds before the Quick Access combination fires.
+    std::string steamshine_gamepad_shortcuts;  ///< JSON-encoded array of controller shortcuts managed by the SteamShine Addons page.
   };
 
   extern video_t video;
