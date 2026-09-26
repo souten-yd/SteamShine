@@ -423,18 +423,39 @@ try {
     throw new Error(`Controller shortcut API validation failed: ${JSON.stringify({ shortcutsDefault, quick: quickSavedBody, duplicate: quickDuplicate.status(), deleted: deletedBody })}`);
   }
   securityResults.controller_shortcuts = deletedBody.shortcuts;
+
+  /** Save and validate turbo presets through the real API. */
+  const turboUrl = `${baseUrl}/api/steamshine/v1/input/turbo`;
+  const turboDefault = await (await steamshineContext.request.get(turboUrl)).json();
+  const turboPresets = (first) => [first, { inputs: [], hz: 10 }, { inputs: [], hz: 15 }, { inputs: [], hz: 20 }];
+  const postTurbo = (headers, body) => steamshineContext.request.post(turboUrl, { headers, data: JSON.stringify(body) });
+  const turboNoCsrf = await postTurbo(probeHeaders, { enabled: true, presets: turboPresets({ inputs: ['BACK'], hz: 10 }) });
+  const turboTooFast = await postTurbo(csrfHeaders, { enabled: true, presets: turboPresets({ inputs: ['BACK'], hz: 99 }) });
+  const turboShort = await postTurbo(csrfHeaders, { enabled: true, presets: [{ inputs: ['BACK'], hz: 10 }] });
+  const turboDuplicate = await postTurbo(csrfHeaders, { enabled: true, presets: [{ inputs: ['BACK'], hz: 10 }, { inputs: ['BACK'], hz: 20 }, { inputs: [], hz: 15 }, { inputs: [], hz: 20 }] });
+  const turboSaved = await postTurbo(csrfHeaders, { enabled: true, presets: turboPresets({ inputs: ['rb', 'BACK'], hz: 12 }) });
+  const turboSavedBody = await turboSaved.json();
+  const turboConfig = await readFile(configFile, 'utf8');
+  if (turboDefault.enabled !== false || turboDefault.presets?.length !== 4 || turboDefault.available_targets?.includes('LT')
+    || turboNoCsrf.status() !== 400 || turboTooFast.status() !== 400 || turboShort.status() !== 400 || turboDuplicate.status() !== 400
+    || turboSaved.status() !== 200 || turboSavedBody.presets[0].inputs.join('+') !== 'BACK+RB' || turboSavedBody.presets[0].hz !== 12
+    || !turboConfig.includes('steamshine_gamepad_turbo = {"enabled":true')) {
+    throw new Error(`Turbo API validation failed: ${JSON.stringify({ turboDefault, saved: turboSavedBody })}`);
+  }
+  securityResults.controller_turbo = turboSavedBody.presets[0];
   // A stale upstream settings page must not clear the shortcuts.
   const staleUpstreamSave = await steamshinePage.evaluate(async () => {
     const upstreamHeaders = { 'Content-Type': 'application/json', Authorization: `Basic ${btoa('web-e2e:web-e2e-password')}` };
     const config = await (await fetch('/api/config', { headers: upstreamHeaders })).json();
     delete config.status;
     config.steamshine_gamepad_shortcuts = '[]';
+    config.steamshine_gamepad_turbo = '';
     const saved = await fetch('/api/config', { method: 'POST', headers: upstreamHeaders, body: JSON.stringify(config) });
     await saved.json();
     return saved.status;
   });
   const homeAfterStale = await readFile(configFile, 'utf8');
-  if (staleUpstreamSave !== 200 || !homeAfterStale.includes('"output":"HOME+A"')) {
+  if (staleUpstreamSave !== 200 || !homeAfterStale.includes('"output":"HOME+A"') || !homeAfterStale.includes('steamshine_gamepad_turbo = {"enabled":true')) {
     throw new Error('Saving upstream settings replaced the controller shortcuts.');
   }
 

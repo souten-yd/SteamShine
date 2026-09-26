@@ -128,6 +128,35 @@ namespace steamshine_gamepad_shortcuts {
   };
 
   /**
+   * @brief Look up the button mask bit of a non-trigger input name.
+   *
+   * @param name Input name such as `A`; case-insensitive.
+   * @return Button bit, or no value for triggers and unknown names.
+   */
+  std::optional<std::uint32_t> button_bit(std::string_view name);
+
+  /**
+   * @brief Return the input name of a single button mask bit.
+   *
+   * @param bit One button bit.
+   * @return Input name, or an empty view when the bit is not a named input.
+   */
+  std::string_view button_name(std::uint32_t bit);
+
+  /**
+   * @brief Atomically replace one configuration value, keeping every other setting.
+   *
+   * Shared by controller features that own a single configuration key.
+   *
+   * @param key Configuration key to write.
+   * @param value New value.
+   * @param obsolete Keys to remove in the same replacement.
+   * @param error Failure reason, leaving the previous file intact.
+   * @return True after the file was replaced.
+   */
+  bool write_config_value(std::string_view key, const std::string &value, const std::vector<std::string_view> &obsolete, std::string &error);
+
+  /**
    * @brief Return the stable input names accepted in a held combination, in display order.
    *
    * @return Input names such as `START`, `BACK`, `LT`.

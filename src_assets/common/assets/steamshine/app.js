@@ -1101,14 +1101,77 @@ function wireShortcuts() {
   refresh();
 }
 
+/** @brief Render the controller turbo presets. */
+function turboCard(turbo) {
+  if (turbo.message) return `<div class="section stack addons-card" id="controller-turbo"><h3>Turbo</h3><p class="notice">${escapeHtml(turbo.message)}</p></div>`;
+  const presets = turbo.presets.map((preset, index) => {
+    const selected = new Set(preset.inputs);
+    const chips = turbo.available_inputs.map((name) => `<button type="button" class="combo-chip" data-turbo-input="${escapeHtml(name)}" aria-pressed="${selected.has(name)}">${escapeHtml(SHORTCUT_KEY_LABELS[name] || name)}</button>`).join('');
+    return `<div class="section stack turbo-preset" data-turbo-preset="${index}"><h4>Preset ${index + 1}</h4>
+      <label>Presses per second<input type="number" data-turbo-hz min="${turbo.min_hz}" max="${turbo.max_hz}" step="1" value="${preset.hz}"></label>
+      <div class="combo-chips" role="group" aria-label="Preset ${index + 1} buttons">${chips}</div>
+      <p class="field-hint" data-turbo-summary></p></div>`;
+  }).join('');
+  return `<div class="section stack addons-card" id="controller-turbo"><h3>Turbo</h3>
+    <p>Rapid fire for any button. Hold a preset’s buttons and press the button to repeat; while you hold that button, it is pressed and released at the preset’s speed. Do the same again to turn it off, or use another preset to change the speed.</p>
+    <label class="checkbox-row">Enable turbo<input type="checkbox" id="turbo-enabled" ${turbo.enabled ? 'checked' : ''}></label>
+    ${presets}
+    <p class="field-hint">Presets without buttons are not used. Choose buttons your games do not need, because they still reach the game while held. Turbo is set per controller and resets when it reconnects.</p>
+    <div class="btn-row"><button type="button" class="btn-primary" id="turbo-save">Save turbo</button></div></div>`;
+}
+
+/** @brief Wire preset editing and saving for the turbo card. */
+function wireTurbo(turbo) {
+  const card = document.querySelector('#controller-turbo');
+  if (!card || turbo.message) return;
+  const read = () => ({
+    enabled: card.querySelector('#turbo-enabled').checked,
+    presets: Array.from(card.querySelectorAll('[data-turbo-preset]')).map((section) => ({
+      inputs: turbo.available_inputs.filter((name) => section.querySelector(`[data-turbo-input="${name}"]`).getAttribute('aria-pressed') === 'true'),
+      hz: Number(section.querySelector('[data-turbo-hz]').value),
+    })),
+  });
+  const refresh = () => {
+    const settings = read();
+    let valid = true;
+    card.querySelectorAll('[data-turbo-preset]').forEach((section, index) => {
+      const preset = settings.presets[index];
+      section.querySelectorAll('[data-turbo-input]').forEach((chip) => {
+        chip.disabled = chip.getAttribute('aria-pressed') !== 'true' && preset.inputs.length >= turbo.max_inputs;
+      });
+      const hzValid = Number.isInteger(preset.hz) && preset.hz >= turbo.min_hz && preset.hz <= turbo.max_hz;
+      valid = valid && hzValid;
+      section.querySelector('[data-turbo-summary]').textContent = !hzValid
+        ? `Enter ${turbo.min_hz}–${turbo.max_hz} presses per second.`
+        : (preset.inputs.length ? `Hold ${shortcutKeys(preset.inputs).join(' + ')} and press a button to toggle ${preset.hz} presses per second.` : 'Not used.');
+    });
+    card.querySelector('#turbo-save').disabled = !valid;
+  };
+  card.querySelectorAll('[data-turbo-input]').forEach((chip) => chip.addEventListener('click', () => {
+    chip.setAttribute('aria-pressed', String(chip.getAttribute('aria-pressed') !== 'true'));
+    refresh();
+  }));
+  card.querySelectorAll('[data-turbo-hz]').forEach((field) => field.addEventListener('input', refresh));
+  card.querySelector('#turbo-save').addEventListener('click', async () => {
+    card.querySelector('#turbo-save').disabled = true;
+    try {
+      const saved = await json(await api('/input/turbo', { method: 'POST', body: JSON.stringify(read()) }));
+      toast(saved.enabled ? 'Turbo settings saved.' : 'Turbo is off.', 'ok');
+    } catch (error) { toast(error.message, 'error'); }
+    refresh();
+  });
+  refresh();
+}
+
 /** @brief Render Decky management, Steam cache settings, and saved storage recovery. */
 async function renderAddons() {
   shortcutDraft = null;
-  const [status, cache, storage, shortcuts] = await Promise.all([
+  const [status, cache, storage, shortcuts, turbo] = await Promise.all([
     api('/addons/decky').then(json),
     api('/addons/steam-cache').then(json).catch((error) => ({ message: error.message })),
     api('/addons/storage').then(json).catch((error) => ({ message: error.message })),
     api('/input/shortcuts').then(json).catch((error) => ({ message: error.message })),
+    api('/input/turbo').then(json).catch((error) => ({ message: error.message })),
   ]);
   const installedLabel = status.installed ? (status.version || 'Installed') : 'Not installed';
   const serviceLabel = status.service_active ? 'Active' : (status.service_enabled ? 'Inactive (enabled)' : 'Inactive');
@@ -1119,7 +1182,7 @@ async function renderAddons() {
   const controls = status.installed
     ? `<button type="button" class="btn-primary" data-decky-action="update" ${managementDisabled}>Update / repair stable</button><button type="button" class="btn-danger" data-decky-action="uninstall" ${managementDisabled}>Uninstall loader</button>`
     : `<button type="button" class="btn-primary" data-decky-action="install" ${managementDisabled}>Install stable</button>`;
-  shell(`<div class="page-header"><div><h2>Addons</h2><p>Manage integrations, controller shortcuts, cache storage, and disk recovery.</p></div><button id="refresh-addons" class="btn-ghost">Refresh</button></div>
+  shell(`<div class="page-header"><div><h2>Addons</h2><p>Manage integrations, controller shortcuts and turbo, cache storage, and disk recovery.</p></div><button id="refresh-addons" class="btn-ghost">Refresh</button></div>
     <div class="stack">
       <div class="section"><h3>Decky Loader</h3><div class="rows">
         <div class="row"><span class="k">Installation</span><span class="v">${escapeHtml(installedLabel)}</span></div>
@@ -1129,6 +1192,7 @@ async function renderAddons() {
       ${managementNotice}
       <div class="field-hint">Install and update follow the official <a href="https://github.com/SteamDeckHomebrew/decky-installer" target="_blank" rel="noopener">SteamDeckHomebrew/decky-installer</a> stable-release scripts. Uninstall preserves plugin data, matching the official normal uninstall.</div>
       ${shortcutsCard(shortcuts)}
+      ${turboCard(turbo)}
       ${steamCacheCard(cache)}
       ${storageRecoveryCard(storage)}
     </div>`, { authenticated: true, activeId: 'addons' });
@@ -1136,6 +1200,7 @@ async function renderAddons() {
   document.querySelector('#refresh-addons').onclick = () => renderAddons();
   shortcutsData = shortcuts;
   wireShortcuts();
+  wireTurbo(turbo);
   document.querySelectorAll('[data-cache-library]').forEach((button) => button.addEventListener('click', async () => {
     button.disabled = true;
     button.textContent = 'Copying cache…';

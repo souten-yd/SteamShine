@@ -207,41 +207,9 @@ namespace steamshine_gamepad_shortcuts {
      * @return True after the file was atomically replaced.
      */
     bool persist_locked(const std::vector<shortcut_t> &shortcuts, std::string &error) {
-      auto vars = config::parse_config(file_handler::read_file(config::sunshine.config_file.c_str()));
       const auto serialized {to_json(shortcuts)};
-      vars[std::string {CONFIG_KEY}] = serialized;
-      for (const auto key : LEGACY_KEYS) {
-        vars.erase(std::string {key});
-      }
-      std::stringstream config_stream;
-      for (const auto &[key, value] : vars) {
-        config_stream << key << " = " << value << std::endl;
-      }
-      const fs::path destination {config::sunshine.config_file};
-      const auto temporary = destination.string() + ".gamepad-shortcuts.tmp";
-      {
-        std::ofstream output {temporary, std::ios::trunc};
-        output << config_stream.str();
-        output.close();
-        if (!output) {
-          std::error_code ignored;
-          fs::remove(temporary, ignored);
-          error = "Unable to save controller shortcuts; existing settings were retained";
-          return false;
-        }
-      }
-      std::error_code write_error;
-      const auto permissions = fs::exists(destination, write_error) ? fs::status(destination, write_error).permissions() : fs::perms::owner_read | fs::perms::owner_write;
-      if (!write_error) {
-        fs::permissions(temporary, permissions, write_error);
-      }
-      if (!write_error) {
-        fs::rename(temporary, destination, write_error);
-      }
-      if (write_error) {
-        std::error_code ignored;
-        fs::remove(temporary, ignored);
-        error = "Unable to replace controller shortcuts; existing settings were retained";
+      std::vector<std::string_view> obsolete {LEGACY_KEYS.begin(), LEGACY_KEYS.end()};
+      if (!write_config_value(CONFIG_KEY, serialized, obsolete, error)) {
         return false;
       }
       config::sunshine.steamshine_gamepad_shortcuts = serialized;
@@ -256,6 +224,59 @@ namespace steamshine_gamepad_shortcuts {
 
   bool combo_t::same_inputs(const combo_t &other) const {
     return buttons == other.buttons && left_trigger == other.left_trigger && right_trigger == other.right_trigger;
+  }
+
+  std::optional<std::uint32_t> button_bit(const std::string_view name) {
+    const auto match {std::ranges::find(INPUTS, upper(trim(name)), &key_t::name)};
+    if (match == INPUTS.end() || match->trigger != 0) {
+      return std::nullopt;
+    }
+    return match->button;
+  }
+
+  std::string_view button_name(const std::uint32_t bit) {
+    const auto match {std::ranges::find(INPUTS, bit, &key_t::button)};
+    return match == INPUTS.end() || bit == 0 ? std::string_view {} : match->name;
+  }
+
+  bool write_config_value(const std::string_view key, const std::string &value, const std::vector<std::string_view> &obsolete, std::string &error) {
+    auto vars = config::parse_config(file_handler::read_file(config::sunshine.config_file.c_str()));
+    vars[std::string {key}] = value;
+    for (const auto name : obsolete) {
+      vars.erase(std::string {name});
+    }
+    std::stringstream config_stream;
+    for (const auto &[name, entry] : vars) {
+      config_stream << name << " = " << entry << std::endl;
+    }
+    const fs::path destination {config::sunshine.config_file};
+    const auto temporary = std::format("{}.{}.tmp", destination.string(), key);
+    {
+      std::ofstream output {temporary, std::ios::trunc};
+      output << config_stream.str();
+      output.close();
+      if (!output) {
+        std::error_code ignored;
+        fs::remove(temporary, ignored);
+        error = "Unable to save controller settings; existing settings were retained";
+        return false;
+      }
+    }
+    std::error_code write_error;
+    const auto permissions = fs::exists(destination, write_error) ? fs::status(destination, write_error).permissions() : fs::perms::owner_read | fs::perms::owner_write;
+    if (!write_error) {
+      fs::permissions(temporary, permissions, write_error);
+    }
+    if (!write_error) {
+      fs::rename(temporary, destination, write_error);
+    }
+    if (write_error) {
+      std::error_code ignored;
+      fs::remove(temporary, ignored);
+      error = "Unable to replace controller settings; existing settings were retained";
+      return false;
+    }
+    return true;
   }
 
   const std::vector<std::string_view> &input_names() {

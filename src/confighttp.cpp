@@ -77,6 +77,7 @@
 #include "rtsp.h"
 #include "steamshine_addons.h"
 #include "steamshine_gamepad_shortcuts.h"
+#include "steamshine_gamepad_turbo.h"
 #include "steamshine_gpuctl.h"
 #include "steamshine_hwmonitor.h"
 #include "steamshine_terminal.h"
@@ -1797,7 +1798,7 @@ namespace confighttp {
       // GPU profiles and controller shortcuts are managed by their own APIs. A
       // stale upstream settings page must not replace them with an earlier snapshot.
       const auto persisted = config::parse_config(file_handler::read_file(config::sunshine.config_file.c_str()));
-      for (const auto *key : {"steamshine_gpu_profiles", "steamshine_gpu_active_profile", "steamshine_gamepad_shortcuts"}) {
+      for (const auto *key : {"steamshine_gpu_profiles", "steamshine_gpu_active_profile", "steamshine_gamepad_shortcuts", "steamshine_gamepad_turbo"}) {
         input_tree.erase(key);
         if (const auto entry = persisted.find(key); entry != persisted.end()) {
           input_tree[key] = entry->second;
@@ -3049,6 +3050,84 @@ namespace confighttp {
     }
     BOOST_LOG(info) << "GAMEPAD_SHORTCUT_DELETED id=" << id;
     send_steamshine_response(response, gamepad_shortcuts_json());
+  }
+
+  /**
+   * @brief Serialize turbo settings and the accepted values for the Addon page.
+   *
+   * @param settings Settings to describe.
+   * @return JSON with presets and editor limits.
+   */
+  nlohmann::json gamepad_turbo_json(const steamshine_gamepad_turbo::settings_t &settings) {
+    nlohmann::json presets = nlohmann::json::array();
+    for (const auto &preset : settings.presets) {
+      presets.push_back({{"inputs", shortcut_key_array(steamshine_gamepad_shortcuts::format_inputs(preset.modifier))}, {"hz", preset.hz}});
+    }
+    return {
+      {"enabled", settings.enabled},
+      {"presets", presets},
+      {"available_inputs", steamshine_gamepad_shortcuts::input_names()},
+      {"available_targets", steamshine_gamepad_turbo::target_names()},
+      {"min_hz", steamshine_gamepad_turbo::MIN_HZ},
+      {"max_hz", steamshine_gamepad_turbo::MAX_HZ},
+      {"max_inputs", steamshine_gamepad_shortcuts::MAX_INPUTS},
+    };
+  }
+
+  /**
+   * @brief Return the controller turbo settings.
+   *
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   */
+  void steamshine_gamepad_turbo_status(const resp_https_t &response, const req_https_t &request) {
+    if (require_steamshine_session(response, request).empty()) {
+      return;
+    }
+    send_steamshine_response(response, gamepad_turbo_json(steamshine_gamepad_turbo::current()));
+  }
+
+  /**
+   * @brief Save and apply controller turbo settings without restarting.
+   *
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   */
+  void steamshine_gamepad_turbo_save(const resp_https_t &response, const req_https_t &request) {
+    if (require_steamshine_mutation(response, request).empty()) {
+      return;
+    }
+    nlohmann::json input;
+    if (!read_steamshine_json(response, request, input)) {
+      return;
+    }
+    if (!input.contains("enabled") || !input["enabled"].is_boolean() || !input.contains("presets") || !input["presets"].is_array() || input["presets"].size() != steamshine_gamepad_turbo::PRESET_COUNT) {
+      bad_request(response, request, "Turbo settings need an enabled flag and four presets");
+      return;
+    }
+    steamshine_gamepad_turbo::settings_t settings;
+    settings.enabled = input["enabled"].get<bool>();
+    for (std::size_t index {0}; index < steamshine_gamepad_turbo::PRESET_COUNT; ++index) {
+      const nlohmann::json &entry = input["presets"][index];
+      std::string inputs;
+      if (!entry.is_object() || !entry.contains("inputs") || !join_shortcut_keys(entry["inputs"], inputs) || !entry.contains("hz") || !entry["hz"].is_number_integer()) {
+        bad_request(response, request, "Each turbo preset needs buttons and a frequency");
+        return;
+      }
+      const auto modifier {steamshine_gamepad_shortcuts::parse(inputs, 1000)};
+      if (!modifier) {
+        bad_request(response, request, "Choose up to four different buttons for each turbo preset");
+        return;
+      }
+      settings.presets[index] = {*modifier, entry["hz"].get<int>()};
+    }
+    std::string error;
+    if (!steamshine_gamepad_turbo::set(settings, error)) {
+      bad_request(response, request, error);
+      return;
+    }
+    BOOST_LOG(info) << "GAMEPAD_TURBO_CONFIGURED enabled=" << (settings.enabled ? "true" : "false");
+    send_steamshine_response(response, gamepad_turbo_json(settings));
   }
 
   /**
@@ -4338,6 +4417,8 @@ namespace confighttp {
     server.resource["^/api/steamshine/v1/input/shortcuts$"]["GET"] = steamshine_handler(steamshine_gamepad_shortcuts_status);
     server.resource["^/api/steamshine/v1/input/shortcuts$"]["POST"] = steamshine_handler(steamshine_gamepad_shortcut_save);
     server.resource["^/api/steamshine/v1/input/shortcuts/([a-z0-9]{1,32})$"]["DELETE"] = steamshine_handler(steamshine_gamepad_shortcut_delete);
+    server.resource["^/api/steamshine/v1/input/turbo$"]["GET"] = steamshine_handler(steamshine_gamepad_turbo_status);
+    server.resource["^/api/steamshine/v1/input/turbo$"]["POST"] = steamshine_handler(steamshine_gamepad_turbo_save);
     server.resource["^/api/steamshine/v1/addons/decky/action$"]["POST"] = steamshine_handler(steamshine_decky_action);
     server.resource["^/api/steamshine/v1/system/authorize$"]["POST"] = steamshine_handler(steamshine_authorize_management);
     server.resource["^/api/steamshine/v1/system/management$"]["GET"] = steamshine_handler(steamshine_management_status);

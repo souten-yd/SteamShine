@@ -41,6 +41,7 @@ extern "C" {
 #include "platform/virtualhid_input.h"
 #include "steamos_virtual_session_core.h"
 #include "steamshine_gamepad_shortcuts.h"
+#include "steamshine_gamepad_turbo.h"
 #include "thread_pool.h"
 #include "utility.h"
 
@@ -277,6 +278,7 @@ namespace input {
         gamepad_state {},
         back_timeout_id {},
         shortcut_timeout_ids {},
+        turbo_tick_id {},
         id {-1},
         back_button_state {button_state_e::NONE} {
     }
@@ -300,6 +302,10 @@ namespace input {
     std::map<std::string, thread_pool_util::ThreadPool::task_id_t, std::less<>> shortcut_timeout_ids;  ///< Pending shortcut hold timers, keyed by shortcut identifier.
 
     steamshine_gamepad_shortcuts::tracker_t shortcuts;  ///< Shortcut suppression and timer state.
+
+    steamshine_gamepad_turbo::tracker_t turbo;  ///< Turbo buttons and gesture state.
+
+    thread_pool_util::ThreadPool::task_id_t turbo_tick_id;  ///< Pending turbo re-render tick.
 
     int id;  ///< Global gamepad slot assigned to this client controller.
 
@@ -462,6 +468,11 @@ namespace input {
       }
       gamepad.shortcut_timeout_ids.clear();
       gamepad.shortcuts = {};
+      if (gamepad.turbo_tick_id) {
+        task_pool.cancel(gamepad.turbo_tick_id);
+        gamepad.turbo_tick_id = nullptr;
+      }
+      gamepad.turbo = {};
       if (gamepad.id >= 0) {
         ::input::free_gamepad(platf_input, gamepad.id);
         gamepad.id = -1;
@@ -1656,6 +1667,47 @@ namespace input {
   }
 
   /**
+   * @brief Compare two gamepad states field by field.
+   *
+   * @param left First state.
+   * @param right Second state.
+   * @return True when every button, trigger, and axis matches.
+   */
+  bool same_gamepad_state(const platf::gamepad_state_t &left, const platf::gamepad_state_t &right) {
+    return left.buttonFlags == right.buttonFlags && left.lt == right.lt && left.rt == right.rt && left.lsX == right.lsX && left.lsY == right.lsY && left.rsX == right.rsX && left.rsY == right.rsY;
+  }
+
+  /**
+   * @brief Keep re-rendering held turbo buttons until none are held.
+   *
+   * Runs on the single-threaded input task pool, like packet handling, so it
+   * never races the gamepad state.
+   *
+   * @param input Input session owning the gamepad.
+   * @param controller Client controller number.
+   */
+  void schedule_turbo_tick(const std::shared_ptr<input_t> &input, const int controller) {
+    auto &gamepad = input->gamepads[controller];
+    if (gamepad.turbo_tick_id || !steamshine_gamepad_turbo::ticking(gamepad.turbo)) {
+      return;
+    }
+    auto tick = [input, controller]() {
+      auto &gamepad = input->gamepads[controller];
+      gamepad.turbo_tick_id = nullptr;
+      if (gamepad.id < 0) {
+        return;
+      }
+      const auto next {steamshine_gamepad_turbo::render(gamepad.turbo, steamshine_gamepad_turbo::clock_t::now())};
+      if (!same_gamepad_state(next, gamepad.gamepad_state)) {
+        platf::gamepad_update(platf_input, gamepad.id, next);
+        gamepad.gamepad_state = next;
+      }
+      schedule_turbo_tick(input, controller);
+    };
+    gamepad.turbo_tick_id = task_pool.pushDelayed(std::move(tick), steamshine_gamepad_turbo::TICK).task_id;
+  }
+
+  /**
    * @brief Forward a client input packet directly to the platform backend.
    *
    * @param input Platform input backend that receives the event.
@@ -1785,6 +1837,12 @@ namespace input {
         // Release the held inputs for the host first so games never see the
         // long press, then press the output keys in order and release them.
         steamshine_gamepad_shortcuts::fire(gamepad.shortcuts, shortcuts, fired, state);
+        // Turbo ticks render from their own copy of the input; release the
+        // combination there too so a held turbo button cannot re-press it.
+        auto turbo_input {gamepad.turbo.input};
+        steamshine_gamepad_shortcuts::tracker_t released;
+        steamshine_gamepad_shortcuts::fire(released, shortcuts, fired, turbo_input);
+        gamepad.turbo.input = turbo_input;
         platf::gamepad_update(platf_input, gamepad.id, state);
         for (const auto &frame : steamshine_gamepad_shortcuts::output_frames(fired.output, state)) {
           std::this_thread::sleep_for(steamshine_gamepad_shortcuts::OUTPUT_STEP);
@@ -1798,6 +1856,15 @@ namespace input {
       };
       gamepad.shortcut_timeout_ids[change.id] = task_pool.pushDelayed(std::move(f), shortcut->trigger.hold).task_id;
     }
+
+    const auto turbo_now {steamshine_gamepad_turbo::clock_t::now()};
+    for (const auto &toggle : steamshine_gamepad_turbo::update(gamepad.turbo, steamshine_gamepad_turbo::current(), gamepad_state, turbo_now)) {
+      BOOST_LOG(info) << "GAMEPAD_TURBO controller=" << packet->controllerNumber
+                      << " button=" << steamshine_gamepad_shortcuts::button_name(toggle.button)
+                      << " hz=" << toggle.hz;
+    }
+    gamepad_state = steamshine_gamepad_turbo::render(gamepad.turbo, turbo_now);
+    schedule_turbo_tick(input, packet->controllerNumber);
 
     const auto hold_release {detect_gamepad_hold_release(gamepad.gamepad_state, gamepad_state)};
     if (hold_release.any() && gamepad_hold_diagnostics_enabled()) {
@@ -2582,6 +2649,11 @@ namespace input {
       }
       gamepad.shortcut_timeout_ids.clear();
       gamepad.shortcuts = {};
+      if (gamepad.turbo_tick_id) {
+        task_pool.cancel(gamepad.turbo_tick_id);
+        gamepad.turbo_tick_id = nullptr;
+      }
+      gamepad.turbo = {};
       if (gamepad.id >= 0) {
         platf::gamepad_update(platf_input, gamepad.id, {});
         platf::gamepad_touch(

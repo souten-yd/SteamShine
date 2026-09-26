@@ -316,6 +316,10 @@ supported on the current platform.
 
 <table><tr><td>Description</td><td colspan="2">JSON-encoded controller shortcuts managed by the Controller shortcuts card on the SteamShine Addons page. Each shortcut holds up to four inputs (START, BACK, A, B, X, Y, LB, RB, LT, RT, LS, RS, UP, DOWN, LEFT, RIGHT) for 200 to 10000 milliseconds and then sends up to four keys, which may also include HOME, pressed in order and released in reverse. For example, HOME opens the Steam menu and HOME+A opens Steam's Quick Access menu, where Decky Loader lives. Shortcuts can be disabled without deleting them; two enabled shortcuts cannot hold the same inputs, and when one contains every input of another, holding the larger set runs only the larger one.</td></tr><tr><td>Default</td><td colspan="2">Empty</td></tr><tr><td>Example</td><td colspan="2">@code{} steamshine_gamepad_shortcuts = [{"id":"s1","name":"Decky","inputs":"START+BACK","hold_ms":1500,"output":"HOME+A","enabled":true}] @endcode</td></tr></table>
 
+### steamshine_gamepad_turbo
+
+<table><tr><td>Description</td><td colspan="2">JSON-encoded controller turbo settings managed by the Turbo card on the SteamShine Addons page: an enabled flag and four presets, each with modifier inputs and a frequency from 1 to 30 presses per second. Holding a preset's modifier and pressing another button turns turbo on for that button; repeating the gesture turns it off, and another preset changes the frequency. Turbo state belongs to one connected controller and resets when it reconnects.</td></tr><tr><td>Default</td><td colspan="2">Empty (turbo off; presets 5, 10, 15, and 20 per second without modifiers)</td></tr><tr><td>Example</td><td colspan="2">@code{} steamshine_gamepad_turbo = {"enabled":true,"presets":[{"inputs":"BACK+RB","hz":10},{"inputs":"BACK+LB","hz":20},{"inputs":"","hz":15},{"inputs":"","hz":5}]} @endcode</td></tr></table>
+
 ## Input
 
 ### controller
