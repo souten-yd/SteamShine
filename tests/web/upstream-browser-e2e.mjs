@@ -28,6 +28,16 @@ const successScreenshotFile = join(reportDirectory, 'steamshine-monitor.png');
 const configFile = join(homeDirectory, 'sunshine.conf');
 const consoleErrors = [];
 const failedRequests = [];
+
+/**
+ * Record a failed same-origin request unless navigation cancelled an idempotent poll.
+ * Reloading a page aborts its in-flight metric polls; the server never saw an error.
+ */
+function recordFailedRequest(request) {
+  const reason = request.failure()?.errorText || 'unknown';
+  if (request.method() === 'GET' && reason === 'net::ERR_ABORTED') return;
+  failedRequests.push(`${request.method()} ${request.url()} (${reason})`);
+}
 const websocketErrors = [];
 const securityResults = {};
 const responsiveViewports = [];
@@ -120,7 +130,7 @@ try {
     if (message.type() === 'error' && !/status of 401/.test(message.text())) consoleErrors.push(message.text());
   });
   setupPage.on('requestfailed', (request) => {
-    if (request.url().startsWith(baseUrl) && !request.url().includes('/api/steamshine/v1/session')) failedRequests.push(`${request.method()} ${request.url()}`);
+    if (request.url().startsWith(baseUrl) && !request.url().includes('/api/steamshine/v1/session')) recordFailedRequest(request);
   });
   await setupPage.waitForSelector('#usernameInput');
   await setupPage.waitForFunction(() => !document.querySelector('body')?.hasAttribute('v-cloak'));
@@ -161,7 +171,7 @@ try {
     if (message.type() === 'error') consoleErrors.push(message.text());
   });
   authenticatedPage.on('requestfailed', (request) => {
-    if (request.url().startsWith(baseUrl)) failedRequests.push(`${request.method()} ${request.url()}`);
+    if (request.url().startsWith(baseUrl)) recordFailedRequest(request);
   });
   const rootResponse = await authenticatedPage.goto(`${baseUrl}/sunshine/`, { waitUntil: 'networkidle' });
   if (rootResponse?.status() !== 200) {
@@ -188,7 +198,7 @@ try {
   });
   steamshinePage.on('requestfailed', (request) => {
     if (request.url().startsWith(baseUrl) && !request.url().includes('/api/steamshine/v1/session') && !request.url().includes('/api/steamshine/v1/pairing/pin') && !request.url().includes('/api/steamshine/v1/config/virtual-display') && !request.url().includes('/api/steamshine/v1/stream/profiles')) {
-      failedRequests.push(`${request.method()} ${request.url()}`);
+      recordFailedRequest(request);
     }
   });
   steamshinePage.on('websocket', (socket) => {
