@@ -99,6 +99,7 @@ TEST_F(SteamshineTerminalTest, RejectsUnknownSession) {
   EXPECT_FALSE(steamshine_terminal::scroll("missing", -1));
   EXPECT_FALSE(steamshine_terminal::scroll("missing", 0));
   EXPECT_FALSE(steamshine_terminal::resize("missing", 100, 40));
+  EXPECT_FALSE(steamshine_terminal::redraw("missing"));
   EXPECT_EQ(steamshine_terminal::subscribe("missing", [](std::string_view) {
             }),
             0U);
@@ -203,11 +204,42 @@ TEST_F(SteamshineTerminalTest, ManagesIndependentSessionsAndReplaysOutput) {
 
   std::string replay;
   const auto replay_subscription {steamshine_terminal::subscribe(first, [&](const std::string_view chunk) {
-    replay.append(chunk);
+    {
+      std::lock_guard lock {output_mutex};
+      replay.append(chunk);
+    }
+    output_ready.notify_all();
   })};
   ASSERT_NE(replay_subscription, 0U);
-  EXPECT_NE(replay.find("STEAMSHINE_TERMINAL_TEST"), std::string::npos);
+  if (first_session->persistent) {
+    // Raw tmux output is geometry-specific, so reconnecting viewers receive a
+    // fresh repaint at their reported size instead of a byte replay.
+    {
+      std::lock_guard lock {output_mutex};
+      EXPECT_TRUE(replay.empty());
+    }
+    EXPECT_TRUE(steamshine_terminal::resize(first, 90, 30));
+    EXPECT_TRUE(steamshine_terminal::redraw(first));
+  } else {
+    EXPECT_FALSE(steamshine_terminal::redraw(first));
+  }
+  {
+    std::unique_lock lock {output_mutex};
+    EXPECT_TRUE(output_ready.wait_for(lock, 5s, [&] {
+      return replay.find("STEAMSHINE_TERMINAL_TEST") != std::string::npos;
+    }));
+  }
   steamshine_terminal::unsubscribe(first, replay_subscription);
+
+  if (first_session->persistent) {
+    // Scrolling back down past the live bottom leaves copy mode (`-e`), and a
+    // later upward swipe re-enters it instead of failing.
+    EXPECT_TRUE(steamshine_terminal::scroll(first, -3));
+    EXPECT_TRUE(steamshine_terminal::scroll(first, 50));
+    EXPECT_FALSE(steamshine_terminal::scroll(first, 1));
+    EXPECT_TRUE(steamshine_terminal::scroll(first, -1));
+    EXPECT_TRUE(steamshine_terminal::write_input(first, "\n"));
+  }
 
   EXPECT_FALSE(steamshine_terminal::stop(first, "stale-token"));
   EXPECT_TRUE(steamshine_terminal::running(first));

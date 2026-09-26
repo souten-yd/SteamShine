@@ -3949,6 +3949,9 @@ namespace confighttp {
             static_cast<unsigned short>(std::clamp(payload.value("cols", 80), 1, 500)),
             static_cast<unsigned short>(std::clamp(payload.value("rows", 24), 1, 200))
           );
+          if (payload.value("redraw", false)) {
+            steamshine_terminal::redraw(terminal_session_id);
+          }
         }
       }
     } catch (const std::exception &e) {

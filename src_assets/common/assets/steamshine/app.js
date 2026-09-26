@@ -1456,6 +1456,20 @@ async function renderTerminal() {
     if (terminalSocket?.readyState === WebSocket.OPEN) terminalSocket.send(JSON.stringify({ type: 'input', data }));
   };
 
+  /**
+   * @brief Report this viewer's fitted geometry and request a full repaint.
+   *
+   * xterm only emits resize events when its own size changes, so a reconnect
+   * at an unchanged size would otherwise leave tmux drawing for the geometry
+   * of an earlier viewer. The repaint replaces replayed output entirely.
+   */
+  const synchronizeGeometry = () => {
+    if (disposed || terminalSocket?.readyState !== WebSocket.OPEN) return;
+    if (!composing && host.isConnected) fitAddon.fit();
+    const { cols, rows } = terminalInstance;
+    terminalSocket.send(JSON.stringify({ type: 'resize', cols, rows, redraw: Boolean(active.persistent) }));
+  };
+
   terminalInstance.onData(sendInput);
   terminalInstance.onResize(({ cols, rows }) => {
     if (terminalSocket?.readyState === WebSocket.OPEN) terminalSocket.send(JSON.stringify({ type: 'resize', cols, rows }));
@@ -1532,7 +1546,7 @@ async function renderTerminal() {
             host.classList.remove('replaying');
             terminalInputReady = true;
             setConnectionState('Connected', 'open');
-            scheduleFit();
+            synchronizeGeometry();
           });
         }
         return;
