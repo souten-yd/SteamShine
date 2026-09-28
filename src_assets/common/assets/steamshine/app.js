@@ -203,7 +203,7 @@ function shell(content, { authenticated = false, activeId = '' } = {}) {
       <img src="/steamshine/images/logo-mark-64.png" alt="SteamShine">
       <span class="mobile-brand-label">SteamShine</span>
       <div class="mobile-actions">
-        <button id="mobile-quit" class="icon-btn" aria-label="Quit SteamShine" title="Quit SteamShine">${icon('power')}</button>
+        <button id="mobile-shutdown" class="icon-btn" aria-label="Shut down PC" title="Shut down PC">${icon('power')}</button>
         <button id="mobile-restart" class="mobile-restart-btn" aria-label="Restart SteamShine" title="Restart SteamShine">${icon('restart')}<span>Restart</span></button>
         <button id="mobile-logout" class="icon-btn" aria-label="Log out" title="Log out">${icon('logout')}</button>
       </div>
@@ -213,7 +213,7 @@ function shell(content, { authenticated = false, activeId = '' } = {}) {
       ${navLinks}
       <div class="nav-spacer"></div>
       <div class="nav-foot">
-        <button id="quit-steamshine" class="nav-link lifecycle-link">${icon('power')}<span>Quit SteamShine</span></button>
+        <button id="shutdown-pc" class="nav-link lifecycle-link">${icon('power')}<span>Shut down PC</span></button>
         <button id="restart-steamshine" class="nav-link lifecycle-link">${icon('restart')}<span>Restart SteamShine</span></button>
         <button id="logout" class="nav-link">${icon('logout')}<span>Log out</span></button>
       </div>
@@ -223,9 +223,9 @@ function shell(content, { authenticated = false, activeId = '' } = {}) {
   document.querySelectorAll('[data-nav]').forEach((a) => a.addEventListener('click', (e) => { e.preventDefault(); navigate(a.getAttribute('href')); }));
   document.querySelector('#logout')?.addEventListener('click', logout);
   document.querySelector('#mobile-logout')?.addEventListener('click', logout);
-  document.querySelector('#quit-steamshine')?.addEventListener('click', () => lifecycleAction('quit'));
+  document.querySelector('#shutdown-pc')?.addEventListener('click', () => lifecycleAction('shutdown'));
   document.querySelector('#restart-steamshine')?.addEventListener('click', () => lifecycleAction('restart'));
-  document.querySelector('#mobile-quit')?.addEventListener('click', () => lifecycleAction('quit'));
+  document.querySelector('#mobile-shutdown')?.addEventListener('click', () => lifecycleAction('shutdown'));
   document.querySelector('#mobile-restart')?.addEventListener('click', () => lifecycleAction('restart'));
 }
 
@@ -1958,23 +1958,44 @@ async function logout() {
   try { await json(await api('/auth/logout', { method: 'POST', body: '{}' })); } finally { csrfToken = ''; navigate('/steamshine/login'); }
 }
 
-/** @brief Confirm and request a graceful SteamShine process lifecycle action. */
+/** @brief Poll for a rejected PC shutdown while the management server is still available. */
+async function monitorHostShutdown() {
+  for (let attempt = 0; attempt < 15; attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    try {
+      const result = await json(await api('/system/shutdown/status'));
+      if (result.state === 'failed') {
+        toast('PC shutdown was refused. Check the SteamShine logs and try again.', 'error');
+        await render();
+        return;
+      }
+      if (result.state === 'accepted') return;
+    } catch {
+      // The service may have already stopped as the PC powers off.
+      return;
+    }
+  }
+  toast('The PC did not confirm shutdown. Check the SteamShine logs.', 'error');
+}
+
+/** @brief Confirm and request an application restart or PC shutdown. */
 async function lifecycleAction(action) {
   const restarting = action === 'restart';
-  const label = restarting ? 'Restart SteamShine' : 'Quit SteamShine';
+  const label = restarting ? 'Restart SteamShine' : 'Shut down PC';
   const confirmed = await confirmDialog({
     title: label,
     message: restarting
-      ? 'Restart SteamShine now? Active streams disconnect. OS-managed terminal shells remain running and this page reconnects to them after restart.'
-      : 'Quit SteamShine now? Active streams disconnect. OS-managed terminal shells remain available for the next service start.',
-    confirmLabel: restarting ? 'Restart' : 'Quit',
+      ? 'Restart SteamShine now? Active streams disconnect. The Game Mode handoff is reset before reconnecting.'
+      : 'Shut down this PC now? Active streams and terminal sessions will end.',
+    confirmLabel: restarting ? 'Restart' : 'Shut down PC',
   });
   if (!confirmed) return;
   try {
     await json(await api(`/system/${action}`, { method: 'POST', body: '{}' }));
     stopPolling();
-    shell(`<div class="auth-card"><div class="brand"><img src="/steamshine/images/logo-mark-64.png" alt="SteamShine"><div class="brand-text"><h1>${escapeHtml(restarting ? 'SteamShine is restarting' : 'SteamShine has been asked to quit')}</h1></div></div><p>${escapeHtml(restarting ? 'Reconnect in a few seconds.' : 'Start the service again to reconnect.')}</p></div>`);
-    if (restarting) setTimeout(() => window.location.reload(), 3000);
+    shell(`<div class="auth-card"><div class="brand"><img src="/steamshine/images/logo-mark-64.png" alt="SteamShine"><div class="brand-text"><h1>${escapeHtml(restarting ? 'SteamShine is restarting' : 'PC shutdown requested')}</h1></div></div><p>${escapeHtml(restarting ? 'Resetting the Game Mode handoff and reconnecting.' : 'Waiting for the PC to shut down.')}</p></div>`);
+    if (restarting) setTimeout(() => window.location.reload(), 8000);
+    else monitorHostShutdown().catch((error) => toast(error.message, 'error'));
   } catch (error) {
     toast(error.message, 'error');
   }

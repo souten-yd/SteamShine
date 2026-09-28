@@ -215,6 +215,13 @@ try {
   await steamshinePage.locator('#login button').click();
   await steamshinePage.waitForURL(`${baseUrl}/steamshine/monitor`, { timeout: 5000 });
   await waitForMonitor(steamshinePage);
+  if (!(await steamshinePage.locator('#shutdown-pc').innerText()).includes('Shut down PC')) {
+    throw new Error('The power button does not clearly identify PC shutdown.');
+  }
+  const shutdownWithoutCsrf = await steamshineContext.request.post(`${baseUrl}/api/steamshine/v1/system/shutdown`, { headers: { Origin: baseUrl }, data: {} });
+  if (shutdownWithoutCsrf.status() !== 400) {
+    throw new Error('PC shutdown accepted a request without CSRF.');
+  }
 
   // Existing custom profiles must survive a process start and appear on the GPU page.
   await steamshinePage.goto(`${baseUrl}/steamshine/gpu`, { waitUntil: 'domcontentloaded' });

@@ -3183,6 +3183,93 @@ namespace steamos_virtual_session {
     }
   }
 
+  bool reset_self_owned_handoff_lease_for_restart() {
+#if defined(__linux__)
+    std::scoped_lock lock {manager.mutex};
+    if (manager.stock_handoff_lease_active) {
+      restore_stock_session_locked();
+    }
+    const auto *const runtime_value {std::getenv("XDG_RUNTIME_DIR")};
+    if (!runtime_value || !*runtime_value) {
+      return false;
+    }
+    const std::filesystem::path directory {std::filesystem::path {runtime_value} / "steamshine"};
+    const auto lease {directory / "stock-session-handoff.lease"};
+    struct stat directory_stat {};
+    if (::lstat(directory.c_str(), &directory_stat) != 0) {
+      return errno == ENOENT;
+    }
+    if (!S_ISDIR(directory_stat.st_mode) || directory_stat.st_uid != ::getuid()) {
+      return false;
+    }
+    struct stat lease_stat {};
+    if (::lstat(lease.c_str(), &lease_stat) != 0) {
+      return errno == ENOENT;
+    }
+    std::ifstream boot_file {"/proc/sys/kernel/random/boot_id"};
+    std::string boot_id;
+    std::getline(boot_file, boot_id);
+    const auto self {gamescope_source::read_process_identity(::getpid())};
+    if (boot_id.empty() || !self || self->uid != static_cast<int>(::getuid()) || self->start_time == 0) {
+      return false;
+    }
+    const auto lock_path {directory / "stock-session-handoff.lock"};
+    const int lock_fd {::open(lock_path.c_str(), O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW, 0600)};
+    struct stat lock_stat {};
+    if (lock_fd < 0 || ::fstat(lock_fd, &lock_stat) != 0 || !S_ISREG(lock_stat.st_mode) ||
+        lock_stat.st_uid != ::getuid() || (lock_stat.st_mode & 0777) != 0600 ||
+        ::flock(lock_fd, LOCK_EX) != 0) {
+      if (lock_fd >= 0) {
+        ::close(lock_fd);
+      }
+      return false;
+    }
+    const int lease_fd {::open(lease.c_str(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW)};
+    if (lease_fd < 0 && errno == ENOENT) {
+      ::flock(lock_fd, LOCK_UN);
+      ::close(lock_fd);
+      return true;
+    }
+    struct stat verified_stat {};
+    bool removed {false};
+    if (lease_fd >= 0 && ::fstat(lease_fd, &verified_stat) == 0 && S_ISREG(verified_stat.st_mode) &&
+        verified_stat.st_uid == ::getuid() && (verified_stat.st_mode & 0777) == 0600 &&
+        verified_stat.st_size > 0 && verified_stat.st_size <= 512) {
+      std::string contents(static_cast<size_t>(verified_stat.st_size), '\0');
+      const auto count {::read(lease_fd, contents.data(), contents.size())};
+      std::optional<stock_handoff_lease_owner_t> owner;
+      if (count == static_cast<ssize_t>(contents.size())) {
+        owner = parse_stock_handoff_lease(contents);
+      }
+      struct stat current_stat {};
+      if (owner && owner->boot_id == boot_id && owner->pid == ::getpid() && owner->start_time == self->start_time &&
+          ::lstat(lease.c_str(), &current_stat) == 0 && current_stat.st_dev == verified_stat.st_dev &&
+          current_stat.st_ino == verified_stat.st_ino) {
+        removed = ::unlink(lease.c_str()) == 0;
+      }
+    }
+    if (lease_fd >= 0) {
+      ::close(lease_fd);
+    }
+    ::flock(lock_fd, LOCK_UN);
+    ::close(lock_fd);
+    if (!removed) {
+      BOOST_LOG(warning) << "STOCK_HANDOFF_RESTART_RESET_FAILED reason=lease_not_self_owned_or_untrusted";
+      return false;
+    }
+    const int directory_fd {::open(directory.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW)};
+    if (directory_fd >= 0) {
+      (void) ::fsync(directory_fd);
+      ::close(directory_fd);
+    }
+    const bool restored {run_gamescope_session_systemctl("start", false, std::chrono::seconds {2})};
+    BOOST_LOG(info) << "STOCK_HANDOFF_RESTART_RESET result=" << (restored ? "stock_restore_requested" : "stock_restore_request_failed");
+    return restored;
+#else
+    return true;
+#endif
+  }
+
   void stop() {
     std::scoped_lock lock {manager.mutex};
 #if defined(__linux__)

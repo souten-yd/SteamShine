@@ -447,6 +447,16 @@ namespace steamos_virtual_session {
   void stop();
 
   /**
+   * @brief Clear a surviving lease owned by this process before an in-place restart.
+   *
+   * Normal session teardown runs first. This final check handles an interrupted
+   * handoff whose lease would otherwise appear live after exec preserves the PID.
+   *
+   * @return True when no self-owned lease remains and stock restoration was requested.
+   */
+  bool reset_self_owned_handoff_lease_for_restart();
+
+  /**
    * @brief Return the current manager state.
    *
    * @return Current lifecycle state.

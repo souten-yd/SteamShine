@@ -590,6 +590,10 @@ namespace platf {
     }
     executable[len] = '\0';
 
+    if (!steamos_virtual_session::reset_self_owned_handoff_lease_for_restart()) {
+      BOOST_LOG(warning) << "SteamShine restart could not reset the stock Game Mode handoff lease";
+    }
+
     // ASIO doesn't use O_CLOEXEC, so we have to close all fds ourselves
     int openmax = (int) sysconf(_SC_OPEN_MAX);
     for (int fd = STDERR_FILENO + 1; fd < openmax; fd++) {

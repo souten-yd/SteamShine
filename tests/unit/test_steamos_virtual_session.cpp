@@ -51,8 +51,8 @@ namespace {
     std::ofstream output {executable};
     output << "#!/bin/sh\n";
     output << "if [ \"$1\" = \"--help\" ]; then echo '--backend headless --nested-width --nested-height --output-width --output-height --nested-refresh --expose-wayland --steam --scaler --hdr-enabled --prefer-vk-device'; exit 0; fi\n";
-    output << "printf '%s\\n' \"$@\" > \"$XDG_RUNTIME_DIR/gamescope-arguments\"\n";
-    output << "printf 'runtime=%s\\nremote=%s\\nsession_type=%s\\n' \"$PIPEWIRE_RUNTIME_DIR\" \"$PIPEWIRE_REMOTE\" \"${XDG_SESSION_TYPE-unset}\" > \"$XDG_RUNTIME_DIR/gamescope-pipewire-environment\"\n";
+    output << "printf '%s\n' \"$@\" > \"$XDG_RUNTIME_DIR/gamescope-arguments\"\n";
+    output << "printf 'runtime=%s\nremote=%s\nsession_type=%s\n' \"$PIPEWIRE_RUNTIME_DIR\" \"$PIPEWIRE_REMOTE\" \"${XDG_SESSION_TYPE-unset}\" > \"$XDG_RUNTIME_DIR/gamescope-pipewire-environment\"\n";
     if (mode == "crash-before-ready") {
       output << "exit 42\n";
       output.close();
@@ -154,7 +154,7 @@ namespace {
     if (mode == "leave-child") {
       output << "sh -c 'trap \"\" TERM INT; while :; do sleep 1; done' &\n";
       output << "ignored_child=$!\n";
-      output << "printf '%s\\n' \"$ignored_child\" > \"$XDG_RUNTIME_DIR/ignored-child.pid\"\n";
+      output << "printf '%s\n' \"$ignored_child\" > \"$XDG_RUNTIME_DIR/ignored-child.pid\"\n";
       output << "trap 'exit 0' TERM INT\n";
       output << "while :; do sleep 1; done\n";
       output.close();
@@ -233,7 +233,7 @@ namespace {
         output << "[ \"$1\" = '--steamshine-session-bootstrap' ] || exit 2\n";
         output << "runtime=$2; generation=${STEAMSHINE_TEST_REPORT_GENERATION-$3}; reported_runtime=${STEAMSHINE_TEST_REPORT_RUNTIME-$XDG_RUNTIME_DIR}; bootstrap_start_time=$(awk '{print $22}' /proc/$$/stat)\n";
         output << "temporary=$runtime/.display-endpoint-$$.tmp\n";
-        output << "printf '{\"owner\":\"steamshine\",\"generation\":%s,\"bootstrap_pid\":%s,\"bootstrap_start_time\":%s,\"xdg_runtime_directory\":\"%s\",\"wayland_display\":\"%s\",\"gamescope_wayland_display\":\"%s\",\"display\":\"%s\",\"xauthority\":\"%s\",\"dbus_session_bus_address\":\"\"}\\n' \"$generation\" \"$$\" \"$bootstrap_start_time\" \"$reported_runtime\" \"$WAYLAND_DISPLAY\" \"$GAMESCOPE_WAYLAND_DISPLAY\" \"$DISPLAY\" \"$XAUTHORITY\" >\"$temporary\"\n";
+        output << "printf '{\"owner\":\"steamshine\",\"generation\":%s,\"bootstrap_pid\":%s,\"bootstrap_start_time\":%s,\"xdg_runtime_directory\":\"%s\",\"wayland_display\":\"%s\",\"gamescope_wayland_display\":\"%s\",\"display\":\"%s\",\"xauthority\":\"%s\",\"dbus_session_bus_address\":\"\"}\n' \"$generation\" \"$$\" \"$bootstrap_start_time\" \"$reported_runtime\" \"$WAYLAND_DISPLAY\" \"$GAMESCOPE_WAYLAND_DISPLAY\" \"$DISPLAY\" \"$XAUTHORITY\" >\"$temporary\"\n";
         output << "chmod 600 \"$temporary\"; mv \"$temporary\" \"$runtime/display-endpoint.json\"\n";
         output << "trap 'exit 0' TERM INT; while :; do sleep 1; done\n";
       }
@@ -266,6 +266,50 @@ namespace {
     }
   };
 }  // namespace
+
+/**
+ * @brief Restart removes only the current process's verified handoff lease.
+ */
+TEST_F(SteamOSVirtualSessionTest, RestartResetsOnlySelfOwnedStockHandoffLease) {
+  const auto self {gamescope_source::read_process_identity(::getpid())};
+  ASSERT_TRUE(self);
+  std::ifstream boot_file {"/proc/sys/kernel/random/boot_id"};
+  std::string boot_id;
+  std::getline(boot_file, boot_id);
+  ASSERT_FALSE(boot_id.empty());
+  const auto directory {root / "runtime" / "steamshine"};
+  std::filesystem::create_directories(directory);
+  const auto lease {directory / "stock-session-handoff.lease"};
+  const auto write_lease = [&](const int owner_pid) {
+    std::ofstream output {lease, std::ios::trunc};
+    output << "version=1\nboot_id=" << boot_id << "\nowner_pid=" << owner_pid
+           << "\nowner_start_time=" << self->start_time << "\ngeneration=1\n";
+    output.close();
+    std::filesystem::permissions(lease, std::filesystem::perms::owner_read | std::filesystem::perms::owner_write);
+  };
+  const auto bin {root / "bin"};
+  std::filesystem::create_directories(bin);
+  const auto fake_systemctl {bin / "systemctl"};
+  {
+    std::ofstream output {fake_systemctl};
+    output << "#!/bin/sh\n";
+    output << "touch '" << (root / "stock-restore-requested").string() << "'\n";
+  }
+  std::filesystem::permissions(fake_systemctl, std::filesystem::perms::owner_exec, std::filesystem::perm_options::add);
+  const std::string previous_path {std::getenv("PATH") ? std::getenv("PATH") : ""};
+  (void) ::setenv("PATH", (bin.string() + ":" + previous_path).c_str(), 1);
+
+  write_lease(::getpid() + 100000);
+  EXPECT_FALSE(steamos_virtual_session::reset_self_owned_handoff_lease_for_restart());
+  EXPECT_TRUE(std::filesystem::exists(lease));
+
+  write_lease(::getpid());
+  EXPECT_TRUE(steamos_virtual_session::reset_self_owned_handoff_lease_for_restart());
+  EXPECT_FALSE(std::filesystem::exists(lease));
+  EXPECT_TRUE(std::filesystem::exists(root / "stock-restore-requested"));
+
+  (void) ::setenv("PATH", previous_path.c_str(), 1);
+}
 
 TEST_F(SteamOSVirtualSessionTest, FeatureFlagDisabledPreservesNormalLaunch) {
   config::steamos_virtual_display.enabled = false;
