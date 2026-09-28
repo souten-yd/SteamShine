@@ -116,7 +116,6 @@ namespace confighttp {
   /** @brief Pollable shutdown result. */
   std::atomic<host_shutdown_state_e> host_shutdown_state {};
 
-
   std::string steamshine_page_content_security_policy(const std::string_view host_header, const std::uint16_t terminal_ws_port) {
     constexpr std::string_view prefix {"default-src 'self'; connect-src 'self'"};
     constexpr std::string_view suffix {"; style-src 'self' 'unsafe-inline'; style-src-attr 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'self';"};
