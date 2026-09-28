@@ -9,8 +9,8 @@
 // standard includes
 #include <algorithm>
 #include <atomic>
-#include <cerrno>
 #include <cctype>
+#include <cerrno>
 #include <charconv>
 #include <chrono>
 #include <cstdint>
@@ -82,8 +82,8 @@
 #include "platform/common.h"
 #include "process.h"
 #include "rtsp.h"
-#include "steamshine_addons.h"
 #include "steamos_virtual_session.h"
+#include "steamshine_addons.h"
 #include "steamshine_gamepad_shortcuts.h"
 #include "steamshine_gamepad_turbo.h"
 #include "steamshine_gpuctl.h"
@@ -113,7 +113,8 @@ namespace confighttp {
     accepted,  ///< The OS accepted the poweroff request.
     failed,  ///< The OS rejected or could not run the poweroff request.
   };
-  std::atomic<host_shutdown_state_e> host_shutdown_state {host_shutdown_state_e::idle};  ///< Pollable shutdown result.
+  /** @brief Pollable shutdown result. */
+  std::atomic<host_shutdown_state_e> host_shutdown_state {host_shutdown_state_e::idle};
 
 
   std::string steamshine_page_content_security_policy(const std::string_view host_header, const std::uint16_t terminal_ws_port) {
