@@ -14,6 +14,7 @@
 #include <charconv>
 #include <chrono>
 #include <cstdint>
+#include <cstdlib>
 #include <deque>
 #include <filesystem>
 #include <format>
@@ -2628,6 +2629,102 @@ namespace confighttp {
   }
 
   /**
+   * @brief Install the latest checksum-verified GitHub release in an independent user unit.
+   *
+   * @param response The HTTP response object.
+   * @param request The authenticated request carrying the CSRF token.
+   */
+  void steamshine_update_release(const resp_https_t &response, const req_https_t &request) {
+    if (require_steamshine_mutation(response, request).empty()) {
+      return;
+    }
+#if defined(__linux__)
+    std::error_code error;
+    const auto executable = fs::read_symlink("/proc/self/exe", error);
+    const auto updater = executable.parent_path().parent_path() / "scripts/steamshine-web-update.sh";
+    if (error || ::access(updater.c_str(), R_OK) != 0 || ::access("/usr/bin/systemd-run", X_OK) != 0) {
+      send_steamshine_response(
+        response,
+        {{"status", false}, {"message", "Release updater is unavailable. Install a recent SteamShine release first."}},
+        {},
+        SimpleWeb::StatusCode::server_error_internal_server_error
+      );
+      return;
+    }
+    const char *home {std::getenv("HOME")};
+    if (!home) {
+      send_steamshine_response(response, {{"status", false}, {"message", "The update state directory is unavailable."}}, {}, SimpleWeb::StatusCode::server_error_internal_server_error);
+      return;
+    }
+    const auto status_dir = fs::path {home} / ".local/state/steamshine";
+    fs::create_directories(status_dir, error);
+    if (error) {
+      send_steamshine_response(response, {{"status", false}, {"message", "Could not create the update state directory."}}, {}, SimpleWeb::StatusCode::server_error_internal_server_error);
+      return;
+    }
+    std::ofstream {status_dir / "web-update.status"} << "pending\n";
+    const pid_t child {::fork()};
+    if (child < 0) {
+      std::ofstream {status_dir / "web-update.status"} << "failed\n";
+      send_steamshine_response(response, {{"status", false}, {"message", "Could not start the release updater."}}, {}, SimpleWeb::StatusCode::server_error_internal_server_error);
+      return;
+    }
+    if (child == 0) {
+      steamos_virtual_session::close_inherited_descriptors_for_exec(3, 65536);
+      ::execl(
+        "/usr/bin/systemd-run", "systemd-run", "--user", "--collect", "--unit=steamshine-web-update",
+        "/bin/bash", updater.c_str(),
+        static_cast<char *>(nullptr)
+      );
+      _exit(127);
+    }
+    int status {};
+    const auto deadline {std::chrono::steady_clock::now() + 10s};
+    while (std::chrono::steady_clock::now() < deadline) {
+      const auto result {::waitpid(child, &status, WNOHANG)};
+      if (result == child) {
+        if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
+          send_steamshine_response(response, {{"status", true}, {"message", "Release update started."}});
+        } else {
+          std::ofstream {status_dir / "web-update.status"} << "failed\n";
+          send_steamshine_response(response, {{"status", false}, {"message", "The user service manager refused the update job."}}, {}, SimpleWeb::StatusCode::server_error_internal_server_error);
+        }
+        return;
+      }
+      if (result < 0 && errno != EINTR) {
+        break;
+      }
+      std::this_thread::sleep_for(50ms);
+    }
+    (void) ::kill(child, SIGTERM);
+    (void) ::waitpid(child, &status, 0);
+    std::ofstream {status_dir / "web-update.status"} << "failed\n";
+    send_steamshine_response(response, {{"status", false}, {"message", "The update job did not start in time."}}, {}, SimpleWeb::StatusCode::server_error_internal_server_error);
+#else
+    send_steamshine_response(response, {{"status", false}, {"message", "Release updates are supported only on Linux."}}, {}, SimpleWeb::StatusCode::server_error_internal_server_error);
+#endif
+  }
+
+  /** @brief Return the last release update result kept by the independent user unit. */
+  void steamshine_update_status(const resp_https_t &response, const req_https_t &request) {
+    if (require_steamshine_session(response, request).empty()) {
+      return;
+    }
+    std::string state {"idle"};
+#if defined(__linux__)
+    const char *home {std::getenv("HOME")};
+    if (home) {
+      std::ifstream file {fs::path {home} / ".local/state/steamshine/web-update.status"};
+      std::string value;
+      if (file >> value && (value == "pending" || value == "running" || value == "success" || value == "failed")) {
+        state = std::move(value);
+      }
+    }
+#endif
+    send_steamshine_response(response, {{"status", true}, {"state", state}});
+  }
+
+  /**
    * @brief Gracefully stop SteamShine from its authenticated management UI.
    *
    * @param response The HTTP response object.
@@ -4512,6 +4609,8 @@ namespace confighttp {
     server.resource["^/api/steamshine/v1/system/restart$"]["POST"] = steamshine_handler(steamshine_restart);
     server.resource["^/api/steamshine/v1/system/shutdown$"]["POST"] = steamshine_handler(steamshine_shutdown_host);
     server.resource["^/api/steamshine/v1/system/shutdown/status$"]["GET"] = steamshine_handler(steamshine_shutdown_status);
+    server.resource["^/api/steamshine/v1/system/update$"]["POST"] = steamshine_handler(steamshine_update_release);
+    server.resource["^/api/steamshine/v1/system/update/status$"]["GET"] = steamshine_handler(steamshine_update_status);
     server.resource["^/api/steamshine/v1/status$"]["GET"] = steamshine_handler(steamshine_status);
     server.resource["^/api/steamshine/v1/stream/profiles$"]["GET"] = steamshine_handler(steamshine_stream_profiles);
     server.resource["^/api/steamshine/v1/stream/profiles$"]["POST"] = steamshine_handler(steamshine_save_stream_profile);

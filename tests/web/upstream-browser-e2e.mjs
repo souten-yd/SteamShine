@@ -679,11 +679,22 @@ try {
     throw new Error('SteamShine client rendering did not escape a hostile client name.');
   }
   await steamshinePage.goto(`${baseUrl}/steamshine/pairing`, { waitUntil: 'networkidle' });
+  if (await steamshinePage.locator('#pairing').count() !== 1 || await steamshinePage.getByRole('heading', { name: 'Paired clients' }).count() !== 1) {
+    throw new Error('Clients and PIN pairing did not render together.');
+  }
   await steamshinePage.locator('#pairing input[name="pin"]').fill('123');
   const steamshineInvalidPin = await steamshinePage.locator('#pairing input[name="pin"]').evaluate((input) => !input.checkValidity());
   if (!steamshineInvalidPin) {
     throw new Error('The SteamShine PIN form accepted a value other than four digits.');
   }
+  await steamshinePage.goto(`${baseUrl}/steamshine/settings`, { waitUntil: 'networkidle' });
+  if (await steamshinePage.locator('#update-release').count() !== 1) {
+    throw new Error('Settings release update control is missing.');
+  }
+  securityResults.update_missing_csrf_status = await steamshinePage.evaluate(async () => (await fetch('/api/steamshine/v1/system/update', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+  })).status);
+  if (securityResults.update_missing_csrf_status !== 400) throw new Error('Release update accepted a request without CSRF protection.');
   securityResults.missing_csrf_status = await steamshinePage.evaluate(async () => (await fetch('/api/steamshine/v1/pairing/pin', {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pin: '1234', name: 'test-client' }),
   })).status);
@@ -885,7 +896,7 @@ try {
   await waitForMonitor(steamshinePage);
   await steamshinePage.locator('#mobile-restart').click();
   await steamshinePage.getByRole('alertdialog').getByRole('button', { name: 'Cancel' }).click();
-  await steamshinePage.locator('#mobile-quit').click();
+  await steamshinePage.locator('#mobile-shutdown').click();
   await steamshinePage.getByRole('alertdialog').getByRole('button', { name: 'Cancel' }).click();
   await steamshinePage.locator('#mobile-logout').click();
   await steamshinePage.getByRole('heading', { name: 'Sign in' }).waitFor({ timeout: 5000 });

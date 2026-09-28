@@ -22,6 +22,7 @@ archive="steamshine-steamos-x86_64-${commit}.tar.zst"
 stage="$(mktemp -d)"
 trap 'rm -rf -- "${stage}"' EXIT
 mkdir -p "${stage}/bin" "${stage}/lib" "${stage}/share/assets" "${stage}/scripts" "${stage}/systemd-user" "${output_dir}"
+install -m 755 "${root_dir}/steamshine.sh" "${stage}/steamshine.sh"
 install -m 755 "${binary}" "${stage}/bin/steamshine"
 install -m 755 "${input_visualizer}" "${stage}/bin/steamshine-input-visualizer"
 cp -a "${wsi_install}/lib/." "${stage}/lib/"
@@ -51,6 +52,7 @@ install -m 755 \
   "${root_dir}/scripts/steamshine-decky-helper.sh" \
   "${root_dir}/scripts/steamshine-runtime-helper.sh" \
   "${root_dir}/scripts/steamshine-provision-management.py" \
+  "${root_dir}/scripts/steamshine-web-update.sh" \
   "${root_dir}/scripts/test-steamos-virtual-display.sh" \
   "${root_dir}/scripts/test-steamos-reconnect.sh" \
   "${root_dir}/scripts/test-steamos-latency.sh" \

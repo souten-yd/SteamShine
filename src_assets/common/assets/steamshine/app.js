@@ -149,8 +149,8 @@ const NAV = [
   { id: 'gpu', label: 'GPU', icon: 'cpu' },
   { id: 'addons', label: 'Addon', icon: 'addon' },
   { id: 'config', label: 'Display', icon: 'display' },
-  { id: 'pairing', label: 'Pin', icon: 'key' },
-  { id: 'clients', label: 'Clients', icon: 'users' },
+  { id: 'clients', label: 'Clients & PIN', icon: 'users' },
+  { id: 'settings', label: 'Settings', icon: 'gear' },
   { id: 'diagnostics', label: 'Diagnostics', icon: 'file' },
   { id: 'terminal', label: 'Terminal', icon: 'terminal' },
 ];
@@ -294,9 +294,10 @@ async function renderAuthenticated(session) {
   stopPolling();
   const page = location.pathname.split('/').filter(Boolean)[1] || DEFAULT_PAGE;
   const renderers = {
-    pairing: renderPairing,
+    pairing: renderClients,
     config: renderVirtualDisplayConfig,
     clients: renderClients,
+    settings: renderSettings,
     monitor: renderMonitor,
     stream: renderStream,
     applications: renderApplications,
@@ -1377,17 +1378,8 @@ async function renderVirtualDisplayConfig() {
   };
 }
 
-/** @brief Render the Moonlight pairing (Pin) page. */
-async function renderPairing() {
-  shell(`<div class="page-header"><div><h2>Pin pairing</h2><p>Enter the 4-digit PIN shown by your Moonlight client.</p></div></div>
-    <form id="pairing" class="section stack" style="max-width:26rem">
-      <label>Pending request<select name="pairing_id" required><option value="">Loading requests…</option></select></label>
-      <button type="button" class="btn-sm" id="refresh-pairings">Refresh requests</button>
-      <label>Client name<input name="name" maxlength="128" required></label>
-      <label>Four digit PIN<input name="pin" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" minlength="4" required></label>
-      <button class="btn-primary">Submit PIN</button>
-      <div class="notice"></div>
-    </form>`, { authenticated: true, activeId: 'pairing' });
+/** @brief Bind the PIN form inside the client management page. */
+async function bindPairingForm() {
   /** @brief Refresh pending approvals without losing the selected request. */
   const loadPairings = async () => {
     const form = document.querySelector('#pairing');
@@ -1414,17 +1406,79 @@ async function renderPairing() {
   };
 }
 
+
 /** @brief Render paired clients and their revoke actions. */
 async function renderClients() {
   const data = await json(await api('/clients'));
   const clients = data.named_certs || [];
-  shell(`<div class="page-header"><div><h2>Paired clients</h2><p>Moonlight clients that can currently connect.</p></div></div>
+  shell(`<div class="page-header"><div><h2>Clients & PIN</h2><p>Pair Moonlight clients and manage their access.</p></div></div>
+    <h3>Pair a client</h3>
+    <form id="pairing" class="section stack" style="max-width:26rem">
+      <label>Pending request<select name="pairing_id" required><option value="">Loading requests…</option></select></label>
+      <button type="button" class="btn-sm" id="refresh-pairings">Refresh requests</button>
+      <label>Client name<input name="name" maxlength="128" required></label>
+      <label>Four digit PIN<input name="pin" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" minlength="4" required></label>
+      <button class="btn-primary">Submit PIN</button>
+      <div class="notice"></div>
+    </form>
+    <h3>Paired clients</h3>
     <div class="section"><table><thead><tr><th>Name</th><th></th></tr></thead><tbody>${clients.map((client) => `<tr><td>${escapeHtml(client.name || client.uuid || 'Unknown client')}</td><td style="text-align:right"><button class="btn-sm btn-danger" data-client="${escapeHtml(client.uuid || '')}">Revoke</button></td></tr>`).join('') || '<tr><td colspan="2" class="empty">No paired clients</td></tr>'}</tbody></table></div>`,
   { authenticated: true, activeId: 'clients' });
+  await bindPairingForm();
   document.querySelectorAll('[data-client]').forEach((button) => button.addEventListener('click', async () => {
     if (!await confirmDialog({ title: 'Revoke client', message: `Revoke pairing for "${button.closest('tr').querySelector('td').textContent}"?` })) return;
     try { await json(await api(`/clients/${encodeURIComponent(button.dataset.client)}`, { method: 'DELETE' })); renderClients(); } catch (error) { showError(error); }
   }));
+}
+
+
+/** @brief Render release update controls. */
+async function renderSettings() {
+  shell(`<div class="page-header"><div><h2>Settings</h2><p>Manage SteamShine on this PC.</p></div></div>
+    <div class="section stack"><h3>Release update</h3><p>Download the latest GitHub release, verify its checksum, install it, and restart SteamShine.</p>
+    <button id="update-release" class="btn-primary">Update from GitHub release</button><div id="update-notice" class="notice"></div></div>`, { authenticated: true, activeId: 'settings' });
+  let updateStarted = false;
+  const refreshUpdate = async () => {
+    if (!document.querySelector('#update-notice')) return;
+    try {
+      const { state } = await json(await api('/system/update/status'));
+      const notice = document.querySelector('#update-notice');
+      const button = document.querySelector('#update-release');
+      if (!notice || !button) return;
+      if (state === 'running' || state === 'pending') {
+        notice.textContent = 'Downloading and installing the latest release. Active streams will disconnect when SteamShine restarts.';
+        notice.className = 'notice';
+        button.disabled = true;
+      } else if (state === 'failed') {
+        notice.textContent = 'Update failed. Check the steamshine-web-update user unit logs for details.';
+        notice.className = 'notice error';
+        button.disabled = false;
+      } else if (state === 'success') {
+        notice.textContent = 'Update completed successfully.';
+        notice.className = 'notice ok';
+        button.disabled = false;
+        if (updateStarted) { updateStarted = false; window.location.reload(); }
+      }
+    } catch {
+      // The service can disappear briefly while the update restarts it.
+    }
+  };
+  await refreshUpdate();
+  pollTimer = setInterval(refreshUpdate, 2000);
+  document.querySelector('#update-release').onclick = async () => {
+    if (!await confirmDialog({ title: 'Update SteamShine', message: 'Install the latest GitHub release now? Active streams disconnect when the service restarts.', confirmLabel: 'Update' })) return;
+    const button = document.querySelector('#update-release');
+    const notice = document.querySelector('#update-notice');
+    button.disabled = true;
+    try {
+      await json(await api('/system/update', { method: 'POST', body: '{}' }));
+      updateStarted = true;
+      notice.textContent = 'Update job started.';
+      notice.className = 'notice ok';
+    } catch (error) {
+      notice.textContent = error.message; notice.className = 'notice error'; button.disabled = false;
+    }
+  };
 }
 
 const TERMINAL_ACTIVE_SESSION_KEY = 'steamshine:terminal:active-session';

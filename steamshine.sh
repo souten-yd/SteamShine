@@ -727,10 +727,12 @@ compatibility_check() {
 bootstrap() { install; "${DRY_RUN}" || diagnose; say 'SteamShine is ready'; }
 update() {
   local was_active=false
-  git -C "${ROOT_DIR}" diff --quiet || die 'Uncommitted changes detected; update refused.'
+  if ! "${AUTO_RELEASE}"; then
+    git -C "${ROOT_DIR}" diff --quiet || die 'Uncommitted changes detected; update refused.'
+    run git -C "${ROOT_DIR}" fetch --all --prune
+    run git -C "${ROOT_DIR}" pull --ff-only
+  fi
   "${NO_SERVICE}" || { service_active && was_active=true || true; }
-  run git -C "${ROOT_DIR}" fetch --all --prune
-  run git -C "${ROOT_DIR}" pull --ff-only
   install_artifact
   configure
   configure_recommended
