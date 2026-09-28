@@ -695,6 +695,7 @@ try {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
   })).status);
   if (securityResults.update_missing_csrf_status !== 400) throw new Error('Release update accepted a request without CSRF protection.');
+  await steamshinePage.waitForLoadState('networkidle');
   securityResults.missing_csrf_status = await steamshinePage.evaluate(async () => (await fetch('/api/steamshine/v1/pairing/pin', {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pin: '1234', name: 'test-client' }),
   })).status);
