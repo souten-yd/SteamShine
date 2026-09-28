@@ -1116,7 +1116,7 @@ namespace {
    */
   TEST(SteamOSVirtualSessionCore, ParsesOnlyCompleteStockHandoffLeases) {
     const std::string valid {
-      "version=1\\nboot_id=test-boot\\nowner_pid=42\\nowner_start_time=1234\\ngeneration=7\\n"
+      "version=1\nboot_id=test-boot\nowner_pid=42\nowner_start_time=1234\ngeneration=7\n"
     };
     const auto parsed {steamos_virtual_session::parse_stock_handoff_lease(valid)};
     ASSERT_TRUE(parsed);
@@ -1124,16 +1124,14 @@ namespace {
     EXPECT_EQ(parsed->pid, 42);
     EXPECT_EQ(parsed->start_time, 1234U);
     EXPECT_EQ(parsed->generation, 7U);
-    EXPECT_FALSE(steamos_virtual_session::parse_stock_handoff_lease("version=1\\nowner_pid=42\\n"));
-    EXPECT_FALSE(steamos_virtual_session::parse_stock_handoff_lease(
-      "version=1\\nboot_id=test-boot\\nowner_pid=-1\\nowner_start_time=1234\\ngeneration=7\\n"
-    ));
-    EXPECT_FALSE(steamos_virtual_session::parse_stock_handoff_lease(
-      "version=1\\nboot_id=test-boot\\nowner_pid=42\\nowner_start_time=1234\\ngeneration=7\\nextra=1\\n"
-    ));
-    EXPECT_FALSE(steamos_virtual_session::parse_stock_handoff_lease(
-      "version=1\\nboot_id=test-boot\\nowner_pid=42\\nowner_start_time=1234\\ngeneration=0\\n"
-    ));
+    EXPECT_FALSE(steamos_virtual_session::parse_stock_handoff_lease("version=1\nowner_pid=42\n"));
+    auto invalid_pid {valid};
+    invalid_pid.replace(invalid_pid.find("owner_pid=42"), 12, "owner_pid=-1");
+    EXPECT_FALSE(steamos_virtual_session::parse_stock_handoff_lease(invalid_pid));
+    EXPECT_FALSE(steamos_virtual_session::parse_stock_handoff_lease(valid + "extra=1\n"));
+    auto zero_generation {valid};
+    zero_generation.replace(zero_generation.find("generation=7"), 12, "generation=0");
+    EXPECT_FALSE(steamos_virtual_session::parse_stock_handoff_lease(zero_generation));
   }
 
   /**

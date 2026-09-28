@@ -38,9 +38,9 @@
 
 #if defined(__linux__)
   #include <fcntl.h>
-  #include <sys/file.h>
   #include <poll.h>
   #include <signal.h>
+  #include <sys/file.h>
   #include <sys/socket.h>
   #include <sys/stat.h>
   #include <sys/syscall.h>
@@ -636,8 +636,10 @@ namespace steamos_virtual_session {
         std::string existing_contents(static_cast<size_t>(existing_stat.st_size), '\0');
         const auto count {::read(existing_fd, existing_contents.data(), existing_contents.size())};
         ::close(existing_fd);
-        const auto previous {count == static_cast<ssize_t>(existing_contents.size()) ?
-                               parse_stock_handoff_lease(existing_contents) : std::nullopt};
+        std::optional<stock_handoff_lease_owner_t> previous;
+        if (count == static_cast<ssize_t>(existing_contents.size())) {
+          previous = parse_stock_handoff_lease(existing_contents);
+        }
         if (!previous) {
           error = "lease_existing_untrusted";
           return false;
