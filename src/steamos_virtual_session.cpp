@@ -1940,7 +1940,7 @@ namespace steamos_virtual_session {
           manager.stock_handoff_state = stock_handoff_state_e::failed;
           manager.stock_handoff_reason = lease_error;
           error = "Failed to acquire the stock Game Mode handoff lease (" + lease_error + ")";
-          BOOST_LOG(error) << "STOCK_HANDOFF_LEASE_FAILED generation=" << manager.stock_handoff_generation
+          BOOST_LOG(warning) << "STOCK_HANDOFF_LEASE_FAILED generation=" << manager.stock_handoff_generation
                            << " reason=" << lease_error;
           manager.current = state_e::Failed;
           return false;
