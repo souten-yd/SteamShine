@@ -38,6 +38,7 @@
 
 #if defined(__linux__)
   #include <fcntl.h>
+  #include <sys/file.h>
   #include <poll.h>
   #include <signal.h>
   #include <sys/socket.h>
@@ -569,16 +570,19 @@ namespace steamos_virtual_session {
         return false;
       }
       lease_path = directory / "stock-session-handoff.lease";
-      const auto temporary {directory / (".stock-session-handoff." + std::to_string(::getpid()) + '.' + std::to_string(generation))};
       const std::string contents {
         "version=1\nboot_id=" + boot_id + "\nowner_pid=" + std::to_string(::getpid()) +
         "\nowner_start_time=" + std::to_string(owner->start_time) + "\ngeneration=" + std::to_string(generation) + "\n"
       };
-      const int descriptor {::open(temporary.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, 0600)};
+      std::string template_path {(directory / (".stock-session-handoff." + std::to_string(::getpid()) + ".XXXXXX")).string()};
+      std::vector<char> temporary_buffer {template_path.begin(), template_path.end()};
+      temporary_buffer.push_back('\0');
+      const int descriptor {::mkostemp(temporary_buffer.data(), O_CLOEXEC)};
       if (descriptor < 0) {
         error = "lease_temporary_create_failed";
         return false;
       }
+      const std::filesystem::path temporary {temporary_buffer.data()};
       size_t written {};
       while (written < contents.size()) {
         const auto count {::write(descriptor, contents.data() + written, contents.size() - written)};
@@ -589,12 +593,87 @@ namespace steamos_virtual_session {
       }
       const bool synchronized {written == contents.size() && ::fsync(descriptor) == 0};
       ::close(descriptor);
-      if (!synchronized || ::link(temporary.c_str(), lease_path.c_str()) != 0) {
+      if (!synchronized) {
         ::unlink(temporary.c_str());
-        error = "lease_publish_failed";
+        error = "lease_write_failed";
         return false;
       }
+
+      // Serialize stale-owner recovery with other SteamShine instances and the
+      // stock launcher guard. Never replace a lease held by a live owner.
+      const auto lock_path {directory / "stock-session-handoff.lock"};
+      const int lock_fd {::open(lock_path.c_str(), O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW, 0600)};
+      struct stat lock_stat {};
+      if (lock_fd < 0 || ::fstat(lock_fd, &lock_stat) != 0 || !S_ISREG(lock_stat.st_mode) ||
+          lock_stat.st_uid != ::getuid() || (lock_stat.st_mode & 0777) != 0600 ||
+          ::flock(lock_fd, LOCK_EX) != 0) {
+        if (lock_fd >= 0) {
+          ::close(lock_fd);
+        }
+        ::unlink(temporary.c_str());
+        error = "lease_lock_unavailable";
+        return false;
+      }
+      const auto publish = [&]() {
+        if (::link(temporary.c_str(), lease_path.c_str()) == 0) {
+          return true;
+        }
+        if (errno != EEXIST) {
+          error = "lease_publish_failed";
+          return false;
+        }
+        const int existing_fd {::open(lease_path.c_str(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW)};
+        struct stat existing_stat {};
+        if (existing_fd < 0 || ::fstat(existing_fd, &existing_stat) != 0 || !S_ISREG(existing_stat.st_mode) ||
+            existing_stat.st_uid != ::getuid() || (existing_stat.st_mode & 0777) != 0600 ||
+            existing_stat.st_size <= 0 || existing_stat.st_size > 512) {
+          if (existing_fd >= 0) {
+            ::close(existing_fd);
+          }
+          error = "lease_existing_untrusted";
+          return false;
+        }
+        std::string existing_contents(static_cast<size_t>(existing_stat.st_size), '\0');
+        const auto count {::read(existing_fd, existing_contents.data(), existing_contents.size())};
+        ::close(existing_fd);
+        const auto previous {count == static_cast<ssize_t>(existing_contents.size()) ?
+                               parse_stock_handoff_lease(existing_contents) : std::nullopt};
+        if (!previous) {
+          error = "lease_existing_untrusted";
+          return false;
+        }
+        if (previous->boot_id == boot_id) {
+          const auto previous_owner {gamescope_source::read_process_identity(previous->pid)};
+          if (previous_owner && previous_owner->uid == static_cast<int>(::getuid()) &&
+              previous_owner->start_time == previous->start_time) {
+            error = "lease_held_by_live_owner";
+            return false;
+          }
+          if (!previous_owner && (::kill(previous->pid, 0) == 0 || errno != ESRCH)) {
+            error = "lease_owner_unverifiable";
+            return false;
+          }
+        }
+        struct stat current_stat {};
+        if (::lstat(lease_path.c_str(), &current_stat) != 0 ||
+            current_stat.st_dev != existing_stat.st_dev || current_stat.st_ino != existing_stat.st_ino) {
+          error = "lease_changed_during_recovery";
+          return false;
+        }
+        if (::unlink(lease_path.c_str()) != 0 || ::link(temporary.c_str(), lease_path.c_str()) != 0) {
+          error = "lease_publish_failed";
+          return false;
+        }
+        BOOST_LOG(info) << "STOCK_HANDOFF_STALE_LEASE_RECOVERED generation=" << generation;
+        return true;
+      };
+      const bool published {publish()};
+      ::flock(lock_fd, LOCK_UN);
+      ::close(lock_fd);
       ::unlink(temporary.c_str());
+      if (!published) {
+        return false;
+      }
       const int directory_fd {::open(directory.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW)};
       if (directory_fd >= 0) {
         (void) ::fsync(directory_fd);
@@ -1858,7 +1937,9 @@ namespace steamos_virtual_session {
         if (!acquire_stock_handoff_lease(manager.stock_handoff_generation, manager.stock_handoff_lease_path, lease_error)) {
           manager.stock_handoff_state = stock_handoff_state_e::failed;
           manager.stock_handoff_reason = lease_error;
-          error = "Failed to acquire the stock Game Mode handoff lease";
+          error = "Failed to acquire the stock Game Mode handoff lease (" + lease_error + ")";
+          BOOST_LOG(error) << "STOCK_HANDOFF_LEASE_FAILED generation=" << manager.stock_handoff_generation
+                           << " reason=" << lease_error;
           manager.current = state_e::Failed;
           return false;
         }

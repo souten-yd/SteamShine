@@ -239,6 +239,24 @@ namespace steamos_virtual_session {
   std::optional<std::string_view> systemctl_job_mode_argument(bool wait_for_completion);
 
   /**
+   * @brief Verified fields of a published stock-session handoff lease.
+   */
+  struct stock_handoff_lease_owner_t {
+    std::string boot_id;  ///< Boot in which the owner published the lease.
+    int pid {0};  ///< Owner process ID.
+    std::uint64_t start_time {0};  ///< Owner process start time from procfs.
+    std::uint64_t generation {0};  ///< Handoff generation.
+  };
+
+  /**
+   * @brief Parse only the exact, bounded version-one lease record.
+   *
+   * @param contents Complete lease file contents.
+   * @return Parsed owner, or no value for malformed or incomplete records.
+   */
+  std::optional<stock_handoff_lease_owner_t> parse_stock_handoff_lease(std::string_view contents);
+
+  /**
    * @brief Observable lifecycle state of a stock Game Mode handoff.
    */
   enum class stock_handoff_state_e {

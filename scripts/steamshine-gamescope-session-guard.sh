@@ -23,11 +23,19 @@ physical_connector_connected() {
   return 1
 }
 
-live_handoff_lease() {
+live_handoff_lease() (
   local key value version='' boot_id='' owner_pid='' owner_start_time=''
   local current_boot_id proc_stat proc_tail proc_uid lease_mode
   local -a proc_fields
 
+  [[ ! -L "${lease_path}" && -f "${lease_path}" && -O "${lease_path}" ]] || return 1
+  local lock_path="${runtime_root}/steamshine/stock-session-handoff.lock" lock_fd lock_mode
+  umask 077
+  [[ ! -L "${lock_path}" ]] || return 0
+  exec {lock_fd}>>"${lock_path}" || return 0
+  lock_mode="$(stat -c '%a:%u' -- "${lock_path}" 2>/dev/null || true)"
+  [[ "${lock_mode}" == "600:$(id -u)" ]] || return 0
+  flock -x -w 5 "${lock_fd}" || return 0
   [[ ! -L "${lease_path}" && -f "${lease_path}" && -O "${lease_path}" ]] || return 1
   lease_mode="$(stat -c '%a' -- "${lease_path}" 2>/dev/null || true)"
   [[ "${lease_mode}" == '600' ]] || {
@@ -68,7 +76,7 @@ live_handoff_lease() {
     return 1
   }
   return 0
-}
+)
 
 [[ -x "${vendor_launcher}" ]] || {
   printf 'steamshine-gamescope-session-guard: vendor launcher is not executable: %s\n' "${vendor_launcher}" >&2

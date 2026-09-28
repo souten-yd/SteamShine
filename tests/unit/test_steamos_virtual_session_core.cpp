@@ -1112,6 +1112,31 @@ namespace {
   }
 
   /**
+   * @brief Reject malformed handoff leases before considering stale-owner recovery.
+   */
+  TEST(SteamOSVirtualSessionCore, ParsesOnlyCompleteStockHandoffLeases) {
+    const std::string valid {
+      "version=1\\nboot_id=test-boot\\nowner_pid=42\\nowner_start_time=1234\\ngeneration=7\\n"
+    };
+    const auto parsed {steamos_virtual_session::parse_stock_handoff_lease(valid)};
+    ASSERT_TRUE(parsed);
+    EXPECT_EQ(parsed->boot_id, "test-boot");
+    EXPECT_EQ(parsed->pid, 42);
+    EXPECT_EQ(parsed->start_time, 1234U);
+    EXPECT_EQ(parsed->generation, 7U);
+    EXPECT_FALSE(steamos_virtual_session::parse_stock_handoff_lease("version=1\\nowner_pid=42\\n"));
+    EXPECT_FALSE(steamos_virtual_session::parse_stock_handoff_lease(
+      "version=1\\nboot_id=test-boot\\nowner_pid=-1\\nowner_start_time=1234\\ngeneration=7\\n"
+    ));
+    EXPECT_FALSE(steamos_virtual_session::parse_stock_handoff_lease(
+      "version=1\\nboot_id=test-boot\\nowner_pid=42\\nowner_start_time=1234\\ngeneration=7\\nextra=1\\n"
+    ));
+    EXPECT_FALSE(steamos_virtual_session::parse_stock_handoff_lease(
+      "version=1\\nboot_id=test-boot\\nowner_pid=42\\nowner_start_time=1234\\ngeneration=0\\n"
+    ));
+  }
+
+  /**
    * @brief Verify graceful shutdown observations reject PID reuse and report timeout.
    */
   TEST(SteamOSVirtualSessionCore, ClassifiesSteamShutdownObservations) {

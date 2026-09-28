@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <array>
+#include <charconv>
 #include <cmath>
 #include <limits>
 #include <numeric>
@@ -259,6 +260,39 @@ namespace steamos_virtual_session {
 
   std::optional<std::string_view> systemctl_job_mode_argument(const bool wait_for_completion) {
     return wait_for_completion ? std::nullopt : std::optional<std::string_view> {"--no-block"};
+  }
+
+  std::optional<stock_handoff_lease_owner_t> parse_stock_handoff_lease(const std::string_view contents) {
+    if (contents.empty() || contents.size() > 512) {
+      return std::nullopt;
+    }
+    std::istringstream input {std::string {contents}};
+    std::string version;
+    std::string boot_id;
+    std::string pid;
+    std::string start_time;
+    std::string generation;
+    std::string extra;
+    if (!std::getline(input, version) || version != "version=1" ||
+        !std::getline(input, boot_id) || !boot_id.starts_with("boot_id=") || boot_id.size() <= 8 ||
+        !std::getline(input, pid) || !pid.starts_with("owner_pid=") ||
+        !std::getline(input, start_time) || !start_time.starts_with("owner_start_time=") ||
+        !std::getline(input, generation) || !generation.starts_with("generation=") ||
+        std::getline(input, extra)) {
+      return std::nullopt;
+    }
+    const auto parse_number = [](const std::string_view value, auto &result) {
+      const auto [end, error] {std::from_chars(value.data(), value.data() + value.size(), result)};
+      return !value.empty() && error == std::errc {} && end == value.data() + value.size() && result > 0;
+    };
+    stock_handoff_lease_owner_t owner;
+    owner.boot_id = boot_id.substr(8);
+    if (!parse_number(std::string_view {pid}.substr(10), owner.pid) ||
+        !parse_number(std::string_view {start_time}.substr(17), owner.start_time) ||
+        !parse_number(std::string_view {generation}.substr(11), owner.generation)) {
+      return std::nullopt;
+    }
+    return owner;
   }
 
   std::string_view to_string(const stock_handoff_state_e state) {

@@ -30,3 +30,7 @@ add_executable(test_steamos_virtual_session_core
 )
 target_link_libraries(test_steamos_virtual_session_core PRIVATE steamos_virtual_session_core gtest_main)
 add_test(NAME SteamOSVirtualSessionCore COMMAND test_steamos_virtual_session_core)
+
+add_test(NAME SteamOSStockHandoffGuard
+    COMMAND bash "${CMAKE_CURRENT_LIST_DIR}/../integration/test_stock_handoff_guard.sh"
+                 "${CMAKE_CURRENT_LIST_DIR}/../../scripts/steamshine-gamescope-session-guard.sh")
