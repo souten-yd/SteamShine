@@ -691,11 +691,14 @@ try {
   if (await steamshinePage.locator('#update-release').count() !== 1) {
     throw new Error('Settings release update control is missing.');
   }
-  securityResults.update_missing_csrf_status = await steamshinePage.evaluate(async () => (await fetch('/api/steamshine/v1/system/update', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
-  })).status);
+  const updateProbeContext = await request.newContext({
+    ignoreHTTPSErrors: true,
+    storageState: await steamshineContext.storageState(),
+    extraHTTPHeaders: { Origin: baseUrl },
+  });
+  securityResults.update_missing_csrf_status = (await updateProbeContext.post(`${baseUrl}/api/steamshine/v1/system/update`, { data: {} })).status();
+  await updateProbeContext.dispose();
   if (securityResults.update_missing_csrf_status !== 400) throw new Error('Release update accepted a request without CSRF protection.');
-  await steamshinePage.waitForLoadState('networkidle');
   securityResults.missing_csrf_status = await steamshinePage.evaluate(async () => (await fetch('/api/steamshine/v1/pairing/pin', {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pin: '1234', name: 'test-client' }),
   })).status);
