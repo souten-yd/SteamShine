@@ -2671,11 +2671,7 @@ namespace confighttp {
     }
     if (child == 0) {
       steamos_virtual_session::close_inherited_descriptors_for_exec(3, 65536);
-      ::execl(
-        "/usr/bin/systemd-run", "systemd-run", "--user", "--collect", "--unit=steamshine-web-update",
-        "/bin/bash", updater.c_str(),
-        static_cast<char *>(nullptr)
-      );
+      ::execl("/usr/bin/systemd-run", "systemd-run", "--user", "--collect", "--unit=steamshine-web-update", "/bin/bash", updater.c_str(), static_cast<char *>(nullptr));
       _exit(127);
     }
     int status {};
