@@ -114,7 +114,7 @@ namespace confighttp {
     failed,  ///< The OS rejected or could not run the poweroff request.
   };
   /** @brief Pollable shutdown result. */
-  std::atomic<host_shutdown_state_e> host_shutdown_state {host_shutdown_state_e::idle};
+  std::atomic<host_shutdown_state_e> host_shutdown_state {};
 
 
   std::string steamshine_page_content_security_policy(const std::string_view host_header, const std::uint16_t terminal_ws_port) {
