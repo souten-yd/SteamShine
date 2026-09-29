@@ -13,6 +13,7 @@ let mounted = false;
 let configured = false;
 let authorizations = 0;
 let restored = 0;
+let remembered = 0;
 let updated = 0;
 let applied = 0;
 let shortcutList = [];
@@ -89,7 +90,10 @@ try {
     }
     if (path === '/addons/storage/action' || path === '/addons/decky/action' || path.endsWith('/activate')) {
       if (!authorized) return reply({ code: 'admin_authorization_required' }, 403);
-      if (path === '/addons/storage/action') { assert.equal(body.action, 'restore'); assert.equal(body.uuid, uuid); mounted = true; restored++; }
+      if (path === '/addons/storage/action') {
+        if (body.action === 'remember') remembered++;
+        else { assert.equal(body.action, 'restore'); assert.equal(body.uuid, uuid); mounted = true; restored++; }
+      }
       if (path === '/addons/decky/action') { assert.equal(body.action, 'update'); updated++; }
       if (path.endsWith('/activate')) applied++;
       return reply({ success: true, message: 'Completed', applied: ['power_cap'], skipped: [] });
@@ -100,7 +104,9 @@ try {
     return reply({});
   });
   await page.goto(`${base}/steamshine/addons`);
-  await page.getByRole('heading', { name: 'Storage recovery', exact: true }).waitFor();
+  await page.getByRole('heading', { name: 'Decky Loader', exact: true }).waitFor();
+  assert.equal(await page.getByRole('heading', { name: 'Steam shader cache', exact: true }).count(), 0);
+  assert.equal(await page.getByRole('heading', { name: 'Storage recovery', exact: true }).count(), 0);
   // Create Home (Start + Back, 3 s) and Quick Access (Start + Back + A, 1.5 s), then toggle and delete.
   const shortcutsCard = page.locator('#controller-shortcuts');
   await shortcutsCard.getByText('No shortcuts yet.').waitFor();
@@ -171,6 +177,9 @@ try {
   await page.waitForFunction(() => !document.querySelector('#turbo-enabled').disabled);
   assert.deepEqual(turboSaves.at(-1), { enabled: false, modifier: 'BACK', hz: 12 });
 
+  await page.goto(`${base}/steamshine/settings`);
+  await page.getByRole('heading', { name: 'Steam shader cache', exact: true }).waitFor();
+  await page.getByRole('heading', { name: 'Storage recovery', exact: true }).waitFor();
   await page.getByRole('button', { name: 'Use internal storage' }).click();
   await page.locator('#cache-result').filter({ hasText: '/saved/cache-backup' }).waitFor();
   assert.equal(await page.getByRole('button', { name: 'Use internal storage' }).count(), 0);
@@ -189,8 +198,13 @@ try {
   assert.equal(restored, 1);
   assert.equal(await page.getByLabel('Administrator password', { exact: true }).count(), 0);
   assert.equal(await page.evaluate(() => localStorage.length + sessionStorage.length), 0);
+  await page.getByRole('button', { name: 'Save mount settings' }).click();
+  await page.waitForFunction(() => !document.querySelector('#save-mount-settings')?.disabled);
+  assert.equal(remembered, 1);
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
 
   authorized = false;
+  await page.goto(`${base}/steamshine/addons`);
   await page.getByRole('button', { name: 'Update / repair stable' }).click();
   await page.getByRole('button', { name: 'Continue', exact: true }).click();
   await page.getByLabel('Administrator password', { exact: true }).fill('wrong-fixture');
@@ -220,7 +234,7 @@ try {
   assert.deepEqual(errors, []);
   await mkdir('dist/addons-browser', { recursive: true });
   await page.goto(`${base}/steamshine/addons`);
-  await page.getByRole('heading', { name: 'Storage recovery', exact: true }).waitFor();
+  await page.getByRole('heading', { name: 'Decky Loader', exact: true }).waitFor();
   await page.screenshot({ path: 'dist/addons-browser/addons-320.png', fullPage: true });
   console.log('PASS: controller shortcut create/edit/toggle/delete, turbo switch/button/speed, cache setup, storage restore/cancel, password retry/clearing, Decky reuse, GPU authentication, and 320px layout.');
 } finally {

@@ -919,7 +919,7 @@ function steamCacheCard(cache) {
       </div><p class="field-hint">${escapeHtml(shader.reason)}</p>
       ${shader.configured ? '' : `<button class="btn-primary btn-sm" data-cache-library="${escapeHtml(library.id)}" ${shader.can_configure ? '' : 'disabled'}>Use internal storage</button>`}</div>`;
   }).join('');
-  return `<div class="section stack addons-card"><h3>Steam shader cache</h3><p>Check where each library stores its cache. Internal storage free: ${formatBytes(cache.home_free_bytes || 0)}.</p><p class="field-hint">Changing the location requires Steam and games to be closed. Existing shader data is copied and the original is retained as a backup. Proton data, including saves, is left unchanged.</p>${cache.message ? `<p class="notice">${escapeHtml(cache.message)}</p>` : ''}${rows || '<div class="empty">No Steam libraries found.</div>'}<div id="cache-result" class="notice" role="status"></div></div>`;
+  return `<div class="section stack storage-settings-card"><h3>Steam shader cache</h3><p>Check where each library stores its cache. Internal storage free: ${formatBytes(cache.home_free_bytes || 0)}.</p><p class="field-hint">Changing the location requires Steam and games to be closed. Existing shader data is copied and the original is retained as a backup. Proton data, including saves, is left unchanged.</p>${cache.message ? `<p class="notice">${escapeHtml(cache.message)}</p>` : ''}${rows || '<div class="empty">No Steam libraries found.</div>'}<div id="cache-result" class="notice" role="status"></div></div>`;
 }
 
 /** @brief Render saved mount mappings without offering formatting or arbitrary mount paths. */
@@ -930,7 +930,7 @@ function storageRecoveryCard(storage) {
     <div class="row"><span class="k">Filesystem UUID</span><span class="v storage-path">${escapeHtml(volume.uuid)}</span></div>
     <div class="row"><span class="k">Settings source</span><span class="v storage-path">${escapeHtml(volume.origin)}</span></div>
     </div><p class="field-hint">${escapeHtml(volume.reason)}</p>${volume.mounted && volume.persistent ? '' : `<button class="btn-primary btn-sm" data-restore-volume="${escapeHtml(volume.uuid)}" ${volume.can_restore ? '' : 'disabled'}>Restore saved mount</button>`}</div>`).join('');
-  return `<div class="section stack addons-card"><h3>Storage recovery</h3><p>Save data-volume mount settings so they can be recovered after an OS update. Recovery matches the filesystem UUID and checks an unmounted filesystem without modifying it before restoring the saved path.</p><p class="field-hint">Automatic recovery supports previously registered ext4 data volumes. It does not format disks, repair filesystem errors, or overwrite files at a mount location.</p>${storage.message ? `<p class="notice">${escapeHtml(storage.message)}</p>` : ''}${rows || '<div class="empty">No saved data-volume mounts found.</div>'}<div class="btn-row"><button class="btn-primary" id="save-mount-settings" ${(storage.volumes || []).length ? '' : 'disabled'}>Save mount settings</button><span class="field-hint">${storage.saved_settings ? 'A recovery copy is saved.' : 'Save a recovery copy for future updates.'}</span></div></div>`;
+  return `<div class="section stack storage-settings-card"><h3>Storage recovery</h3><p>Save data-volume mount settings so they can be recovered after an OS update. Recovery matches the filesystem UUID and checks an unmounted filesystem without modifying it before restoring the saved path.</p><p class="field-hint">Automatic recovery supports previously registered ext4 data volumes. It does not format disks, repair filesystem errors, or overwrite files at a mount location.</p>${storage.message ? `<p class="notice">${escapeHtml(storage.message)}</p>` : ''}${rows || '<div class="empty">No saved data-volume mounts found.</div>'}<div class="btn-row"><button class="btn-primary" id="save-mount-settings" ${(storage.volumes || []).length ? '' : 'disabled'}>Save mount settings</button><span class="field-hint">${storage.saved_settings ? 'A recovery copy is saved.' : 'Save a recovery copy for future updates.'}</span></div></div>`;
 }
 
 /** @brief Human-readable labels for controller-shortcut keys. */
@@ -1163,13 +1163,11 @@ function wireTurbo(turbo) {
   refresh();
 }
 
-/** @brief Render Decky management, Steam cache settings, and saved storage recovery. */
+/** @brief Render Decky management and controller input settings. */
 async function renderAddons() {
   shortcutDraft = null;
-  const [status, cache, storage, shortcuts, turbo] = await Promise.all([
+  const [status, shortcuts, turbo] = await Promise.all([
     api('/addons/decky').then(json),
-    api('/addons/steam-cache').then(json).catch((error) => ({ message: error.message })),
-    api('/addons/storage').then(json).catch((error) => ({ message: error.message })),
     api('/input/shortcuts').then(json).catch((error) => ({ message: error.message })),
     api('/input/turbo').then(json).catch((error) => ({ message: error.message })),
   ]);
@@ -1182,7 +1180,7 @@ async function renderAddons() {
   const controls = status.installed
     ? `<button type="button" class="btn-primary" data-decky-action="update" ${managementDisabled}>Update / repair stable</button><button type="button" class="btn-danger" data-decky-action="uninstall" ${managementDisabled}>Uninstall loader</button>`
     : `<button type="button" class="btn-primary" data-decky-action="install" ${managementDisabled}>Install stable</button>`;
-  shell(`<div class="page-header"><div><h2>Addons</h2><p>Manage integrations, controller shortcuts and turbo, cache storage, and disk recovery.</p></div><button id="refresh-addons" class="btn-ghost">Refresh</button></div>
+  shell(`<div class="page-header"><div><h2>Addons</h2><p>Manage Decky Loader, controller shortcuts, and turbo.</p></div><button id="refresh-addons" class="btn-ghost">Refresh</button></div>
     <div class="stack">
       <div class="section"><h3>Decky Loader</h3><div class="rows">
         <div class="row"><span class="k">Installation</span><span class="v">${escapeHtml(installedLabel)}</span></div>
@@ -1193,39 +1191,12 @@ async function renderAddons() {
       <div class="field-hint">Install and update follow the official <a href="https://github.com/SteamDeckHomebrew/decky-installer" target="_blank" rel="noopener">SteamDeckHomebrew/decky-installer</a> stable-release scripts. Uninstall preserves plugin data, matching the official normal uninstall.</div>
       ${shortcutsCard(shortcuts)}
       ${turboCard(turbo)}
-      ${steamCacheCard(cache)}
-      ${storageRecoveryCard(storage)}
     </div>`, { authenticated: true, activeId: 'addons' });
 
   document.querySelector('#refresh-addons').onclick = () => renderAddons();
   shortcutsData = shortcuts;
   wireShortcuts();
   wireTurbo(turbo);
-  document.querySelectorAll('[data-cache-library]').forEach((button) => button.addEventListener('click', async () => {
-    button.disabled = true;
-    button.textContent = 'Copying cache…';
-    try {
-      const result = await json(await api('/addons/steam-cache/configure', { method: 'POST', body: JSON.stringify({ library_id: button.dataset.cacheLibrary }) }));
-      await renderAddons();
-      document.querySelector('#cache-result').textContent = result.message + (result.backup_path ? ` Backup: ${result.backup_path}` : '');
-    } catch (error) { toast(error.message, 'error'); await renderAddons(); }
-  }));
-  const storageAction = async (payload) => {
-    document.querySelectorAll('[data-restore-volume],#save-mount-settings').forEach((button) => { button.disabled = true; });
-    try {
-      const result = await json(await managedApi('/addons/storage/action', { method: 'POST', body: JSON.stringify(payload) }));
-      toast(result.message, 'ok');
-    } catch (error) { toast(error.message, 'error'); }
-    await renderAddons();
-  };
-  document.querySelector('#save-mount-settings').onclick = () => storageAction({ action: 'remember' });
-  document.querySelectorAll('[data-restore-volume]').forEach((button) => button.addEventListener('click', async () => {
-    const volume = storage.volumes.find((item) => item.uuid === button.dataset.restoreVolume);
-    if (!await confirmDialog({ title: 'Restore saved mount', message: `Restore ${volume.label || volume.uuid} at ${volume.target}? A filesystem check will run without repairs. Existing files will be preserved.`, confirmLabel: 'Restore mount', danger: false })) return;
-    button.textContent = 'Checking and restoring…';
-    await storageAction({ action: 'restore', uuid: volume.uuid });
-  }));
-
   document.querySelectorAll('[data-decky-action]').forEach((button) => button.addEventListener('click', async () => {
     const action = button.dataset.deckyAction;
     const destructive = action === 'uninstall';
@@ -1432,11 +1403,48 @@ async function renderClients() {
 }
 
 
-/** @brief Render release update controls. */
+/** @brief Wire shader-cache setup and saved-volume recovery on Settings. */
+function wireStorageSettings(storage) {
+  document.querySelectorAll('[data-cache-library]').forEach((button) => button.addEventListener('click', async () => {
+    button.disabled = true;
+    button.textContent = 'Copying cache…';
+    try {
+      const result = await json(await api('/addons/steam-cache/configure', { method: 'POST', body: JSON.stringify({ library_id: button.dataset.cacheLibrary }) }));
+      await renderSettings();
+      document.querySelector('#cache-result').textContent = result.message + (result.backup_path ? ` Backup: ${result.backup_path}` : '');
+    } catch (error) { toast(error.message, 'error'); await renderSettings(); }
+  }));
+  const storageAction = async (payload) => {
+    document.querySelectorAll('[data-restore-volume],#save-mount-settings').forEach((button) => { button.disabled = true; });
+    try {
+      const result = await json(await managedApi('/addons/storage/action', { method: 'POST', body: JSON.stringify(payload) }));
+      toast(result.message, 'ok');
+    } catch (error) { toast(error.message, 'error'); }
+    await renderSettings();
+  };
+  document.querySelector('#save-mount-settings').onclick = () => storageAction({ action: 'remember' });
+  document.querySelectorAll('[data-restore-volume]').forEach((button) => button.addEventListener('click', async () => {
+    const volume = storage.volumes.find((item) => item.uuid === button.dataset.restoreVolume);
+    if (!await confirmDialog({ title: 'Restore saved mount', message: `Restore ${volume.label || volume.uuid} at ${volume.target}? A filesystem check will run without repairs. Existing files will be preserved.`, confirmLabel: 'Restore mount', danger: false })) return;
+    button.textContent = 'Checking and restoring…';
+    await storageAction({ action: 'restore', uuid: volume.uuid });
+  }));
+}
+
+/** @brief Render release update and storage controls. */
 async function renderSettings() {
+  const [cache, storage] = await Promise.all([
+    api('/addons/steam-cache').then(json).catch((error) => ({ message: error.message })),
+    api('/addons/storage').then(json).catch((error) => ({ message: error.message })),
+  ]);
   shell(`<div class="page-header"><div><h2>Settings</h2><p>Manage SteamShine on this PC.</p></div></div>
+    <div class="stack">
     <div class="section stack"><h3>Release update</h3><p>Download the latest GitHub release, verify its checksum, install it, and restart SteamShine.</p>
-    <button id="update-release" class="btn-primary">Update from GitHub release</button><div id="update-notice" class="notice"></div></div>`, { authenticated: true, activeId: 'settings' });
+    <button id="update-release" class="btn-primary">Update from GitHub release</button><div id="update-notice" class="notice"></div></div>
+    ${steamCacheCard(cache)}
+    ${storageRecoveryCard(storage)}
+    </div>`, { authenticated: true, activeId: 'settings' });
+  wireStorageSettings(storage);
   let updateStarted = false;
   const refreshUpdate = async () => {
     if (!document.querySelector('#update-notice')) return;
@@ -1464,6 +1472,7 @@ async function renderSettings() {
     }
   };
   await refreshUpdate();
+  clearInterval(pollTimer);
   pollTimer = setInterval(refreshUpdate, 2000);
   document.querySelector('#update-release').onclick = async () => {
     if (!await confirmDialog({ title: 'Update SteamShine', message: 'Install the latest GitHub release now? Active streams disconnect when the service restarts.', confirmLabel: 'Update' })) return;
