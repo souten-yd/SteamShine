@@ -1518,11 +1518,11 @@ pre {
     display: none;
   }
 }
-/* Keep storage paths readable on the narrow Addon layout. */
+/* Keep storage paths readable on the narrow Settings layout. */
 .storage-path, .cache-library h4 { overflow-wrap: anywhere; min-width: 0; }
 /* Keep storage labels whole on phones; long paths wrap in the value column instead. */
 .cache-library .row .k, .storage-volume .row .k { flex-shrink: 0; white-space: nowrap; }
-.addons-card > p { font-size: 0.85rem; color: var(--text-faint); margin: 0; }
+.addons-card > p, .storage-settings-card > p { font-size: 0.85rem; color: var(--text-faint); margin: 0; }
 /* Controller-shortcut input chips: large touch targets that wrap on phones. */
 .combo-chips { display: flex; flex-wrap: wrap; gap: 0.4rem; }
 .combo-chip { min-height: 2.5rem; padding: 0.35rem 0.75rem; border-radius: 999px; background: transparent; border: 1px solid var(--border-strong); color: inherit; font-size: 0.85rem; }

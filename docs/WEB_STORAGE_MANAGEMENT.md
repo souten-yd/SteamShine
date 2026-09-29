@@ -1,6 +1,6 @@
 # Web management and storage recovery
 
-The Addon page shows Steam shader-cache locations and registered ext4 data volumes.
+The Settings page shows Steam shader-cache locations and registered ext4 data volumes.
 It recognizes existing cache symlinks and marks disconnected libraries separately
 from caches that need configuration. “Use internal storage” requires Steam and
 games to be closed. It copies shader data to the user's home filesystem, keeps the
