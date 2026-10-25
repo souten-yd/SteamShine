@@ -500,6 +500,16 @@ install_artifact() {
   if ! tar --zstd -C "${extract}" -xf "${ARTIFACT_PATH}"; then rm -rf -- "${extract}"; die 'Artifact extraction failed.' "$EXIT_DEPENDENCY"; fi
   if [[ ! -x "${extract}/bin/steamshine" || ! -x "${extract}/bin/steamshine-input-visualizer" || ! -f "${extract}/BUILD_INFO.json" || ! -f "${extract}/STEAMOS_BASELINE.json" ]]; then rm -rf -- "${extract}"; die 'Artifact layout is invalid.' "$EXIT_DEPENDENCY"; fi
   [[ "$(json_value target_architecture "${extract}/BUILD_INFO.json")" == x86_64 ]] || { rm -rf -- "${extract}"; die 'Artifact architecture is not x86_64.' "$EXIT_UNSUPPORTED"; }
+  # Verify against this SteamOS before changing current; a pinned build image
+  # cannot predict every library upgrade on the installed host.
+  local binary dependencies
+  for binary in "${extract}/bin/steamshine" "${extract}/bin/steamshine-input-visualizer" "${extract}/lib/libVkLayer_FROG_gamescope_wsi_x86_64.so"; do
+    [[ -f "${binary}" ]] || continue
+    if ! dependencies="$(ldd "${binary}" 2>&1)" || grep -Eq 'not found|version .* not found' <<<"${dependencies}"; then
+      rm -rf -- "${extract}"
+      die "Artifact runtime dependencies are incompatible with this host: ${binary}" "$EXIT_DEPENDENCY"
+    fi
+  done
   run mkdir -p "${versions}" "${PREFIX}/bin"; version="$(sha256sum "${ARTIFACT_PATH}" | awk '{print $1}')"
   if [[ -L "${target}/current" ]]; then previous="$(readlink -f -- "${target}/current" || true)"; fi
   if [[ -e "${versions}/${version}" ]]; then

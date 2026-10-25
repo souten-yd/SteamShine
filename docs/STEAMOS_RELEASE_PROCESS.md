@@ -56,7 +56,7 @@ steamshine-steamos-x86_64-<commit>.tar.zst
 steamshine-steamos-x86_64-<commit>.tar.zst.sha256
 ```
 
-The archive contains user-space application files, scripts, a systemd user-service template, licenses, build metadata, and a runtime dependency report. It deliberately does not bundle graphics drivers, Mesa, Vulkan ICDs, VAAPI drivers, or PipeWire daemons. `libminiupnpc.so.21` is the sole bundled general-purpose library because stock SteamOS does not guarantee that ABI; the archive sets only a relative `$ORIGIN/../lib` RPATH and includes its license. The CI build installs PipeWire only because its `libpipewire-0.3` development interface is a required CMake dependency; it does not start PipeWire, Gamescope, Steam, or any GPU workload.
+The archive contains user-space application files, scripts, a systemd user-service template, licenses, build metadata, and a runtime dependency report. It deliberately does not bundle graphics drivers, Mesa, Vulkan ICDs, VAAPI drivers, or PipeWire daemons. It bundles `libminiupnpc.so.21` because stock SteamOS does not guarantee that ABI. It also bundles the three ICU libraries used by the pinned build image so an OS update that replaces the ICU SONAME does not prevent SteamShine from loading. The archive sets a relative `$ORIGIN/../lib` RPATH and includes the bundled libraries' licenses. The CI build installs PipeWire only because its `libpipewire-0.3` development interface is a required CMake dependency; it does not start PipeWire, Gamescope, Steam, or any GPU workload.
 
 The artifact also includes a 64-bit Gamescope WSI layer with the socket-identity
 backport described in [Game HDR discovery](STEAMOS_HDR_IMPLEMENTATION_PLAN.md#game-hdr-discovery).
@@ -71,4 +71,7 @@ The build emits `ldd -v`, the dynamic section, symbol versions, and ELF version 
 
 The starting image is already ABI-compatible, so CI does not downgrade or replace its C library at runtime. Package installation and compilation occur only in the disposable container; they never run on a SteamOS host.
 
-SteamOS installation verifies the detached SHA-256 file, archive paths, absence of link entries, and x86_64 artifact metadata before atomically switching `~/.local/share/steamshine/current`. A failed install keeps the prior `current` version; a successful replacement records the prior version for `./steamshine.sh rollback`, followed by `systemctl --user restart steamshine` when the service is enabled.
+SteamOS installation verifies the detached SHA-256 file, archive paths, absence of link entries, x86_64 artifact metadata, and host `ldd` results for packaged ELF files before atomically switching `~/.local/share/steamshine/current`. A failed install keeps the prior `current` version; a successful replacement records the prior version for `./steamshine.sh rollback`, followed by `systemctl --user restart steamshine` when the service is enabled.
+
+The independent SSH and Tailscale recovery path for a binary that cannot start
+is documented in [SteamOS recovery access](STEAMOS_RECOVERY_ACCESS.md).

@@ -217,9 +217,10 @@ fi
 
 # A normal tar archive contains a leading ./ entry.  It is safe and must not be
 # mistaken for a parent-directory traversal by the immutable artifact installer.
-mkdir -p "${test_root}/stage/bin" "${test_root}/stage/scripts" "${test_root}/home/run" "${test_root}/home/.config/sunshine"
+mkdir -p "${test_root}/stage/bin" "${test_root}/stage/lib" "${test_root}/stage/scripts" "${test_root}/home/run" "${test_root}/home/.config/sunshine"
 install -m 755 /bin/true "${test_root}/stage/bin/steamshine"
 install -m 755 /bin/true "${test_root}/stage/bin/steamshine-input-visualizer"
+install -m 755 /bin/true "${test_root}/stage/lib/libVkLayer_FROG_gamescope_wsi_x86_64.so"
 install -m 755 "${root_dir}/scripts/migrate-steamos-apps.py" "${test_root}/stage/scripts/migrate-steamos-apps.py"
 install -m 755 "${root_dir}/scripts/steamshine-gamescope-session-guard.sh" "${test_root}/stage/scripts/steamshine-gamescope-session-guard.sh"
 cat >"${test_root}/home/.config/sunshine/apps.json" <<'EOF'
@@ -612,6 +613,26 @@ if grep -Eq '(^|[[:space:]])DISPLAY([[:space:]]|$)' "${systemctl_log}"; then
 fi
 HOME="${test_root}/home" XDG_RUNTIME_DIR="${test_root}/home/run" \
   "${root_dir}/steamshine.sh" install --artifact "${test_root}/steamshine-steamos-x86_64-test.tar.zst" --no-service --non-interactive --yes
+
+# A host ABI failure must leave the installed version selected.
+previous_version="$(readlink -f "${test_root}/home/.local/share/steamshine/current")"
+mkdir -p "${test_root}/incompatible-stage" "${test_root}/incompatible-bin"
+cp -a "${test_root}/stage/." "${test_root}/incompatible-stage/"
+printf 'incompatible version\n' >"${test_root}/incompatible-stage/version-marker"
+tar --zstd -C "${test_root}/incompatible-stage" -cf "${test_root}/steamshine-steamos-x86_64-incompatible.tar.zst" .
+(cd "${test_root}" && sha256sum steamshine-steamos-x86_64-incompatible.tar.zst >steamshine-steamos-x86_64-incompatible.tar.zst.sha256)
+cat >"${test_root}/incompatible-bin/ldd" <<'EOF'
+#!/usr/bin/env bash
+printf 'libicudata.so.76 => not found\n'
+exit 1
+EOF
+chmod 755 "${test_root}/incompatible-bin/ldd"
+if HOME="${test_root}/home" XDG_RUNTIME_DIR="${test_root}/home/run" PATH="${test_root}/incompatible-bin:${PATH}" \
+  "${root_dir}/steamshine.sh" install --artifact "${test_root}/steamshine-steamos-x86_64-incompatible.tar.zst" --no-service --non-interactive --yes >/dev/null 2>&1; then
+  echo 'Expected incompatible runtime dependencies to be rejected.' >&2
+  exit 1
+fi
+test "$(readlink -f "${test_root}/home/.local/share/steamshine/current")" = "${previous_version}"
 
 # A detached checksum is mandatory and a mismatch must not reach extraction.
 cp "${test_root}/steamshine-steamos-x86_64-test.tar.zst" "${test_root}/steamshine-steamos-x86_64-corrupt.tar.zst"

@@ -282,6 +282,11 @@ jobs:
           scripts/package-steamos-artifact.sh cmake-build-steamos dist
           artifact="$(find dist -name 'steamshine-steamos-*.tar.zst' -print -quit)"
           (cd "$(dirname "${artifact}")" && sha256sum -c "$(basename "${artifact}").sha256")
+          for component in data i18n uc; do
+            soname="$(readelf -d cmake-build-steamos/sunshine | sed -nE "s/.*\\[(libicu${component}\\.so\\.[0-9]+)\\].*/\\1/p" | head -1)"
+            test -n "${soname}"
+            tar --zstd -tf "${artifact}" | grep -Fx "./lib/${soname}"
+          done
           tar --zstd -xOf "${artifact}" ./share/assets/apps.json | grep -F '"Input Latency Visualizer"' >/dev/null
           smoke_home="$(mktemp -d)"; mkdir -p "${smoke_home}/run"
           HOME="${smoke_home}" XDG_RUNTIME_DIR="${smoke_home}/run" ./steamshine.sh install --artifact "${artifact}" --no-service --non-interactive --yes
