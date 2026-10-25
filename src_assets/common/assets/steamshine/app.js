@@ -1163,13 +1163,114 @@ function wireTurbo(turbo) {
   refresh();
 }
 
+/** @brief Labels for the standard X52's 34 Linux joystick buttons. */
+const X52_BUTTONS = [
+  'Trigger', 'Fire', 'A', 'B', 'C', 'Shift', 'D', 'E', 'T1 up', 'T1 down', 'T2 up', 'T2 down', 'T3 up', 'T3 down',
+  'Second trigger', 'Stick hat up', 'Stick hat right', 'Stick hat down', 'Stick hat left', 'Throttle hat up',
+  'Throttle hat right', 'Throttle hat down', 'Throttle hat left', 'Mode 1', 'Mode 2', 'Mode 3', 'Function',
+  'Start / stop', 'Reset', 'Clutch', 'Mouse primary', 'Mouse secondary', 'Mouse wheel down', 'Mouse wheel up',
+];
+
+/** @brief Keyboard keys that can be sent alongside X52 joystick presses. */
+const X52_KEYS = ['NONE', ...'ABCDEFGHIJKLMNOPQRSTUVWXYZ', ...'0123456789', 'SPACE', 'ENTER', 'ESC', 'TAB',
+  'UP', 'DOWN', 'LEFT', 'RIGHT', ...Array.from({ length: 12 }, (_, index) => `F${index + 1}`), 'CTRL', 'ALT', 'SHIFT'];
+
+/** @brief Keep the optional X52 settings open while an update redraws the card. */
+let x52SettingsOpen = false;
+
+/** @brief Render connection-gated controls for a standard X52 HOTAS. */
+function x52Card(data) {
+  if (data.message) return `<div class="section stack addons-card" id="x52-addon"><h3>X52 HOTAS</h3><p class="notice">${escapeHtml(data.message)}</p></div>`;
+  const active = data.profiles.find((profile) => profile.name === data.active) || data.profiles[0];
+  const disabled = data.connected ? '' : 'disabled';
+  const profileOptions = data.profiles.map((profile) => `<option value="${escapeHtml(profile.name)}" ${profile.name === data.active ? 'selected' : ''}>${escapeHtml(profile.name)}</option>`).join('');
+  const lines = active.display.lines.map((line, index) => `<label>MFD line ${index + 1}<input type="text" data-x52-line="${index}" maxlength="16" value="${escapeHtml(line)}" ${disabled}></label>`).join('');
+  const buttonFields = X52_BUTTONS.map((label, index) => {
+    const assigned = active.buttons?.[index] || 'NONE';
+    const options = X52_KEYS.map((key) => `<option value="${key}" ${key === assigned ? 'selected' : ''}>${key === 'NONE' ? 'Joystick only' : key}</option>`).join('');
+    return `<label>${escapeHtml(label)} (${index + 1})<select data-x52-button="${index}" ${disabled}>${options}</select></label>`;
+  }).join('');
+  return `<div class="section stack addons-card" id="x52-addon"><div class="shortcut-head"><h3>X52 HOTAS</h3>
+    <span class="badge ${data.connected ? 'badge-ok' : 'badge-warn'}" id="x52-connection">${data.connected ? 'Connected' : 'Disconnected'}</span></div>
+    <p>Settings are available only while the standard X52 is connected. The recommended profile is saved as the initial profile and can be copied.</p>
+    <label class="checkbox-row">Enable addon<input type="checkbox" id="x52-enabled" ${active.enabled ? 'checked' : ''} ${disabled}></label>
+    <label class="checkbox-row">Accept X52 input<input type="checkbox" id="x52-input-enabled" ${data.input_enabled !== false ? 'checked' : ''} ${disabled}></label>
+    <label>Active profile<select id="x52-profile" ${disabled}>${profileOptions}</select></label>
+    <label>Save as profile<input type="text" id="x52-name" maxlength="40" value="${active.name === 'Recommended' ? '' : escapeHtml(active.name)}" placeholder="Profile name" ${disabled}></label>
+    <div class="btn-row"><button type="button" class="btn-primary" id="x52-save" ${disabled}>Save and activate</button>
+      <button type="button" class="btn-danger" id="x52-delete" ${disabled || active.name === 'Recommended' ? 'disabled' : ''}>Delete profile</button></div>
+    <details id="x52-settings" ${x52SettingsOpen ? 'open' : ''}><summary>Lighting, display, and button settings</summary><div class="stack">
+    <h4>Lighting</h4><label>LED brightness (0–128)<input type="range" id="x52-led-brightness" min="0" max="128" value="${active.lighting.brightness}" ${disabled}></label>
+    <label class="checkbox-row">Blink throttle and POV LEDs<input type="checkbox" id="x52-blink" ${active.lighting.blink ? 'checked' : ''} ${disabled}></label>
+    <h4>MFD display</h4><label>Display brightness (0–128)<input type="range" id="x52-mfd-brightness" min="0" max="128" value="${active.display.brightness}" ${disabled}></label>
+    ${lines}<label class="checkbox-row">Shift indicator<input type="checkbox" id="x52-shift" ${active.display.shift ? 'checked' : ''} ${disabled}></label>
+    <label class="checkbox-row">24-hour clock<input type="checkbox" id="x52-24h" ${active.display.hours_24 ? 'checked' : ''} ${disabled}></label>
+    <label>Date format<select id="x52-date-format" ${disabled}>${['DDMMYY', 'MMDDYY', 'YYMMDD'].map((format) => `<option ${format === active.display.date_format ? 'selected' : ''}>${format}</option>`).join('')}</select></label>
+    <label>Clock 2 offset from local time (minutes)<input type="number" id="x52-clock2" min="-1023" max="1023" value="${active.display.clock_offsets_minutes[0]}" ${disabled}></label>
+    <label>Clock 3 offset from local time (minutes)<input type="number" id="x52-clock3" min="-1023" max="1023" value="${active.display.clock_offsets_minutes[1]}" ${disabled}></label>
+    <h4>Buttons</h4><p class="field-hint">An assigned key is sent with the joystick button. “Joystick only” preserves the original input.</p>
+    <p class="field-hint" id="x52-last-button" role="status">${data.last_button >= 0 ? `Last pressed: ${escapeHtml(X52_BUTTONS[data.last_button] || `Button ${data.last_button + 1}`)} (${data.last_button + 1})` : 'Press a button to identify it here.'}</p>
+    ${data.connected && !data.keyboard_ready ? '<p class="notice">Keyboard assignments need read access to the X52 event device and write access to /dev/uinput.</p>' : ''}
+    <div class="x52-button-grid">${buttonFields}</div>
+    <p class="field-hint">The standard X52 supports shared LED brightness and blinking. Individual LED colors are a Pro-only feature.</p></div></details></div>`;
+}
+
+/** @brief Wire profile storage and hardware connection checks for the X52 card. */
+function wireX52(data) {
+  const card = document.querySelector('#x52-addon');
+  if (!card || data.message) return;
+  card.querySelector('#x52-settings').addEventListener('toggle', (event) => { x52SettingsOpen = event.target.open; });
+  const send = async (payload) => {
+    const controls = [...card.querySelectorAll('button,input,select')];
+    const disabledBefore = controls.map((control) => control.disabled);
+    controls.forEach((control) => { control.disabled = true; });
+    try {
+      await json(await api('/addons/x52', { method: 'POST', body: JSON.stringify(payload) }));
+      toast('X52 profile updated.', 'ok');
+      await renderAddons();
+    } catch (error) {
+      toast(error.message, 'error');
+      controls.forEach((control, index) => { control.disabled = disabledBefore[index]; });
+    }
+  };
+  card.querySelector('#x52-profile').addEventListener('change', (event) => send({ action: 'activate', name: event.target.value }));
+  card.querySelector('#x52-enabled').addEventListener('change', (event) => send({ action: 'enable', enabled: event.target.checked }));
+  card.querySelector('#x52-input-enabled').addEventListener('change', (event) => send({ action: 'input', enabled: event.target.checked }));
+  card.querySelector('#x52-save').addEventListener('click', () => {
+    const name = card.querySelector('#x52-name').value.trim();
+    if (!name || name === 'Recommended') { toast('Enter a custom profile name.', 'error'); return; }
+    const lines = [...card.querySelectorAll('[data-x52-line]')].map((field) => field.value);
+    const buttons = Object.fromEntries([...card.querySelectorAll('[data-x52-button]')]
+      .filter((field) => field.value !== 'NONE').map((field) => [field.dataset.x52Button, field.value]));
+    send({ action: 'save', profile: { name, enabled: card.querySelector('#x52-enabled').checked, buttons,
+      lighting: { brightness: Number(card.querySelector('#x52-led-brightness').value), blink: card.querySelector('#x52-blink').checked },
+      display: { brightness: Number(card.querySelector('#x52-mfd-brightness').value), lines, shift: card.querySelector('#x52-shift').checked,
+        hours_24: card.querySelector('#x52-24h').checked, date_format: card.querySelector('#x52-date-format').value,
+        clock_offsets_minutes: [Number(card.querySelector('#x52-clock2').value), Number(card.querySelector('#x52-clock3').value)] } } });
+  });
+  card.querySelector('#x52-delete').addEventListener('click', async () => {
+    if (await confirmDialog({ title: 'Delete X52 profile', message: `Delete “${data.active}”?`, confirmLabel: 'Delete', danger: true })) {
+      send({ action: 'delete', name: data.active });
+    }
+  });
+  const poll = setInterval(async () => {
+    if (document.querySelector('#x52-addon') !== card) { clearInterval(poll); return; }
+    try {
+      const latest = await json(await api('/addons/x52'));
+      if (latest.connected !== data.connected) { clearInterval(poll); await renderAddons(); }
+      else if (latest.last_button >= 0) card.querySelector('#x52-last-button').textContent = `Last pressed: ${X52_BUTTONS[latest.last_button] || `Button ${latest.last_button + 1}`} (${latest.last_button + 1})`;
+    } catch { /* Keep the current form when a transient status request fails. */ }
+  }, 3000);
+}
+
 /** @brief Render Decky management and controller input settings. */
 async function renderAddons() {
   shortcutDraft = null;
-  const [status, shortcuts, turbo] = await Promise.all([
+  const [status, shortcuts, turbo, x52] = await Promise.all([
     api('/addons/decky').then(json),
     api('/input/shortcuts').then(json).catch((error) => ({ message: error.message })),
     api('/input/turbo').then(json).catch((error) => ({ message: error.message })),
+    api('/addons/x52').then(json).catch((error) => ({ message: error.message })),
   ]);
   const installedLabel = status.installed ? (status.version || 'Installed') : 'Not installed';
   const serviceLabel = status.service_active ? 'Active' : (status.service_enabled ? 'Inactive (enabled)' : 'Inactive');
@@ -1180,7 +1281,7 @@ async function renderAddons() {
   const controls = status.installed
     ? `<button type="button" class="btn-primary" data-decky-action="update" ${managementDisabled}>Update / repair stable</button><button type="button" class="btn-danger" data-decky-action="uninstall" ${managementDisabled}>Uninstall loader</button>`
     : `<button type="button" class="btn-primary" data-decky-action="install" ${managementDisabled}>Install stable</button>`;
-  shell(`<div class="page-header"><div><h2>Addons</h2><p>Manage Decky Loader, controller shortcuts, and turbo.</p></div><button id="refresh-addons" class="btn-ghost">Refresh</button></div>
+  shell(`<div class="page-header"><div><h2>Addons</h2><p>Manage Decky Loader, controller shortcuts, turbo, and X52 HOTAS.</p></div><button id="refresh-addons" class="btn-ghost">Refresh</button></div>
     <div class="stack">
       <div class="section"><h3>Decky Loader</h3><div class="rows">
         <div class="row"><span class="k">Installation</span><span class="v">${escapeHtml(installedLabel)}</span></div>
@@ -1191,12 +1292,14 @@ async function renderAddons() {
       <div class="field-hint">Install and update follow the official <a href="https://github.com/SteamDeckHomebrew/decky-installer" target="_blank" rel="noopener">SteamDeckHomebrew/decky-installer</a> stable-release scripts. Uninstall preserves plugin data, matching the official normal uninstall.</div>
       ${shortcutsCard(shortcuts)}
       ${turboCard(turbo)}
+      ${x52Card(x52)}
     </div>`, { authenticated: true, activeId: 'addons' });
 
   document.querySelector('#refresh-addons').onclick = () => renderAddons();
   shortcutsData = shortcuts;
   wireShortcuts();
   wireTurbo(turbo);
+  wireX52(x52);
   document.querySelectorAll('[data-decky-action]').forEach((button) => button.addEventListener('click', async () => {
     const action = button.dataset.deckyAction;
     const destructive = action === 'uninstall';

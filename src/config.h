@@ -442,6 +442,7 @@ namespace config {
     std::string steamshine_gpu_profiles;  ///< JSON-encoded array of custom GPU/CPU performance profiles.
     std::string steamshine_gamepad_shortcuts;  ///< JSON-encoded array of controller shortcuts managed by the SteamShine Addons page.
     std::string steamshine_gamepad_turbo;  ///< JSON-encoded controller turbo presets managed by the SteamShine Addons page.
+    std::string steamshine_x52_profiles;  ///< JSON-encoded X52 HOTAS profiles managed by the SteamShine Addons page.
   };
 
   extern video_t video;

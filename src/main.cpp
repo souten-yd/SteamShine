@@ -54,6 +54,7 @@
 #include "process.h"
 #include "steamos_virtual_session.h"
 #include "steamshine_gpuctl.h"
+#include "steamshine_x52.h"
 #include "system_tray.h"
 #include "upnp.h"
 #include "video.h"
@@ -620,6 +621,7 @@ int main(int argc, char *argv[]) {
 
   std::jthread httpThread {nvhttp::start};
   std::jthread configThread {confighttp::start};
+  std::jthread x52Thread {steamshine_x52::monitor};  ///< Reapply the active HOTAS profile after USB reconnect.
   std::jthread rtspThread {rtsp_stream::start};
 
 #ifdef _WIN32
@@ -651,6 +653,9 @@ int main(int argc, char *argv[]) {
   }
 
   mainThreadLoop(shutdown_event);
+
+  x52Thread.request_stop();
+  x52Thread.join();
 
   httpThread.join();
   configThread.join();

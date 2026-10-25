@@ -192,6 +192,8 @@ set(SUNSHINE_TARGET_FILES
         "${CMAKE_SOURCE_DIR}/src/steamshine_gamepad_shortcuts.h"
         "${CMAKE_SOURCE_DIR}/src/steamshine_gamepad_turbo.cpp"
         "${CMAKE_SOURCE_DIR}/src/steamshine_gamepad_turbo.h"
+        "${CMAKE_SOURCE_DIR}/src/steamshine_x52.cpp"
+        "${CMAKE_SOURCE_DIR}/src/steamshine_x52.h"
         "${CMAKE_SOURCE_DIR}/src/steamshine_terminal.cpp"
         "${CMAKE_SOURCE_DIR}/src/steamshine_terminal.h"
         "${CMAKE_SOURCE_DIR}/src/platform/linux/gamescope_source.cpp"

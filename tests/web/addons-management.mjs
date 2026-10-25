@@ -22,6 +22,14 @@ const shortcutDeletes = [];
 let nextShortcutId = 1;
 let turboState = { enabled: false, modifier: 'START', hz: 10 };
 const turboSaves = [];
+let x52Connected = false;
+let x52LastButton = -1;
+const x52Actions = [];
+const recommendedX52 = { name: 'Recommended', enabled: false, buttons: {}, lighting: { brightness: 64, blink: false },
+  display: { brightness: 80, shift: false, lines: ['SteamShine X52', 'Ready', ''], hours_24: true, date_format: 'YYMMDD', clock_offsets_minutes: [0, 0] } };
+let x52Profiles = [recommendedX52];
+let x52Active = 'Recommended';
+let x52InputEnabled = true;
 const errors = [];
 /** Return the simulated controller-shortcut API payload. */
 function shortcutPayload() {
@@ -55,6 +63,24 @@ try {
       if (request.method() === 'POST') { turboSaves.push(body); turboState = body; }
       const buttons = ['START', 'BACK', 'A', 'B', 'X', 'Y', 'LB', 'RB', 'LS', 'RS', 'UP', 'DOWN', 'LEFT', 'RIGHT'];
       return reply({ ...turboState, available_buttons: buttons, min_hz: 1, max_hz: 30 });
+    }
+    if (path === '/addons/x52') {
+      if (request.method() === 'POST') {
+        assert.equal(x52Connected, true);
+        x52Actions.push(body);
+        if (body.action === 'save') {
+          x52Profiles = [...x52Profiles.filter((profile) => profile.name !== body.profile.name), body.profile];
+          x52Active = body.profile.name;
+        } else if (body.action === 'activate') x52Active = body.name;
+        else if (body.action === 'delete') {
+          x52Profiles = x52Profiles.filter((profile) => profile.name !== body.name);
+          if (x52Active === body.name) x52Active = 'Recommended';
+        } else if (body.action === 'enable') {
+          x52Profiles = x52Profiles.map((profile) => profile.name === x52Active ? { ...profile, enabled: body.enabled } : profile);
+        } else if (body.action === 'input') x52InputEnabled = body.enabled;
+      }
+      return reply({ connected: x52Connected, keyboard_ready: true, last_button: x52LastButton, active: x52Active, input_enabled: x52InputEnabled, profiles: x52Profiles,
+        capabilities: { individual_led_colors: false, mfd_lines: 3, mfd_characters: 16, brightness_max: 128 } });
     }
     if (path.startsWith('/input/shortcuts')) {
       if (request.method() === 'POST') {
@@ -177,6 +203,48 @@ try {
   await page.waitForFunction(() => !document.querySelector('#turbo-enabled').disabled);
   assert.deepEqual(turboSaves.at(-1), { enabled: false, modifier: 'BACK', hz: 12 });
 
+  // X52 controls are gated by connection; edits and button assignments persist in named profiles.
+  const x52Card = page.locator('#x52-addon');
+  await x52Card.getByText('Disconnected', { exact: true }).waitFor();
+  assert.equal(await x52Card.locator('#x52-enabled').isDisabled(), true);
+  assert.equal(await x52Card.locator('#x52-input-enabled').isDisabled(), true);
+  assert.equal(await x52Card.locator('#x52-settings').evaluate((element) => element.open), false);
+  x52Connected = true;
+  await page.locator('#refresh-addons').click();
+  await x52Card.getByText('Connected', { exact: true }).waitFor();
+  assert.equal(await x52Card.locator('#x52-input-enabled').isChecked(), true);
+  await x52Card.locator('#x52-input-enabled').uncheck();
+  await page.waitForFunction(() => document.querySelector('#x52-input-enabled')?.checked === false);
+  assert.deepEqual(x52Actions.at(-1), { action: 'input', enabled: false });
+  await page.locator('#refresh-addons').click();
+  assert.equal(await x52Card.locator('#x52-input-enabled').isChecked(), false);
+  await x52Card.locator('#x52-settings summary').click();
+  assert.equal(await x52Card.locator('#x52-settings').evaluate((element) => element.open), true);
+  x52LastButton = 0;
+  await x52Card.getByText('Last pressed: Trigger (1)').waitFor({ timeout: 5000 });
+  await x52Card.locator('#x52-enabled').check();
+  await page.waitForFunction(() => document.querySelector('#x52-enabled')?.checked === true && !document.querySelector('#x52-save')?.disabled);
+  assert.deepEqual(x52Actions.at(-1), { action: 'enable', enabled: true });
+  await x52Card.locator('#x52-name').fill('Flight');
+  await x52Card.locator('#x52-led-brightness').fill('90');
+  await x52Card.locator('[data-x52-button="0"]').selectOption('SPACE');
+  await x52Card.locator('#x52-save').click();
+  await page.waitForFunction(() => document.querySelector('#x52-profile')?.value === 'Flight');
+  assert.equal(x52Actions.at(-1).profile.lighting.brightness, 90);
+  assert.equal(x52Actions.at(-1).profile.buttons['0'], 'SPACE');
+  await x52Card.locator('#x52-profile').selectOption('Recommended');
+  await page.waitForFunction(() => document.querySelector('#x52-profile')?.value === 'Recommended');
+  await x52Card.locator('#x52-profile').selectOption('Flight');
+  await page.waitForFunction(() => document.querySelector('#x52-profile')?.value === 'Flight');
+  await x52Card.locator('#x52-delete').click();
+  await page.getByRole('alertdialog').getByRole('button', { name: 'Delete', exact: true }).click();
+  await page.waitForFunction(() => document.querySelector('#x52-profile')?.value === 'Recommended');
+  assert.equal(x52Profiles.length, 1);
+  x52Connected = false;
+  await page.locator('#refresh-addons').click();
+  await x52Card.getByText('Disconnected', { exact: true }).waitFor();
+  assert.equal(await x52Card.locator('#x52-save').isDisabled(), true);
+
   await page.goto(`${base}/steamshine/settings`);
   await page.getByRole('heading', { name: 'Steam shader cache', exact: true }).waitFor();
   await page.getByRole('heading', { name: 'Storage recovery', exact: true }).waitFor();
@@ -236,7 +304,7 @@ try {
   await page.goto(`${base}/steamshine/addons`);
   await page.getByRole('heading', { name: 'Decky Loader', exact: true }).waitFor();
   await page.screenshot({ path: 'dist/addons-browser/addons-320.png', fullPage: true });
-  console.log('PASS: controller shortcut create/edit/toggle/delete, turbo switch/button/speed, cache setup, storage restore/cancel, password retry/clearing, Decky reuse, GPU authentication, and 320px layout.');
+  console.log('PASS: controller shortcuts, turbo, X52 connection/profile/button settings, storage, Decky, GPU, and 320px layout.');
 } finally {
   await browser.close();
   await new Promise((done) => server.close(done));

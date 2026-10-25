@@ -87,6 +87,7 @@
 #include "steamshine_addons.h"
 #include "steamshine_gamepad_shortcuts.h"
 #include "steamshine_gamepad_turbo.h"
+#include "steamshine_x52.h"
 #include "steamshine_gpuctl.h"
 #include "steamshine_hwmonitor.h"
 #include "steamshine_terminal.h"
@@ -1817,7 +1818,7 @@ namespace confighttp {
       // GPU profiles and controller shortcuts are managed by their own APIs. A
       // stale upstream settings page must not replace them with an earlier snapshot.
       const auto persisted = config::parse_config(file_handler::read_file(config::sunshine.config_file.c_str()));
-      for (const auto *key : {"steamshine_gpu_profiles", "steamshine_gpu_active_profile", "steamshine_gamepad_shortcuts", "steamshine_gamepad_turbo"}) {
+      for (const auto *key : {"steamshine_gpu_profiles", "steamshine_gpu_active_profile", "steamshine_gamepad_shortcuts", "steamshine_gamepad_turbo", "steamshine_x52_profiles"}) {
         input_tree.erase(key);
         if (const auto entry = persisted.find(key); entry != persisted.end()) {
           input_tree[key] = entry->second;
@@ -3342,6 +3343,35 @@ namespace confighttp {
   }
 
   /**
+   * @brief Return X52 connection, capabilities, and saved profiles.
+   *
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   */
+  void steamshine_x52_status(const resp_https_t &response, const req_https_t &request) {
+    if (require_steamshine_session(response, request).empty()) return;
+    send_steamshine_response(response, steamshine_x52::status());
+  }
+
+  /**
+   * @brief Save, activate, delete, or enable an X52 profile while connected.
+   *
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   */
+  void steamshine_x52_save(const resp_https_t &response, const req_https_t &request) {
+    if (require_steamshine_mutation(response, request).empty()) return;
+    nlohmann::json input;
+    if (!read_steamshine_json(response, request, input)) return;
+    std::string error;
+    if (!steamshine_x52::save(input, error)) {
+      bad_request(response, request, error);
+      return;
+    }
+    send_steamshine_response(response, steamshine_x52::status());
+  }
+
+  /**
    * @brief Return Decky Loader installation and service state for the Addon tab.
    *
    * @param response The HTTP response object.
@@ -4634,6 +4664,8 @@ namespace confighttp {
     server.resource["^/api/steamshine/v1/input/shortcuts/([a-z0-9]{1,32})$"]["DELETE"] = steamshine_handler(steamshine_gamepad_shortcut_delete);
     server.resource["^/api/steamshine/v1/input/turbo$"]["GET"] = steamshine_handler(steamshine_gamepad_turbo_status);
     server.resource["^/api/steamshine/v1/input/turbo$"]["POST"] = steamshine_handler(steamshine_gamepad_turbo_save);
+    server.resource["^/api/steamshine/v1/addons/x52$"]["GET"] = steamshine_handler(steamshine_x52_status);
+    server.resource["^/api/steamshine/v1/addons/x52$"]["POST"] = steamshine_handler(steamshine_x52_save);
     server.resource["^/api/steamshine/v1/addons/decky/action$"]["POST"] = steamshine_handler(steamshine_decky_action);
     server.resource["^/api/steamshine/v1/system/authorize$"]["POST"] = steamshine_handler(steamshine_authorize_management);
     server.resource["^/api/steamshine/v1/system/management$"]["GET"] = steamshine_handler(steamshine_management_status);
