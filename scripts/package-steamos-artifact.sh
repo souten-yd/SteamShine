@@ -39,6 +39,15 @@ cp -a "${root_dir}/src_assets/linux/assets/." "${stage}/share/assets/"
 miniupnpc_library="$(ldconfig -p | awk '/libminiupnpc\.so\.21/ && !found { print $NF; found = 1 }')"
 [[ -n "${miniupnpc_library}" && -f "${miniupnpc_library}" ]] || { echo "Missing libminiupnpc.so.21 required by SteamShine" >&2; exit 1; }
 install -m 644 "${miniupnpc_library}" "${stage}/lib/"
+# ICU changes its SONAME across SteamOS updates. Keep the exact ICU runtime
+# used by the pinned build image with the binary, including its data library.
+for icu_library in data i18n uc; do
+  icu_path="$(ldconfig -p | awk -v name="libicu${icu_library}.so" '$1 ~ "^" name "\\.[0-9]+$" { print $NF; exit }')"
+  [[ -n "${icu_path}" && -f "${icu_path}" ]] || { echo "Missing versioned ICU ${icu_library} library" >&2; exit 1; }
+  icu_soname="$(readelf -d "${icu_path}" | sed -nE 's/.*\(SONAME\).*\[(.*)\].*/\1/p')"
+  [[ "${icu_soname}" == "libicu${icu_library}.so."* ]] || { echo "Invalid ICU ${icu_library} SONAME" >&2; exit 1; }
+  install -m 644 "${icu_path}" "${stage}/lib/${icu_soname}"
+done
 patchelf --set-rpath "\$ORIGIN/../lib" "${stage}/bin/steamshine"
 install -m 755 \
   "${root_dir}/scripts/collect-steamos-runtime-baseline.sh" \
@@ -66,6 +75,9 @@ install -m 644 "${root_dir}/ci/steamos/baselines/steamos-3.8.16-20260716.1.json"
 if [[ -f /usr/share/licenses/miniupnpc/LICENSE ]]; then
   mkdir -p "${stage}/share/licenses/miniupnpc"
   install -m 644 /usr/share/licenses/miniupnpc/LICENSE "${stage}/share/licenses/miniupnpc/LICENSE"
+fi
+if [[ -f /usr/share/licenses/icu/LICENSE ]]; then
+  install -Dm644 /usr/share/licenses/icu/LICENSE "${stage}/share/licenses/icu/LICENSE"
 fi
 install -m 644 "${root_dir}/packaging/linux/steamshine.service.in" "${stage}/systemd-user/steamshine.service.in"
 {
