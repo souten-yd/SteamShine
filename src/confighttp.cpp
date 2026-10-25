@@ -87,10 +87,10 @@
 #include "steamshine_addons.h"
 #include "steamshine_gamepad_shortcuts.h"
 #include "steamshine_gamepad_turbo.h"
-#include "steamshine_x52.h"
 #include "steamshine_gpuctl.h"
 #include "steamshine_hwmonitor.h"
 #include "steamshine_terminal.h"
+#include "steamshine_x52.h"
 #include "stream.h"
 #include "stream_recording.h"
 #include "system_tray.h"
@@ -3349,7 +3349,9 @@ namespace confighttp {
    * @param request The HTTP request object.
    */
   void steamshine_x52_status(const resp_https_t &response, const req_https_t &request) {
-    if (require_steamshine_session(response, request).empty()) return;
+    if (require_steamshine_session(response, request).empty()) {
+      return;
+    }
     send_steamshine_response(response, steamshine_x52::status());
   }
 
@@ -3360,9 +3362,13 @@ namespace confighttp {
    * @param request The HTTP request object.
    */
   void steamshine_x52_save(const resp_https_t &response, const req_https_t &request) {
-    if (require_steamshine_mutation(response, request).empty()) return;
+    if (require_steamshine_mutation(response, request).empty()) {
+      return;
+    }
     nlohmann::json input;
-    if (!read_steamshine_json(response, request, input)) return;
+    if (!read_steamshine_json(response, request, input)) {
+      return;
+    }
     std::string error;
     if (!steamshine_x52::save(input, error)) {
       bad_request(response, request, error);
