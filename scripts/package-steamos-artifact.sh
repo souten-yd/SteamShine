@@ -42,7 +42,7 @@ install -m 644 "${miniupnpc_library}" "${stage}/lib/"
 # ICU changes its SONAME across SteamOS updates. Keep the exact ICU runtime
 # used by the pinned build image with the binary, including its data library.
 for icu_library in data i18n uc; do
-  icu_path="$(ldconfig -p | awk -v name="libicu${icu_library}.so" '$1 ~ "^" name "\\.[0-9]+$" { print $NF; exit }')"
+  icu_path="$(ldconfig -p | awk -v name="libicu${icu_library}.so" '$1 ~ "^" name "\\.[0-9]+$" && !found { print $NF; found = 1 }')"
   [[ -n "${icu_path}" && -f "${icu_path}" ]] || { echo "Missing versioned ICU ${icu_library} library" >&2; exit 1; }
   icu_soname="$(readelf -d "${icu_path}" | sed -nE 's/.*\(SONAME\).*\[(.*)\].*/\1/p')"
   [[ "${icu_soname}" == "libicu${icu_library}.so."* ]] || { echo "Invalid ICU ${icu_library} SONAME" >&2; exit 1; }
